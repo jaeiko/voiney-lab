@@ -132,6 +132,48 @@ def test_owner_records_methods_fields_and_domain_override_through_notebook_api(
         ).status_code == 404
 
 
+def test_owner_can_restore_an_earlier_domain_and_inventory_value(
+    records: Records, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.lane_rp3_support import cell_protocol
+    from voiney_lab import experiment_reports as er
+
+    devices, store, rid = records
+    monkeypatch.setattr(er, 'report_protocol_fixture', lambda report: (cell_protocol(), ''))
+    for domain in ('biology', 'chemistry', 'biology'):
+        response = devices['owner'].post(
+            f'/api/experiment-reports/{rid}/notebook/domain', json={'domain': domain},
+        )
+        assert response.status_code == 200, response.text
+    assert devices['owner'].get(
+        f'/api/experiment-reports/{rid}/notebook'
+    ).json()['notebook']['domain']['code'] == 'biology'
+
+    base = {
+        'item_name': 'MTT reagent Sigma-Aldrich Catalog #M5655',
+        'vendor': 'Sigma-Aldrich', 'catalog_number': 'M5655', 'stage': 'after',
+    }
+    for lot in ('LOT-A', 'LOT-B', 'LOT-A'):
+        response = devices['owner'].post(
+            f'/api/experiment-reports/{rid}/notebook/inventory',
+            json={**base, 'lot_number': lot},
+        )
+        assert response.status_code == 201, response.text
+    notebook = devices['owner'].get(
+        f'/api/experiment-reports/{rid}/notebook'
+    ).json()['notebook']
+    assert next(item for item in notebook['inventory'] if item['name'] == 'MTT reagent')['lot_number'] == 'LOT-A'
+    events = store.get_report(rid)['events']
+    assert [event['payload']['domain'] for event in events
+            if event['event_type'] == 'notebook_domain_selected'] == [
+        'biology', 'chemistry', 'biology',
+    ]
+    assert [event['payload']['lot_number'] for event in events
+            if event['event_type'] == 'notebook_inventory_recorded'] == [
+        'LOT-A', 'LOT-B', 'LOT-A',
+    ]
+
+
 def test_lab_admin_sets_only_notebook_section_names_and_order(records: Records) -> None:
     devices, _, rid = records
     default = devices['owner'].get('/api/notebook-template')
@@ -159,6 +201,23 @@ def test_lab_admin_sets_only_notebook_section_names_and_order(records: Records) 
     invalid = devices['admin'].request('PUT', '/api/notebook-template', json={'sections': changed[:-1]})
     assert invalid.status_code == 422
     assert devices['outside'].get('/api/notebook-template').json()['sections'] != changed
+
+
+def test_lab_admin_can_restore_an_earlier_notebook_template(records: Records) -> None:
+    devices, _, _ = records
+    sections = devices['admin'].get('/api/notebook-template').json()['sections']
+
+    def renamed(name: str):
+        return [{**item, 'name': name if item['id'] == 'purpose' else item['name']}
+                for item in sections]
+
+    first, second = renamed('연구 목적'), renamed('실험 목표')
+    for version in (first, second, first):
+        response = devices['admin'].request(
+            'PUT', '/api/notebook-template', json={'sections': version},
+        )
+        assert response.status_code == 200, response.text
+    assert devices['owner'].get('/api/notebook-template').json()['sections'] == first
 
 
 def test_same_protocol_comparison_requires_owner_opt_in_and_stays_read_only(

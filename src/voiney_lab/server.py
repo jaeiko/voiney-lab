@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 from urllib.parse import quote, unquote_plus, urlsplit
 from xml.sax.saxutils import escape as xml_escape
 import requests
@@ -6670,10 +6670,12 @@ def _notebook_input(value:Any,field:str,maximum:int)->str:
     return cleaned
 
 
-def _notebook_event_key(report_id:str,event_type:str,payload:Mapping[str,Any])->str:
+def _notebook_event_key(
+    report_id:str,event_type:str,payload:Mapping[str,Any],*,sequence:int,
+)->str:
     encoded=json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"))
     return "note1-"+hashlib.sha256(
-        f"{report_id}\x1f{event_type}\x1f{encoded}".encode("utf-8")
+        f"{report_id}\x1f{event_type}\x1f{sequence}\x1f{encoded}".encode("utf-8")
     ).hexdigest()[:32]
 
 
@@ -6704,15 +6706,20 @@ async def put_notebook_template(request:Request)->Response:
         raise HTTPException(status_code=422,detail="notebook template is invalid")
     canonical=[{"id":str(item.get("id") or ""),"name":" ".join(str(item.get("name") or "").split())}
                for item in sections]
-    event_key="template-"+hashlib.sha256(
-        json.dumps(canonical,ensure_ascii=False,separators=(",",":")).encode("utf-8")
-    ).hexdigest()[:32]
     try:
-        saved=store.save_notebook_template(
-            organization_id=principal.organization_id,
-            actor_principal_id=principal.principal_id,
-            sections=canonical,event_key=event_key,
-        )
+        current=store.notebook_template(principal.organization_id)
+        if current["sections"]==canonical:
+            saved=current
+        else:
+            encoded=json.dumps(canonical,ensure_ascii=False,separators=(",",":"))
+            event_key="template-"+hashlib.sha256(
+                f"{current['version']}\x1f{encoded}".encode("utf-8")
+            ).hexdigest()[:32]
+            saved=store.save_notebook_template(
+                organization_id=principal.organization_id,
+                actor_principal_id=principal.principal_id,
+                sections=canonical,event_key=event_key,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=422,detail="notebook template is invalid") from exc
     return JSONResponse(content=jsonable_encoder(saved),headers={"Cache-Control":"private, no-store"})
@@ -6729,9 +6736,17 @@ async def select_experiment_notebook_domain(report_id:str,request:Request)->Resp
     store=_report_prose_store(report_id,write=True)
     payload={"domain":domain}
     try:
-        report=store.append_event(
-            report_id,event_key=_notebook_event_key(report_id,"notebook_domain_selected",payload),
-            event_type="notebook_domain_selected",source_tier="operator",payload=payload)
+        report=store.get_report(report_id)
+        domain_events=[event for event in report["events"]
+                       if event["event_type"]=="notebook_domain_selected"]
+        latest=(domain_events[-1].get("payload") or {}).get("domain") if domain_events else None
+        if latest!=domain:
+            report=store.append_event(
+                report_id,event_key=_notebook_event_key(
+                    report_id,"notebook_domain_selected",payload,
+                    sequence=len(domain_events)+1,
+                ),
+                event_type="notebook_domain_selected",source_tier="operator",payload=payload)
         narrative=store._narrative(report_id,None,None)
     except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
         raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
@@ -6770,9 +6785,20 @@ async def record_experiment_notebook_inventory(report_id:str,request:Request)->R
             "item_name":((item.listed or item.name) if item is not None else projected.name),
             **values,"stage":stage,
         }
-        report=store.append_event(
-            report_id,event_key=_notebook_event_key(report_id,"notebook_inventory_recorded",payload),
-            event_type="notebook_inventory_recorded",source_tier="operator",payload=payload)
+        report=store.get_report(report_id)
+        inventory_events=[event for event in report["events"]
+                          if event["event_type"]=="notebook_inventory_recorded"]
+        unchanged=(projected is not None and projected.stage==stage and all(
+            not value or getattr(projected,field_name)==value
+            for field_name,value in values.items()
+        ))
+        if not unchanged:
+            report=store.append_event(
+                report_id,event_key=_notebook_event_key(
+                    report_id,"notebook_inventory_recorded",payload,
+                    sequence=len(inventory_events)+1,
+                ),
+                event_type="notebook_inventory_recorded",source_tier="operator",payload=payload)
         notebook=store._narrative(report_id,None,None).facts.notebook
     except HTTPException:
         raise

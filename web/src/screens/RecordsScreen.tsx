@@ -193,8 +193,8 @@ function NotebookVisuals({ notebook }: { notebook: Notebook }) {
       const source = notebookPlotValue(bar.source_number, bar.source_unit || bar.unit);
       const actual = notebookPlotValue(bar.actual_number, bar.actual_unit || bar.unit);
       const maximum = Math.max(source, actual, 0);
-      const sourceWidth = maximum > 0 && Number.isFinite(source) ? Math.max(3, source / maximum * 100) : 0;
-      const actualWidth = maximum > 0 && Number.isFinite(actual) ? Math.max(3, actual / maximum * 100) : 0;
+      const sourceWidth = maximum > 0 && Number.isFinite(source) && source > 0 ? Math.max(3, source / maximum * 100) : 0;
+      const actualWidth = maximum > 0 && Number.isFinite(actual) && actual > 0 ? Math.max(3, actual / maximum * 100) : 0;
       return <article className='notebook-bar' data-testid='notebook-value-bar' key={`${bar.label}-${i}`}><strong>{bar.label}</strong>
         <div><span>{c.sourceValue(bar.source)}</span><i style={{ width: `${sourceWidth}%` }} /></div>
         <div><span>{c.actualValue(bar.actual)}</span><i className='actual' style={{ width: `${actualWidth}%` }} /></div>

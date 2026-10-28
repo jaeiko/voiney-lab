@@ -4236,7 +4236,7 @@ def _with_notebook_source_images(
             label = str(getattr(step, "source_label", "") or (
                 facts.steps[index].label if index < len(facts.steps) else index + 1
             ))
-            if completed and label not in completed:
+            if label not in completed:
                 continue
             for figure in source_figures.figures_for_step(fixture, index):
                 found.append(NotebookImage(
@@ -5950,8 +5950,8 @@ def _notebook_bar_lines(row: NotebookValueBar) -> tuple[str, str]:
     if maximum <= 0:
         return (f"원문 {row.source}", f"실제 {row.actual}")
     width = 18
-    left_bar = "█" * max(1, round(width * left_value / maximum))
-    right_bar = "█" * max(1, round(width * right_value / maximum))
+    left_bar = "█" * (0 if left_value <= 0 else max(1, round(width * left_value / maximum)))
+    right_bar = "█" * (0 if right_value <= 0 else max(1, round(width * right_value / maximum)))
     return (f"원문 {row.source} {left_bar}", f"실제 {row.actual} {right_bar}")
 
 

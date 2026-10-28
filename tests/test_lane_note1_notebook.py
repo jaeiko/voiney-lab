@@ -169,6 +169,16 @@ class NotebookDraftTests(unittest.TestCase):
             ("1000", "µL", "1", "mL"),
         )
 
+    def test_zero_value_draws_no_positive_bar(self) -> None:
+        row = er.NotebookValueBar(
+            label="1단계 · 양", kind="양", source="0 mL", actual="1 mL",
+            source_number="0", actual_number="1", unit="mL",
+            source_unit="mL", actual_unit="mL", source_key="record-zero",
+        )
+        source, actual = er._notebook_bar_lines(row)
+        self.assertNotIn("█", source)
+        self.assertIn("█", actual)
+
     def test_number_audit_rejects_a_small_number_absent_from_source_and_record(self) -> None:
         record = cell_run(self.temporary.name, session="session-note1-number-audit")
         fixture = cell_protocol()
@@ -316,6 +326,33 @@ class NotebookDraftTests(unittest.TestCase):
             )
         document = Document(io.BytesIO(docx))
         self.assertEqual(len(document.inline_shapes), 2)
+
+    def test_source_figures_are_not_attached_before_any_step_is_completed(self) -> None:
+        from voiney_lab.source_figures import SourceFigure
+
+        record = RecordWriter(
+            self.temporary.name, session="session-note1-no-completed-step",
+            title="Cell viability assay after drug treatment",
+            protocol_id="protocol-rp3-cell",
+        )
+        _start(record, "이실험")
+        record.event("00:30", "session_started", "1")
+        record.finalize("00:31", "stopped")
+        fixture = cell_protocol()
+        fixture.steps = tuple(
+            step for section in fixture.draft.protocol.sections for step in section.steps
+        )
+        figure = SourceFigure(
+            figure_id="source-figure-unperformed", source_page=1,
+            bounding_box=(10.0, 20.0, 210.0, 160.0), caption="아직 하지 않은 단계 그림",
+            mime_type="image/png", sha256="b" * 64, byte_size=68,
+            width_px=200, height_px=140,
+        )
+        with mock.patch(
+            "voiney_lab.source_figures.figures_for_step", return_value=(figure,),
+        ):
+            book = self.book(record, fixture)
+        self.assertFalse(any(image.kind == "source_figure" for image in book.images))
 
 
 if __name__ == "__main__":
