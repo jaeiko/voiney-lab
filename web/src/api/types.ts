@@ -38,6 +38,14 @@ export interface ReviewVersion {
   [key: string]: unknown;
 }
 
+export interface SourceDisclosure {
+  recorded: boolean;
+  status: "yes" | "no" | "unknown" | null;
+  status_ko: string;
+  note: string;
+  recorded_at: string | null;
+}
+
 export interface CatalogEntry {
   protocol_id: string;
   title: string;
@@ -58,6 +66,7 @@ export interface CatalogEntry {
   review_versions?: ReviewVersion[];
   current_review_version?: ReviewVersion | null;
   execution_blocked_reason?: string | null;
+  source_disclosure?: SourceDisclosure;
 }
 
 export interface AnalysisChunk {

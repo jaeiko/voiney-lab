@@ -39,6 +39,12 @@ flowchart LR
 학습 사용, 삭제 요청 방법은 이 저장소가 보증하지 않는다. **파일럿 전에 사람이 각 공급자의
 당시 약관과 계약에서 확인하고 위 칸에 근거를 적는다.**
 
+새 올리기 화면은 **"이 원문은 공개되었거나 시판 제품에 딸린 프로토콜인가요?"**를
+`예·아니요·모름`으로 묻고 출처 메모를 함께 남긴다. 예시 설정
+`VOINEY_LAB_PUBLIC_SOURCE_ONLY=false`는 이 답으로 업로드를 막지 않는다. 운영자가 `true`로
+바꾸면 새 파일·프로토콜 링크는 `예`만 파일 저장·링크 가져오기 전에 받는다. 이 답은 올린
+사람의 자기 신고이며 공개 여부·권리·라이선스·PI 승인 검증이나 실행 승인 단계가 아니다.
+
 ## 연구실 서버에 남는 것
 
 파일럿 실행기는 아래를 `data/runtime/pilot/` 아래에 모은다. 개발 서버는 별도 런타임 폴더를
@@ -47,7 +53,7 @@ flowchart LR
 | 남는 데이터 | 위치 |
 |---|---|
 | 업로드 원문 PDF | `objects/sha256/…` |
-| 분석·OCR·검토 카드·프로토콜 리비전 | `protocol_workspace.sqlite` |
+| 분석·OCR·검토 카드·프로토콜 리비전·공개/시판 원문 답과 출처 메모 | `protocol_workspace.sqlite` |
 | 관찰·문제·메모와 보고서 문장 | `experiment_reports.sqlite` |
 | 실험 세션·번역 문장·실험자 설정 | `workspace/commercial_workspace.sqlite` |
 | 사진 같은 증거 파일 | `workspace/evidence/…` |
@@ -77,4 +83,4 @@ flowchart LR
 PI 확인: **어떤 원문까지 외부 처리해도 되는가? 공개되었거나 시판 제품에 딸린 원문만 받는
 파일럿이면 충분한가?** 실제 운영 전에 공급자·보관/학습 약관·진단 녹음 여부·삭제 책임자를
 이 표에 확정한다. 자세한 운영 절차는 `docs/PILOT_GUIDE.md`, 실행 코드 기준은
-`docs/FEATURES.md` F17·F18을 따른다.
+`docs/FEATURES.md` F2·F17·F18, L1–L3 내부 처리 설계는 `docs/CONFIDENTIAL_MODE.md`를 따른다.

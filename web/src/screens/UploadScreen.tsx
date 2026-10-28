@@ -17,6 +17,7 @@ type Phase =
   | { kind: "uploading"; name: string }
   | { kind: "pages"; entry: CatalogEntry; duplicate: string | null; picking: boolean }
   | { kind: "starting"; entry: CatalogEntry };
+type SourceStatus = "yes" | "no" | "unknown";
 
 export function uploadErrorWords(error: unknown): string {
   if (!(error instanceof ApiError)) return words.errors.unknown;
@@ -55,6 +56,8 @@ export function UploadScreen({ session }: { session: AuthSession }) {
   const [error, setError] = useState<string | null>(null);
   const [link, setLink] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
+  const [sourceNote, setSourceNote] = useState("");
   const entryId = phase.kind === "pages" || phase.kind === "starting" ? phase.entry.protocol_id : null;
   const pages = useSourcePages(entryId, phase.kind === "pages" && phase.picking);
   const signedIn = session.mode === "dev" || session.signed_in;
@@ -71,6 +74,10 @@ export function UploadScreen({ session }: { session: AuthSession }) {
   }
 
   async function sendFile(file: File) {
+    if (!sourceStatus) {
+      setError(words.sourceRequired);
+      return;
+    }
     const mediaType = sourceMediaType(file);
     if (!mediaType) {
       setError(words.errors.unsupported_pdf_media_type);
@@ -79,7 +86,15 @@ export function UploadScreen({ session }: { session: AuthSession }) {
     setError(null);
     setPhase({ kind: "uploading", name: file.name });
     try {
-      const answer = await postFile<UploadResponse>(`/api/protocols?filename=${encodeURIComponent(file.name)}`, file, mediaType);
+      const answer = await postFile<UploadResponse>(
+        `/api/protocols?filename=${encodeURIComponent(file.name)}`,
+        file,
+        mediaType,
+        {
+          "X-Voiney-Source-Status": sourceStatus,
+          "X-Voiney-Source-Note": encodeURIComponent(sourceNote.trim()),
+        },
+      );
       accept(answer);
     } catch (failure) {
       setPhase({ kind: "pick" });
@@ -104,10 +119,18 @@ export function UploadScreen({ session }: { session: AuthSession }) {
     event.preventDefault();
     const url = link.trim();
     if (!url) return;
+    if (!sourceStatus) {
+      setError(words.sourceRequired);
+      return;
+    }
     setError(null);
     setPhase({ kind: "uploading", name: words.importing });
     try {
-      const answer = await postJson<UploadResponse>("/api/protocols/import-link", { url });
+      const answer = await postJson<UploadResponse>("/api/protocols/import-link", {
+        url,
+        public_source_status: sourceStatus,
+        source_note: sourceNote.trim(),
+      });
       accept(answer);
     } catch (failure) {
       setPhase({ kind: "pick" });
@@ -173,6 +196,23 @@ export function UploadScreen({ session }: { session: AuthSession }) {
   } else {
     body = (
       <>
+        <fieldset className="choice-card source-disclosure" data-testid="source-disclosure">
+          <legend className="choice-card-question">{words.sourceQuestion}</legend>
+          <p className="muted">{words.sourceWhy}</p>
+          <div className="segmented">
+            {(Object.entries(words.sourceOptions) as Array<[SourceStatus, string]>).map(([value, label]) => (
+              <label key={value} className="segmented-option" data-checked={sourceStatus === value}>
+                <input type="radio" name="public-source-status" value={value} checked={sourceStatus === value} onChange={() => { setSourceStatus(value); setError(null); }} />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+          <label className="field">
+            {words.sourceNote}
+            <textarea value={sourceNote} maxLength={500} rows={3} onChange={(event) => setSourceNote(event.target.value)} />
+          </label>
+          <p className="muted">{words.sourceNoteHint}</p>
+        </fieldset>
         <section
           className="drop-zone"
           data-dragging={dragging ? "true" : undefined}

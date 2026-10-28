@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, TypeVar
-from urllib.parse import quote, unquote_plus, urlsplit
+from urllib.parse import quote, unquote_plus, unquote_to_bytes, urlsplit
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
@@ -143,6 +143,8 @@ from voiney_lab.protocol_catalog import (
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
+    ProtocolSourceDisclosure,
+    ProtocolSourceStatus,
     ProtocolReviewError,
     ProtocolReviewTargetChangedError,
     REAGENT_TABLE_MEDIA_TYPE,
@@ -2248,10 +2250,28 @@ def _source_basis_from(fixture_filename:Any,entry:Mapping[str,Any]|None)->dict[s
 
     entry=entry or {}
     text=lambda value: value if isinstance(value,str) and value.strip() else None  # noqa: E731
-    return {
+    basis={
         "filename":text(entry.get("source_filename")) or text(fixture_filename),
         "uploaded_at":text(entry.get("created_at")),
     }
+    disclosure=entry.get("source_disclosure")
+    if isinstance(disclosure,Mapping):
+        if disclosure.get("recorded") is False:
+            basis["source_disclosure"]={
+                "recorded":False,"status":None,"status_ko":"확인 기록 없음",
+                "note":"","recorded_at":None,
+            }
+        elif disclosure.get("recorded") is True:
+            try:
+                parsed=ProtocolSourceDisclosure(
+                    status=ProtocolSourceStatus(disclosure.get("status")),
+                    note=disclosure.get("note"),
+                    recorded_at=disclosure.get("recorded_at"),
+                )
+                basis["source_disclosure"]=parsed.public_dict()
+            except (ProtocolRegistrationError,TypeError,ValueError):
+                pass
+    return basis
 
 
 def _note_readback(plan:Any,language:str,confirm_mode:str="readback")->Any:
@@ -3774,6 +3794,10 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
         "lifecycle_state":(
             "ready" if execution["available_for_execution"] else "blocked"),
         "execution_blocked_reason":execution["blocked_reason"],
+        "source_disclosure":{
+            "recorded":False,"status":None,"status_ko":"확인 기록 없음",
+            "note":"","recorded_at":None,
+        },
     }
 
 
@@ -4889,6 +4913,71 @@ async def _spool_protocol_pdf_upload(
     return byte_size
 
 
+PUBLIC_SOURCE_ONLY_ENV="VOINEY_LAB_PUBLIC_SOURCE_ONLY"
+_SOURCE_STATUS_HEADER="x-voiney-source-status"
+_SOURCE_NOTE_HEADER="x-voiney-source-note"
+
+
+def _source_disclosure_error(code:str)->HTTPException:
+    return HTTPException(status_code=422,detail={"code":code})
+
+
+def _decoded_source_note(value:str)->str:
+    """Decode the browser's UTF-8 URI-component header without guessing."""
+
+    try:
+        value.encode("ascii")
+        if re.search(r"%(?![0-9A-Fa-f]{2})",value):
+            raise ValueError
+        return unquote_to_bytes(value).decode("utf-8","strict")
+    except (UnicodeDecodeError,UnicodeEncodeError,ValueError) as exc:
+        raise _source_disclosure_error("source_disclosure_invalid") from exc
+
+
+def _source_disclosure_from_values(
+    status_value:object,
+    note_value:object,
+)->ProtocolSourceDisclosure|None:
+    missing=status_value is None or (
+        isinstance(status_value,str) and not status_value.strip())
+    if missing:
+        if note_value is not None and note_value != "":
+            raise _source_disclosure_error("source_disclosure_invalid")
+        return None
+    if not isinstance(status_value,str) or not isinstance(note_value,(str,type(None))):
+        raise _source_disclosure_error("source_disclosure_invalid")
+    try:
+        return ProtocolSourceDisclosure(
+            status=ProtocolSourceStatus(status_value.strip().casefold()),
+            note=note_value or "",
+        )
+    except (ProtocolRegistrationError,ValueError) as exc:
+        raise _source_disclosure_error("source_disclosure_invalid") from exc
+
+
+def _source_disclosure_from_headers(request:Request)->ProtocolSourceDisclosure|None:
+    encoded_note=request.headers.get(_SOURCE_NOTE_HEADER)
+    note=_decoded_source_note(encoded_note) if encoded_note is not None else None
+    return _source_disclosure_from_values(
+        request.headers.get(_SOURCE_STATUS_HEADER),note)
+
+
+def _enforce_public_source_policy(
+    disclosure:ProtocolSourceDisclosure|None,
+)->None:
+    try:
+        enabled=boolean_setting(os.environ,PUBLIC_SOURCE_ONLY_ENV,default=False)
+    except ConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code":"configuration_invalid","setting":PUBLIC_SOURCE_ONLY_ENV},
+        ) from exc
+    if enabled and (
+        disclosure is None or disclosure.status is not ProtocolSourceStatus.YES
+    ):
+        raise _source_disclosure_error("public_source_required")
+
+
 @app.get("/api/protocols")
 def list_protocol_catalog()->dict[str,object]:
     """Read catalog metadata only; never trigger automated analysis."""
@@ -4939,6 +5028,21 @@ async def register_protocol_pdf(
     request of a text PDF itself).
     """
 
+    disclosure=_source_disclosure_from_headers(request)
+    _enforce_public_source_policy(disclosure)
+    return await _register_protocol_pdf(
+        request,filename=filename,first_page=first_page,last_page=last_page,
+        source_disclosure=disclosure)
+
+
+async def _register_protocol_pdf(
+    request:Request,
+    *,
+    filename:str,
+    first_page:int|None=None,
+    last_page:int|None=None,
+    source_disclosure:ProtocolSourceDisclosure|None,
+)->dict[str,object]:
     page_range=_requested_page_range(first_page,last_page)
     media_type=source_media_type(request.headers.get("content-type",""))
     if media_type not in SOURCE_MEDIA_TYPES:
@@ -4991,6 +5095,13 @@ async def register_protocol_pdf(
                         media_type=PDF_MEDIA_TYPE,
                         converted_from=converted,
                         **registration_scope,
+                    )
+                if source_disclosure is not None:
+                    catalog.record_source_disclosure(
+                        result.entry.protocol_id,source_disclosure)
+                    result=replace(
+                        result,
+                        entry=catalog.get_entry(result.entry.protocol_id),
                     )
                 _scope_catalog_resource(result.entry.protocol_id,bind=True)
                 catalog.check_page_range(result.entry.protocol_id,page_range)
@@ -5094,6 +5205,11 @@ async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
             raise LinkImportError("link_not_a_reagent_table")
         if link.kind=="spreadsheet" and not reagent_table:
             raise LinkImportError("link_sheet_needs_protocol")
+        source_disclosure=None
+        if not reagent_table:
+            source_disclosure=_source_disclosure_from_values(
+                body.get("public_source_status"),body.get("source_note"))
+            _enforce_public_source_policy(source_disclosure)
         if reagent_table:
             # The protocol is there before anything is downloaded for it.
             try:
@@ -5114,9 +5230,10 @@ async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
                 table_id=str(response["reagent_table"]["table_id"])
             else:
                 # Lane EASY, decision 1: the pages to analyse, as for an upload.
-                response=await register_protocol_pdf(
+                response=await _register_protocol_pdf(
                     upload_request(fetched,"/api/protocols"),filename=fetched.filename,
-                    first_page=body.get("first_page"),last_page=body.get("last_page"))
+                    first_page=body.get("first_page"),last_page=body.get("last_page"),
+                    source_disclosure=source_disclosure)
                 target=str(response["protocol"]["protocol_id"])
                 table_id=None
         try:
@@ -10075,6 +10192,7 @@ def _open_experiment_report(
                     "filename":basis.get("filename"),
                     "uploaded_at":basis.get("uploaded_at"),
                     "words":basis.get("words"),
+                    "source_disclosure":basis.get("source_disclosure"),
                 },
             )
     return store.get_report(session.experiment_report_id)

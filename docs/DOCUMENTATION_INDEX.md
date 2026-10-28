@@ -13,6 +13,8 @@
 | [`README.md`](../README.md) | 한 줄 소개·현재 상태, 시험용 화면과 움직이는 그림, 음성 시연 영상 자리, 작동 방식, 개발 실행, 날짜·조건이 붙은 측정 결과와 라이선스 위치 | 맨 먼저 |
 | [`assets/readme/README.md`](assets/readme/README.md) | README 사진 14장과 무음 GIF의 촬영 조건, 외부 호출 없는 재촬영 명령, 실제 음성 영상 넣는 순서 | 화면 자료를 바꿀 때 |
 | [`FEATURES.md`](FEATURES.md) | 기능마다 무엇을 하고 코드 어디서 하나(파일·함수·설정·시험·한계), 공급자와 실제 호출 기록 | 기능을 알고 싶을 때 |
+| [`DATA_FLOW_FOR_PI.md`](DATA_FLOW_FOR_PI.md) | 비전공 PI가 한 장으로 보는 외부 처리 흐름, 서버 저장·삭제, 진단 녹음, 실제 공급자·약관 확인 칸 | 파일럿의 데이터 경계를 자문·확정할 때 |
+| [`CONFIDENTIAL_MODE.md`](CONFIDENTIAL_MODE.md) | **L0만 구현, L1–L3는 설계.** 공개·시판 원문 한정부터 완전 내부 배치까지 필요한 경계·위험·평가 계획 | 기밀 연구실의 처리 등급을 논의할 때 |
 | [`DECISIONS.md`](DECISIONS.md) | 주제별 결정: 날짜·결정·이유·관련 줄·코드 위치·남은 질문, 결정을 기다리는 코드 상태 | "왜 이렇게 됐지?" |
 | [`GLOSSARY.md`](GLOSSARY.md) | 사용자 말 ↔ 지금 화면 말 ↔ 코드 이름 | 말이 헷갈릴 때 |
 | [`../.agent/product_context.md`](../.agent/product_context.md) | 제품·사용자·인터뷰와 설문 근거·성공 지표 | 제품 방향을 볼 때 |
