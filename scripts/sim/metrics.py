@@ -148,7 +148,7 @@ def aggregate(rows: list[dict]) -> dict:
             'latency_ms': {k:percentiles(v) for k,v in timings.items()},
         }
     tables = {}
-    for dimension in ('protocol', 'family', 'protocol_family', 'noise', 'snr', 'voice', 'speed'):
+    for dimension in ('protocol', 'family', 'protocol_family', 'noise', 'snr', 'effective_snr_db', 'distance_cm', 'denoise', 'voice', 'speed'):
         groups = defaultdict(list)
         for row in rows:
             key = f'{row.get("protocol")}/{row.get("family")}' if dimension == 'protocol_family' else str(row.get(dimension, 'not_measured'))
