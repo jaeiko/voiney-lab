@@ -1,121 +1,170 @@
-# Voiney Lab
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/voiney-lab_logo_white.svg">
+  <img src="assets/brand/voiney-lab_logo_ink.svg" alt="Voiney Lab" width="360">
+</picture>
+
+# 장갑을 낀 채 말로 진행하는 실험 안내
 
 [![CI](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/jaeiko/voiney-lab/actions/workflows/ci.yml)
 
-> **Voiney Lab** (by Voiney) is a hands-free voice guide that lets wet-lab researchers run their own uploaded protocol step by step.
-> It analyses the protocol, checks every value against the source, asks only what it must, then guides, times and records the run and writes a lab notebook.
-> The server owns all workflow state and models only propose. Coding agents: read [`AGENTS.md`](AGENTS.md) first.
+**Voiney Lab**은 화학·바이오 연구자가 **자기 연구실의 프로토콜**을 따라 실험하도록 돕는 음성 가이드예요. 원문을 올리고, 필요한 값만 확인한 뒤, 말로 안내를 듣고 타이머와 기록을 남겨 실험 노트로 이어 가요.
 
-## 1. 무엇인가 · 누구를 위한가
+**지금은 통제된 파일럿 준비 단계이며, 현장 검증 전이에요.** 개발 서버에서 사람이 말해 본 기록과 오프라인 시험이 있고, 실제 연구실에서의 성능은 아직 측정하지 않았어요. 회사 **Voiney**는 2026-10-27 사업자 등록을 마쳤어요. 제품·사용자·측정 근거는 [제품 맥락](.agent/product_context.md)에 있어요.
 
-Voiney Lab 은 화학·바이오 웻랩 연구자가 **장갑을 낀 채 손을 쓰지 않고** 자기 연구실의 프로토콜을 따라 실험하도록 돕는 음성 실험 가이드다. 만든 곳은 Voiney, 저장소는 [`jaeiko/voiney-lab`](https://github.com/jaeiko/voiney-lab), 파이썬 패키지는 `voiney_lab` 이다.
+[화면으로 보기](#2-화면으로-보기) · [작동 방식](#4-작동-방식) · [개발용 실행](#5-개발용으로-실행하기) · [측정 결과](#7-측정한-것과-아직-모르는-것)
 
-- 쓰는 사람: 벤치에서 실험하는 연구자(첫 파일럿은 석사생 두 명, 2026년 10월 말부터). 연구실 담당은 계정과 데이터를, PI 는 노트에 "확인함"을 남긴다.
-- 근거: 생명 분야 연구자 3명 현장 인터뷰(2026-10-07·08), 13명 설문(2026-10-19) — `.agent/product_context.md`.
+## 1. 연구자에게 어떤 도움이 되나요?
 
-## 2. 사용자 흐름
+- **자기 원문에서 시작해요.** PDF·Word·사진이나 공개 Google Drive·Docs 링크를 올리고, 분석할 쪽을 골라요.
+- **확인이 필요한 것만 물어요.** 분석과 원문 근거 검사 후, 확인하지 못한 부분을 카드 한 장씩 보여 줘요. 시작을 막는 문제가 없으면 연구자가 **이 프로토콜로 시작**을 눌러요.
+- **실험 중에는 말로 이어 가요.** 지금 단계 안내, 원문의 시간으로 타이머, 질문·다시 듣기·관찰 기록을 지원해요. 한국어 단계와 타이머, 기록 칸을 태블릿·휴대폰에서 볼 수 있어요.
+- **실제로 남긴 기록에서 노트를 만들어요.** 실험 노트와 Word·Markdown·JSON·CSV 내보내기를 지원하고, 확인하지 않은 값은 `[미확인]`으로 남겨요.
 
-1. **프로토콜 올리기** — PDF·Word·사진(서버가 PDF 로 바꾼다), 또는 화면의 **공개 링크로 가져오기**로 Google Drive 파일·Docs 주소를 넣는다. Sheets 링크는 시약 표로 붙이는 서버 API만 있다. 엑셀은 시약 표로 붙는다.
-2. **분석과 원문 근거 검사** — 글자를 읽을 수 없는 쪽은 자동 OCR, 분석 모델이 단계·값·안전 주의를 뽑고, 서버가 값마다 원문과 맞대어 본다.
-3. **확인 카드** — 원문에서 확인하지 못한 것만 카드 한 장씩 묻는다. 다 확인된 분석은 카드가 없다. 안전 주의 글은 고칠 수 없다.
-4. **실험 시작** — 시작 마법사(내 목소리 → 안내 목소리 → 프로토콜 → 핵심 값 2문항 → 안전 주의 → **이 프로토콜로 시작**). 승인 단계는 없다.
-5. **단계별 음성 안내** — 단계 읽기, 타이머와 알림, 질문에 원문으로 답하기, "그거" 되묻기, 말로 기록하기, 실험 노트 질문. 단계·완료·타이머는 서버만 바꾼다.
-6. **실험 노트·보고서** — 지우지 않는 기록에서 실험 노트 모양의 보고서(Word·Markdown·JSON·CSV)를 만든다. 확인하지 않은 값은 "[미확인]".
+모델은 제안만 하고 서버가 실험 진행을 정해요. 값과 안전 주의는 원문이나 사람이 확인한 값에서만 가져와요. 관리자의 **확인함**은 기록이며 승인 단계가 아니에요.
 
-기능마다 자세한 동작은 [`docs/FEATURES.md`](docs/FEATURES.md), 화면 쓰는 법은 [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
+ELN·LIMS를 대신하거나 장비를 제어하지 않아요. 자율 실험이나 GLP·GMP·임상·규정 준수를 주장하지 않아요. 절차 자체를 추가·삭제·재배열하는 탐색 실험은 [설계 단계](docs/ADAPTED_RUN_PLAN.md)예요.
 
-## 3. 하지 않는 것
+## 2. 화면으로 보기
 
-- ELN·LIMS 를 대신하지 않는다. 실험 기록의 공식 저장소가 아니다.
-- 승인하지 않는다: PI·관리자 승인, 리비전 승인·반려·회수가 없다. 관리자의 "확인함"은 기록일 뿐 시작을 막지 않는다.
-- 값과 안전 주의를 새로 만들지 않는다. 원문에 없는 용어 뜻은 짧은 일반 설명을 "AI 일반 지식"으로 표시해서만 붙인다.
-- 안전 판단, 작업 재개 허가, 장비 제어, 자율 실험을 하지 않는다. 응급 말에는 정해진 문장으로 멈추고 연락하라고만 한다.
-- 규제 준수(GLP/GMP, 21 CFR Part 11, HIPAA, ISO)나 완전한 외부 연동을 주장하지 않는다.
+새 화면(`/app/`)을 실제 브라우저에서 걸으며 찍었어요. 가로 태블릿은 바이오 견본, 휴대폰은 화학·토양 분석 견본이에요. 아래 자료는 실험 방법이나 현장 검증 결과가 아니에요.
 
-## 4. 빠른 시작
+![올리기부터 실험 노트까지 이어지는 가로 태블릿 화면](docs/assets/readme/flow.gif)
 
-Python 3.12 이상.
+시험용 가짜 자료로 찍은 화면. 흐름을 요약한 무음 움직이는 그림이며 실제 음성 시연이 아니에요.
+
+<details>
+<summary>장면별 화면 펼치기 — 가로 태블릿 · 휴대폰</summary>
+
+### 원문 올리기 · 분석할 쪽 고르기
+
+| 가로 태블릿 · 바이오 견본 | 휴대폰 · 화학 견본 |
+|---|---|
+| ![태블릿 원문 올리기](docs/assets/readme/tablet-01-upload.webp) | ![휴대폰 원문 올리기](docs/assets/readme/phone-01-upload.webp) |
+| ![태블릿 분석할 쪽 고르기](docs/assets/readme/tablet-02-pages.webp) | ![휴대폰 분석할 쪽 고르기](docs/assets/readme/phone-02-pages.webp) |
+
+시험용 가짜 자료로 찍은 화면.
+
+### 확인 카드 · 시작 전 핵심 값 확인
+
+| 가로 태블릿 · 바이오 견본 | 휴대폰 · 화학 견본 |
+|---|---|
+| ![태블릿 원문과 확인 카드](docs/assets/readme/tablet-03-review.webp) | ![휴대폰 원문과 확인 카드](docs/assets/readme/phone-03-review.webp) |
+| ![태블릿 시작 흐름의 핵심 값 확인](docs/assets/readme/tablet-04-start.webp) | ![휴대폰 시작 흐름의 핵심 값 확인](docs/assets/readme/phone-04-start.webp) |
+
+시험용 가짜 자료로 찍은 화면.
+
+### 실험 화면 — 한국어 단계 · 타이머 · 기록
+
+![가로 태블릿의 큰 한국어 단계와 타이머, 오른쪽 기록 칸](docs/assets/readme/tablet-05-run.webp)
+
+시험용 가짜 자료로 찍은 화면.
+
+<img src="docs/assets/readme/phone-05-run.webp" alt="휴대폰의 한국어 단계, 큰 남은 시간과 접히는 기록 칸" width="320">
+
+시험용 가짜 자료로 찍은 화면.
+
+### 끝 화면 · 실험 노트
+
+중간에 멈춘 견본 실험이에요. 모든 단계를 완료했다고 표시하지 않아요.
+
+| 가로 태블릿 · 바이오 견본 | 휴대폰 · 화학 견본 |
+|---|---|
+| ![태블릿 실험을 멈춘 뒤 끝 화면](docs/assets/readme/tablet-06-end.webp) | ![휴대폰 실험을 멈춘 뒤 끝 화면](docs/assets/readme/phone-06-end.webp) |
+| ![태블릿 기록에서 만든 실험 노트](docs/assets/readme/tablet-07-notebook.webp) | ![휴대폰 기록에서 만든 실험 노트](docs/assets/readme/phone-07-notebook.webp) |
+
+시험용 가짜 자료로 찍은 화면.
+
+</details>
+
+촬영 조건과 다시 찍는 명령은 [화면 자료 안내](docs/assets/readme/README.md)에 있어요. API·음성 사건은 가짜 응답이며 외부 공급자를 호출하지 않았어요(contract-tested).
+
+## 3. 실제 음성 시연 영상 — 준비 중
+
+> 실제 음성 시연 영상 — 준비 중
+
+<!-- 사람이 실제로 촬영한 뒤 넣어요.
+1. 비공개 자료·계정·키가 보이지 않는 실제 음성 시연 영상을 준비해요.
+2. GitHub 이슈/PR 편집기에 영상을 끌어 올린 뒤 생긴 영상 링크를 복사하거나, YouTube에 영상을 올려 공유 링크를 복사해요.
+3. 위 인용문을 [실제 음성 시연 영상 보기](영상 링크)로 바꿔요. 촬영일·기기·실제 음성 및 서버 조건을 함께 적어요.
+4. GitHub README에서 링크와 재생을 사람이 확인해요. 화면 GIF를 음성 시연 영상으로 대신 표시하지 않아요.
+-->
+
+## 4. 작동 방식
+
+```mermaid
+flowchart TD
+    upload["프로토콜 올리기 · 쪽 고르기"] --> analysis["분석 · 원문 근거 검사"]
+    analysis --> cards["필요할 때만 확인 카드"]
+    cards --> start["연구자가 핵심 값 확인 후 시작"]
+    subgraph voice["단계별 음성 실험 · Cascade"]
+        stt["받아쓰기 STT"] --> emergency["응급 관문"]
+        emergency -->|"응급 감지"| fixed["정해진 중단·연락 안내"]
+        emergency -->|"그 외"| rules["결정적인 앞단 규칙"]
+        rules -->|"규칙이 처리하지 않은 말 · 켰을 때"| router["LLM 라우터 · 답변 또는 제안만"]
+        router --> checks["서버 검사 · 신원 · 버전 · 근거 · 확인 · 안전"]
+        rules -->|"규칙이 처리한 요청"| checks
+        checks --> state["상태 기계 하나 · CuratedProtocolSession"]
+        state --> tts["화면 · 음성 안내 TTS"]
+    end
+    start --> stt
+    state --> notebook["실제로 남긴 기록 → 실험 노트"]
+```
+
+**모델의 답변이 단계를 직접 바꾸지 않아요.** 서버 검사 뒤 한 상태 기계가 단계·타이머·기록을 바꿔요. 응급으로 인식한 말은 고정 안내로 처리하고, 읽기 전용 질문은 실험 진행을 그대로 둬요.
+
+라우터는 기본 꺼짐이에요. 꺼져 있거나 모델이 늦거나 실패하면 같은 턴의 규칙 경로를 쓰며, HTTP 429는 대체 처리 없이 그 턴을 멈춰요. 분석이 통과하고 시작을 막는 문제가 없어야 시작할 수 있어요. 깊은 구조는 [아키텍처](.agent/architecture.md), 기능별 동작은 [FEATURES](docs/FEATURES.md)를 보세요.
+
+## 5. 개발용으로 실행하기
+
+Python **3.12 이상**, 새 화면 빌드에는 **Node.js 22 이상**이 필요해요.
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e '.[test]'
-cp .env.example .env      # 키를 채운다. .env 는 커밋하지 않는다
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[test]'
+cp .env.example .env
+# .env에 모델 역할과 STT·TTS 공급자 설정을 채워요. 키와 .env는 커밋하지 않아요.
+./scripts/run_dev.sh --check-only
+./scripts/run_dev.sh
 ```
 
-- `.env` 에 모든 모델 역할과 STT·TTS 공급자를 적는다(비어 있으면 그 기능이 설정 이름을 적은 오류로 닫힌다). 지금 쓰는 값은 `docs/FEATURES.md` F17, 설정 이름 전체는 `src/voiney_lab/setting_names.py`.
-- 서버에는 LibreOffice 와 한국어 글꼴이 필요하다(Word 원문, 보고서 PDF): `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`. HEIC 사진은 선택(`pip install -e '.[heic]'`). 자세히는 `docs/DEPLOYMENT_RUNBOOK.md` 1절.
+브라우저에서 **http://127.0.0.1:8000/app/** 을 열어요. 실행기가 새 화면을 빌드해요. 모든 모델 역할과 STT·TTS 설정은 [공급자 설정](docs/FEATURES.md#f17-공급자와-설정), 전체 이름은 [설정 표](src/voiney_lab/setting_names.py)를 따르세요. 빠진 설정은 그 이름을 알리고 해당 기능을 멈춰요.
 
-### 4-1. 개발 서버
-
-```bash
-./scripts/run_dev.sh              # 127.0.0.1:8000
-./scripts/run_dev.sh --check-only # 설정만 보여 주고 data/runtime 은 건드리지 않는다
-```
-
-- 외부 라이선스라 커밋하지 않은 in-gel 원본 PDF(`data/runtime/candidate-a-source/in-gel-digestion.pdf`)가 있으면 개발용 프로토콜을 SHA-256 으로 확인하고 넣는다. 없으면 `[WARN]` 을 찍고 빈 목록으로 시작한다.
-- 개발 실행기의 기본 켜짐은 셸·설정 파일에 값이 없을 때만 적용된다. `.env.example`의 명시적인 false를 덮지 않는다. 카탈로그·작업공간이 꺼져 있으면 해당 설정 이름과 켜는 방법을 출력한다.
-- 실행기는 실제 라우터·라우터 먼저·PDF 작업 제한을 출력한다. PDF 기본 제한 30초가 모든 긴 문서의 성공을 보장하지는 않는다.
-- 상태는 `data/runtime/candidate-a-live-acceptance/` 에 둔다. 안전 문서 범위(`VOINEY_LAB_USAGE_SCOPE`)와 카탈로그(`VOINEY_LAB_SAFETY_CATALOG`)는 `.env` 에서 읽는다 — 기관 문서 없이 쓰려면 `VOINEY_LAB_USAGE_SCOPE=source_protocol_only`.
-
-### 4-2. 계정 모드와 초대 링크
-
-- 기본(`VOINEY_LAB_AUTH_MODE=dev`)은 로그인 없이 개발 신원 한 사람이다. `accounts` 로 두면 모든 화면과 API 가 로그인을 요구하고, 가입은 초대 링크로만 된다(작업공간이 켜져 있어야 한다).
-- 초대 링크는 서버에서 만든다:
-  ```bash
-  python scripts/pilot_invite.py --admin --base-url https://<서버 주소>   # 관리자 한 명
-  python scripts/pilot_invite.py --base-url https://<서버 주소>           # 참여자
-  python scripts/pilot_invite.py --list                                    # 열린 초대
-  ```
-  링크는 한 번만 쓰이고 기본 72시간 뒤 만료된다. 계정 끄기·켜기는 `--disable NAME`·`--enable NAME`. 개발 서버의 작업공간을 쓰려면 `--data-dir data/runtime/candidate-a-live-acceptance/workspace`.
-
-### 4-3. 파일럿 실행기
-
-```bash
-./scripts/run_pilot.sh --check-only
-./scripts/run_pilot.sh              # 127.0.0.1:8080, 로그인(accounts) 켜짐
-```
-
-- 상태는 `data/runtime/pilot/` 에 둔다. 기관 안전 카탈로그 파일이 없으면 `source_protocol_only`(원문 안전 주의만)로, 있으면 점검해서 `reference_only` 로 연다.
-- 휴대폰 마이크에는 HTTPS 가 필요하다: `docs/PILOT_GUIDE.md` 9절. 파일럿을 여는 순서·고지·데이터 삭제는 `docs/PILOT_GUIDE.md`, 서버 운영은 `docs/DEPLOYMENT_RUNBOOK.md`.
-
-## 5. 구조 한눈에
-
-```text
- 연구자 (장갑, 휴대폰·태블릿·PC 브라우저 / 스토어 앱 껍데기)
-   │ 마이크 소리 16 kHz            ▲ 음성 안내 · 화면 이벤트
-   ▼                               │
- ┌──────────────── server.py (FastAPI, 프로세스 하나) ────────────────┐
- │ /ws 음성: 듣기(VAD·목소리 크기) → STT → 응급 → 앞단 규칙            │
- │            → (켰을 때) LLM 라우터 = 제안만 → 서버 검증              │
- │            → CuratedProtocolSession  ← 상태를 바꾸는 유일한 곳     │
- │            → TTS                                                    │
- │ HTTP: 올리기·링크 → OCR → 분석 → 원문 근거 검사 → 확인 카드         │
- │       → 시작 판정 · 기록 · 보고서 · 계정 · 지표                     │
- └──────────────────────────────┬──────────────────────────────────────┘
-                                │ SQLite + 원본 파일 (data/runtime/…)
-     프로토콜 장부 · 작업공간(실험·관찰) · 실험 기록 · 계정 · 파일럿 지표
- 외부 AI(설정한 공급자): 분석·번역·보고서, 라우터·답변, STT·TTS, OCR
-```
-
-깊은 설명은 [`.agent/architecture.md`](.agent/architecture.md).
+- 외부 라이선스의 개발용 원문 PDF가 없으면 경고와 함께 빈 프로토콜 목록으로 시작해요. 자기 원문을 올려 주세요.
+- 기관 안전 문서 없이 개발할 때는 `VOINEY_LAB_USAGE_SCOPE=source_protocol_only`를 써요. 원문의 안전 주의만 보여 줘요.
+- Word 변환·보고서 PDF에는 LibreOffice와 한국어 글꼴이 필요해요. 설치와 선택형 HEIC 지원은 [원문 형식](docs/SOURCE_FORMATS.md), 서버 설치는 [운영 안내](docs/DEPLOYMENT_RUNBOOK.md)에 있어요.
+- 기본 로그인 모드는 개발용 한 사람 신원이에요. 초대 계정·HTTPS·파일럿 실행은 [파일럿 안내](docs/PILOT_GUIDE.md)를 따르세요. 휴대폰 마이크는 HTTPS가 필요해요.
 
 ## 6. 문서 지도
 
-**코딩 에이전트(Codex, Claude Code 등)는 [`AGENTS.md`](AGENTS.md) 를 먼저 읽는다.** 규칙은 모두 거기 있다. [`CLAUDE.md`](CLAUDE.md) 는 Claude Code 가 그 파일을 불러오게 하는 한 줄(`@AGENTS.md`)뿐이다.
-
 | 알고 싶은 것 | 문서 |
 |---|---|
-| 문서 전체 목록, 누가 언제 읽나 | [`docs/DOCUMENTATION_INDEX.md`](docs/DOCUMENTATION_INDEX.md) |
-| 화면 쓰는 법(연구자) | [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) |
-| 기능마다 코드가 하는 일 | [`docs/FEATURES.md`](docs/FEATURES.md) |
-| 왜 그렇게 정했나(날짜·줄) | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
-| 같은 것을 부르는 말들 | [`docs/GLOSSARY.md`](docs/GLOSSARY.md) |
-| 구조 | [`.agent/architecture.md`](.agent/architecture.md) |
-| 제품·사용자·근거, 다음 계획 | [`.agent/product_context.md`](.agent/product_context.md), [`.agent/roadmap.md`](.agent/roadmap.md) |
-| 서버 운영, 문제 해결, 파일럿 | [`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md), [`docs/TROUBLESHOOTING_GUIDE.md`](docs/TROUBLESHOOTING_GUIDE.md), [`docs/PILOT_GUIDE.md`](docs/PILOT_GUIDE.md) |
-| 브랜치·PR 규칙 | [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md) |
+| 화면 사용법 | [연구자 안내](docs/USER_GUIDE.md) |
+| 구현된 기능과 한계 | [FEATURES](docs/FEATURES.md) |
+| 제품·사용자·근거 / 다음 계획 | [제품 맥락](.agent/product_context.md) · [로드맵](.agent/roadmap.md) |
+| 구조 / 결정과 이유 | [아키텍처](.agent/architecture.md) · [결정 기록](docs/DECISIONS.md) |
+| 화면 설계 / 용어 | [UI_SPEC](docs/UI_SPEC.md) · [용어 사전](docs/GLOSSARY.md) |
+| 파일럿 / 운영 / 문제 해결 | [파일럿](docs/PILOT_GUIDE.md) · [운영](docs/DEPLOYMENT_RUNBOOK.md) · [문제 해결](docs/TROUBLESHOOTING_GUIDE.md) |
+| 전체 문서 목록 | [문서 지도](docs/DOCUMENTATION_INDEX.md) |
+| 코드를 고치기 전 | **[AGENTS.md](AGENTS.md)** · [Git 작업 규칙](docs/GIT_WORKFLOW.md) |
 
-## 7. 검증
+## 7. 측정한 것과 아직 모르는 것
+
+숫자는 측정일과 조건이 붙은 기록이에요. **오프라인 통과 수와 합성 시험 점수는 실제 실험실 성능을 뜻하지 않아요.**
+
+| 측정 | 결과 | 날짜 · 조건 · 근거 |
+|---|---|---|
+| 전체 pytest · 조건 A | **5695 passed · 7 skipped · 2 xfailed · 실패 0** | 2026-10-27, dev `689fb0d`, 외부 라이선스 PDF가 있는 원래 작업 폴더 실측. `after_merge_1027c.log` 기록 |
+| 전체 pytest · 조건 B | **각각 5323 passed · 514 skipped · 실패 0** | 2026-10-28, Python 3.12·3.14, PR #152 합성 병합본(base `cf84dd9`, head `f271da9`), 라이선스 PDF 없는 [CI 실측](https://github.com/jaeiko/voiney-lab/actions/runs/40637849035) |
+| 화면 시험 · CI | **Playwright 216 passed · 6 skipped / Vitest 204 passed(33파일)** | 같은 날짜·실행. 타입 검사·빌드도 통과. 가짜 서버를 사용하는 화면 시험이며 실제 기기·음성 검증이 아니에요 |
+| SIM · 개발용 | **519/540 · 이해 96.11% · 잘못 바뀐 상태 0건** | 2026-10-28, PR #148 · `42437af`, 공개 프로토콜 10종, 저장 번역, 규칙 경로 |
+| SIM · 분리된 시험용 | **276/332 · 이해 83.13% · 잘못 바뀐 상태 0건** | 같은 날·커밋·조건. 개발용과 겹치지 않는 고정 분할. [측정 기록](https://github.com/jaeiko/voiney-lab/pull/148) |
+
+조건 A는 라이선스 PDF가 있는 환경, B는 없는 환경이에요. 작업 폴더마다 원문 보유 수가 달라 통과 수가 달라질 수 있어요([정의](AGENTS.md#verification)). SIM은 **정답 글자 STT·가짜 VAD/TTS**를 쓰는 오프라인 동작 시험이에요. 이해 점수는 기대한 동작·확인·상태 보존을 충족한 비율이며, 실제 받아쓰기 정확도나 답변의 과학적 정확도가 아니에요. 방법과 한계는 [합성 음성 시험대](docs/EVALUATION_SIM.md)에 있어요.
+
+실험실 소음 속 받아쓰기, 실제 음성 지연, 장갑을 낀 현장 사용성, 실험 시간 절감은 아직 확인하지 않았어요. 다음 근거는 통제된 파일럿에서 모을 예정이에요.
+
+개발 검증 명령은 다음과 같아요. 여러 작업 폴더가 같은 머신을 쓸 때 전체 pytest는 [공유 잠금 규칙](AGENTS.md)을 따르세요.
 
 ```bash
 python scripts/replay_turns.py
@@ -128,21 +177,21 @@ python -m compileall -q src tests scripts
 git diff --check
 ```
 
-통과 수는 외부 라이선스 PDF 가 있느냐에 따라 다르다. **숫자를 말할 때는 날짜·폴더·조건을 함께 말한다**(조건의 뜻은 `AGENTS.md` "Verification").
+공급자 시험은 가짜 전송을 써요(contract-tested). 실제 공급자 호출이나 현장 시험을 했다는 뜻이 아니에요.
 
-| 조건 | 결과 | 언제·어디서 |
-|---|---|---|
-| A — 외부 라이선스 원문이 있는 원래 폴더 | **5059 passed · 7 skipped · 실패 0** | 2026-10-25, dev `cf5ede7`(PR #129·#130·#128 병합 뒤) 원래 폴더 실측(작업 폴더와 구분) |
-| B — 라이선스 PDF 없음(CI) | 4557 passed · 510 skipped · 실패 1 | 2026-10-25, dev `cf5ede7`, PR #128 병합 CI(run 40187499664). 실패 1 은 `tests/test_native_bridge.py` 의 `test_native_bridge_timer_alerts_under_node` 다: 그 실행의 러너 이미지(ubuntu-26.04)에 깔린 Node 가 결과를 TAP 대신 spec 모양으로 찍어 시험이 찾는 `# fail 0` 줄이 없었다. node 시험 43개는 모두 통과했다 |
-| 화면 시험(Playwright, CI) | 168 passed | 2026-10-25, 같은 병합 CI(두 태블릿 프로젝트 포함). 같은 작업에서 새 화면 단위 시험(Vitest) 7개 파일 48 passed |
+## 8. 라이선스 · 서드파티 고지
 
-동시 작업의 전체 pytest 는 `AGENTS.md`의 공유 `flock` 명령으로 실행한다. 조건 B만 확인한 음성·서버 변경은 병합 뒤 태그 전에 원래 폴더에서 조건 A로 확인하고, 사람이 음성 시험을 한 뒤 태그·main 반영을 한다.
+저장소 전체의 `LICENSE`와 통합 서드파티 `NOTICE` 파일은 아직 없어요. 배포·재사용 조건은 Voiney에 확인해 주세요. 현재 의존성과 라이선스 메모는 [pyproject.toml](pyproject.toml), 원문·HEIC 조건은 [SOURCE_FORMATS](docs/SOURCE_FORMATS.md), 공개 지식의 출처·라이선스 규칙은 [PUBLIC_KNOWLEDGE](docs/PUBLIC_KNOWLEDGE.md)에 있어요.
 
-시험은 바깥 공급자에 닿지 않는다: 키를 지우고 이 컴퓨터 밖으로의 연결을 막는다(`tests/conftest.py`). 공급자 시험은 모두 가짜 전송이다(contract-tested).
+- **PyMuPDF**: AGPL-3.0 또는 상용 라이선스이며 [PDF 엔진 경계](src/voiney_lab/pdf_text_engine.py) 한 곳에서만 사용해요. 상용화 전에 상용 라이선스 구매 또는 엔진 교체가 필요해요. 기존 결정 문구: *PyMuPDF is used under its AGPL-3.0 / commercial dual licence; before commercialisation a commercial PyMuPDF licence is bought or the engine is replaced behind that one module.*
+- **Moss**: PolyForm Shield 1.0.0이며 OSI 오픈소스 라이선스가 아니에요. 사본에 고지를 함께 두는 조건 등은 [공개 지식 안내](docs/PUBLIC_KNOWLEDGE.md)를 보세요.
+- **HEIC**: 선택 설치인 pillow-heif 바이너리 wheel의 GPLv2 조건은 [형식별 안내](docs/SOURCE_FORMATS.md)에 있어요.
+- 외부 라이선스의 in-gel 원본 PDF는 커밋하지 않아요. 이 README의 화면은 시험용 가짜 자료예요.
 
-## 8. 라이선스 메모
+이 저장소는 [voice-ai-course](https://github.com/jaeiko/voice-ai-course)에서 시작했어요.
 
-- PDF 엔진 PyMuPDF 는 AGPL-3.0 과 상용 라이선스 중 하나로 쓰고, `src/voiney_lab/pdf_text_engine.py` 한 곳에서만 쓴다. 상용화 전에 상용 라이선스를 사거나 그 모듈 뒤에서 엔진을 바꾼다. 결정 기록(영어 원문): *PyMuPDF is used under its AGPL-3.0 / commercial dual licence, only through that one module; before commercialisation either a commercial PyMuPDF licence is bought or the engine is replaced behind that one module.*
-- HEIC 지원(pillow-heif)은 바퀴에 GPLv2 코드가 들어 있어 선택 설치다.
-- in-gel 개발 프로토콜의 원본 PDF 는 외부 라이선스라 저장소에 없다. 스타터 팩 목록(`scripts/pilot_starter_pack.csv`)은 CC BY·CC0·퍼블릭 도메인 문서만 받는다.
-- 이 저장소는 강의 저장소 [`jaeiko/voice-ai-course`](https://github.com/jaeiko/voice-ai-course) 에서 시작했다. 옛 이름 "Voice Workflow Agent" 는 코드 식별자와 보관 문서에만 남아 있다.
+## English summary
+
+**Voiney Lab**, by **Voiney**, is a hands-free voice guide for chemistry and biology wet labs. Researchers upload their own protocol, check source-linked confirmation cards, start the run, and use step guidance, timers and records to build a lab notebook.
+
+The server owns workflow state; models only propose. **Preparing for a controlled pilot; not yet validated in a working laboratory.** Screenshots use synthetic test data. Offline test scores do not measure real speech or field performance. This is not an ELN/LIMS, an autonomous experimentation system, or a claim of regulatory compliance.
