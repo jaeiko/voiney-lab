@@ -11,14 +11,18 @@ on:
 
 jobs:
   python:
-    name: Python tests
+    name: Python tests (${{ matrix.python-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: "pip"
 
       - name: Import server from a clean runtime install
@@ -48,7 +52,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: synthetic-voice-scores
+          name: synthetic-voice-scores-${{ matrix.python-version }}
           path: ~/reports/sim/ci.*
           retention-days: 14
 
@@ -104,7 +108,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: "pip"
 
       - name: Install package with test extras

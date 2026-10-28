@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import contextlib
 import json
-import time
+import threading
+from concurrent.futures import Future
+from typing import Any
 from unittest.mock import patch
 
+from voiney_lab import experiment_protocol_analysis as analysis_module
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.protocol_catalog import ProtocolCatalog
 from tests.test_lane_an3_ocr_two_engines import KEEP, SCAN, SPIN, _ScanCase, provider, scan_answer
@@ -214,20 +217,50 @@ class APersonAnsweredFirstTests(_RequoteCase):
 
 class TimeLimitTests(_RequoteCase):
     def test_past_the_limit_the_cards_stay_and_nobody_waits_for_the_call(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        pending: list[Future[Any]] = []
+
         def slow(request: dict) -> dict:
-            time.sleep(1.5)
+            entered.set()
+            release.wait()
             return _finds_step_two(request)
 
-        started = time.monotonic()
-        with patch("voiney_lab.protocol_catalog.REQUOTE_TIME_LIMIT_SECONDS", 0.2):
-            entry = self.run_analysis(_AskingModel(_two_refused(self), requote=slow))
-        self.assertLess(time.monotonic() - started, 1.4)
+        def expire(
+            futures: list[Future[Any]], *, timeout: float,
+        ) -> tuple[set[Future[Any]], set[Future[Any]]]:
+            # Advance the wait boundary, not the machine's wall clock. The
+            # model is still blocked when analyze returns its timeout result.
+            self.assertEqual(timeout, 0.2)
+            pending.extend(futures)
+            self.assertTrue(entered.wait(300), "re-ask worker did not start")
+            self.assertTrue(all(not future.done() for future in futures))
+            return set(), set(futures)
+
+        watchdog = threading.Timer(300, release.set)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            with patch("voiney_lab.protocol_catalog.REQUOTE_TIME_LIMIT_SECONDS", 0.2), patch.object(
+                analysis_module, "wait_for_futures", expire
+            ):
+                entry = self.run_analysis(_AskingModel(_two_refused(self), requote=slow))
+            self.assertFalse(release.is_set())
+            self.assertTrue(pending)
+            self.assertTrue(all(not future.done() for future in pending))
+        finally:
+            watchdog.cancel()
+            release.set()
+            for future in pending:
+                future.result(timeout=300)
+            watchdog.join(300)
         self.assertEqual(entry.review_pending["needs_review_count"], 2)
         self.assertEqual(self.events("protocol_analysis_review_cards_closed"), [])
         (event,) = self.events("protocol_analysis_evidence_requote")
         (call,) = event["calls"]
         self.assertEqual((call["status"], call["failure_code"]), ("failed", "requote_time_limit"))
         self.assertEqual(event["by_outcome"], {"call_failed": 2})
+        self.assertEqual(self.catalog.get_entry(self.protocol_id).review_pending["needs_review_count"], 2)
         (started_event,) = self.events("protocol_analysis_evidence_requote_started")
         self.assertEqual(started_event["time_limit_seconds"], 0.2)
 

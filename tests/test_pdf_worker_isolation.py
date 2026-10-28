@@ -219,6 +219,26 @@ class WorkerContractTests(unittest.TestCase):
         else:
             self.assertNotEqual(completed.returncode, 0)
 
+    def test_test_budget_preserves_timeout_failure_at_the_pdf_ingress(self) -> None:
+        # The real parser gets scheduling room; the ingress must still expose
+        # the exact same timeout failure without a wall-clock race.
+        calls: list[float] = []
+
+        def timed_out(
+            command: list[str], *, timeout: float, **kwargs: object,
+        ) -> subprocess.CompletedProcess[bytes]:
+            calls.append(timeout)
+            raise subprocess.TimeoutExpired(command, timeout)
+
+        clear_protocol_pdf_cache()
+        self.addCleanup(clear_protocol_pdf_cache)
+        with patch.object(engine_module.subprocess, "run", timed_out):
+            with self.assertRaises(ProtocolPdfWorkerTimeoutError) as caught:
+                extract_protocol_pdf(self.source)
+        self.assertEqual(calls, [120.0])
+        self.assertEqual(engine_module.PDF_WORKER_TIMEOUT_SECONDS, 30.0)
+        self.assertEqual(caught.exception.code, "protocol_pdf_worker_timeout")
+
     def test_the_limits_are_stated_with_the_measurements_behind_them(self):
         import os
 

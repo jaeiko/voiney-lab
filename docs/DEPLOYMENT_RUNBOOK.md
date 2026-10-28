@@ -1,6 +1,6 @@
 # 배포·운영 안내 — 파일럿 서버
 
-서버를 준비하고, 띄우고, 점검하고, 백업하는 순서다. 2026-10-20 dev `e7c31c8` 기준.
+서버를 준비하고, 띄우고, 점검하고, 백업하는 순서다.
 이 안내는 통제된 연구 파일럿용이다(규제 대상 GxP·임상 배포가 아니다).
 
 - 파일럿을 여는 순서·참여자 안내·데이터 처리·고지 문안: `docs/PILOT_GUIDE.md`
@@ -15,13 +15,45 @@
 
 | 무엇 | 왜 | 설치·확인 | 없으면 |
 |---|---|---|---|
-| Python 3.12 이상, 저장소의 `.venv` | 실행기가 `.venv/bin/activate` 를 쓴다 | `python -m venv .venv && .venv/bin/pip install -e .` | 실행기가 `[ERROR] venv not found` 로 멈춘다 |
+| Python 3.14 권장(최소 3.12), 저장소의 `.venv` | 실행기가 `.venv/bin/activate` 를 쓴다. CI는 3.12·3.14를 검사한다 | `python3.14 -m venv .venv && .venv/bin/pip install -e .` | 실행기가 `[ERROR] venv not found` 로 멈춘다 |
 | **Node.js 22 이상**(npm 포함) | 새 화면(`web/`, `/app/`)을 실행기가 빌드한다(`web/build.sh`: `npm ci` 와 Vite 빌드, 결과는 `src/voiney_lab/static/app/`). 바깥 CDN 없이 글꼴까지 서버가 제공한다 | `node --version` 이 22 이상; 실행기 출력에 `[OK] new screen built` | 서버는 시작한다. 실행기가 `[WARN]` 을 찍고 새 화면만 꺼진다(`/app/` 은 "아직 준비되지 않았어요", `/` 는 지금 화면). `VOINEY_LAB_NEW_UI=true` 여도 `/` 는 지금 화면 |
 | **LibreOffice**(`libreoffice-writer-nogui`)와 한국어 글꼴 **`fonts-nanum`** | Word 원문을 PDF 로 바꾸고, 보고서 PDF 를 만든다. 한국어 글꼴이 없으면 한국어 문서의 글자 층이 띄어쓰기를 잃어 근거 검사에서 떨어진다 | `sudo apt-get install --no-install-recommends libreoffice-writer-nogui fonts-nanum`; `soffice --version`, `fc-match NanumGothic`, `GET /readyz` → `docx_conversion_available: true`. 다른 곳의 `soffice` 는 `VOINEY_LAB_OFFICE_CONVERTER` | 서버는 시작한다. Word 올리기만 `docx_conversion_unavailable`(503), 보고서 PDF 는 503. `scripts/run_pilot.sh` 는 `[WARN]` 만 찍는다 |
 | **HEIC 지원**(선택) | 아이폰 HEIC 사진 | `pip install -e '.[heic]'` 후 다시 시작, `heic_photos_available: true` 확인. 바퀴에 GPLv2 코드가 들어 있어 기관의 라이선스 담당이 정한다 | HEIC 만 `heic_support_unavailable`(503). JPEG·PNG 는 된다 |
 | **긴 PDF 읽기 시간** `VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS=300` | 글자 추출은 시간 한도가 있는 자식 프로세스에서 돈다(기본 30 s, 1–600). 88쪽 문서의 추출만 121 s 걸렸다(2026-10-13 측정) | `.env` 에 적고 다시 시작 | 긴 문서 올리기가 시간 초과로 거절된다 |
 
-`.github/workflows/deploy-staging.yml` 은 `dev` 에 push 한 CI 가 성공하면 ssh 로 스테이징 서버의 `deploy` 명령을 부른다. 그 서버에서 `deploy` 가 무엇을 하는지와 위 패키지가 깔렸는지는 저장소에서 알 수 없다(확인 안 됨).
+Python 판과 의존성 일치 검사, 선택형 병렬 시험은 [시험 환경 안내](TEST_ENVIRONMENT.md)에 있다.
+
+### dev 자동 배포와 사람이 하는 병합 뒤 점검
+
+두 경로는 독립적이다. 자동 배포와 아래 사람 스크립트를 동시에 실행하지 않는다.
+사람이 먼저 GitHub의 **Deploy staging** 실행 상태와 대상 서버를 확인하고 이번 재시작을
+어느 경로가 맡는지 정한다. 두 경로 사이의 공통 잠금이나 자동 조정은 없다.
+
+| 항목 | `.github/workflows/deploy-staging.yml` | 사람의 `~/bin/vl-after-merge` |
+|---|---|---|
+| 시작 조건 | `dev`의 push에서 시작한 CI가 전체 성공한 뒤. PR CI 성공은 배포하지 않는다 | 사람이 기대 passed 수와 정리할 작업 폴더를 인자로 주어 실행 |
+| 하는 일 | GitHub secrets의 SSH 키·known_hosts를 실행기에 두고 EC2 대상에 SSH로 **문자 그대로 `deploy`**를 호출 | 원래 checkout으로 이동 → 서버 중지 → `dev` checkout·`pull --ff-only` → 기존 `.venv`에서 시험 extra 설치 → pytest·replay·compileall → 개발 실행기 재시작 |
+| 어느 커밋인가 | 성공한 CI의 SHA를 `deploy` 인자로 전달하지 않는다. 원격 명령의 checkout·pull 정책은 확인 안 됨 | 실행 시점에 pull한 `dev`. 앞서 성공한 CI와 같은 SHA인지 비교하지 않는다 |
+| 시험과 환경 | CI는 깨끗한 3.12·3.14 환경과 3.14 브라우저 서버를 검사. 원격의 실제 Python·설치·재시작은 `deploy` 구현에 달림 | 원래 폴더의 기존 Python·로컬 PDF 보유 조건으로 전체 검사. 브라우저 시험이나 CI 성공 여부는 확인하지 않음 |
+| 실패 처리 | SSH 명령 실패면 job 실패. 원격 롤백·상태 검사는 확인 안 됨 | pytest 마지막 줄의 기대 passed 수·`failed` 글자, replay·compileall 결과를 검사하지만 **결과가 달라도 서버를 먼저 다시 켠 뒤** 오류로 끝남. 이전 커밋으로 되돌리지 않음 |
+| 겹침 방지 | `deploy-staging` concurrency group으로 이 워크플로끼리 직렬화(`cancel-in-progress: false`). 사람 스크립트는 보호하지 않음 | 배포 잠금·공유 heavy 잠금 없이 실행. 서버 종료는 작업 폴더를 확인하지 않는 `pkill -f voiney_lab.server`이므로 다른 작업 서버까지 멈출 수 있음 |
+| 정리 | 작업 폴더나 브랜치를 지우는 단계 없음 | 검사 결과가 기대와 맞을 때 전달받은 worktree를 제거하고, `dev`에 포함된 로컬·원격 브랜치를 삭제. **사람만 실행** |
+
+사람 스크립트는 `set -u`만 사용한다. pip 설치 실패를 중단 조건으로 검사하지 않고,
+pytest 파이프라인의 종료 코드도 별도로 검사하지 않는다. 마지막 요약의 passed 수와
+`failed` 글자를 대조하는 방식이므로 CI의 job 성공 판정과 같지 않다.
+
+이 비교는 저장소의 워크플로와 이 호스트에 있는 사람 스크립트를 읽은 결과다.
+스테이징 SSH 대상이 원래 개발 폴더와 같은지, 원격 `deploy`의 내용, GitHub secrets의
+등록 여부·값, 실제 배포 성공은 확인 안 됨이다. 에이전트는 이 스크립트를 실행하거나
+서버를 중지하지 않는다. 사람 스크립트는 저장소 밖 파일이므로 다른 호스트에서 같다고
+가정하지 않는다.
+
+에이전트의 전체 시험은 여전히 `AGENTS.md`의 공유 잠금 명령을 쓴다. 기대 passed 수는
+같은 Python·PDF 보유 조건에서 잰 값이어야 하며, 원래 폴더에 더 많은 라이선스 PDF가
+있으면 작업 폴더·CI보다 많을 수 있다. 어느 재시작 경로도 사람 음성 시험이나
+파일럿 기준판 지정을 대신하지 않는다. 재시작 뒤에는 `/healthz`·`/readyz`, 현재 커밋과
+Python을 확인하고, 파일럿 태그 전에는 조건 A 검사와 사람 음성 시험을 따로 마친다.
 
 ## 2. 띄우기
 
