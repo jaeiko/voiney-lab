@@ -21,10 +21,19 @@ def numeric_metrics(value: object, prefix: str = '') -> dict[str, float | int | 
     return result
 
 
-def compare(before: dict, after: dict) -> dict:
-    for key in ('schema','mode','corpus_sha256','workload_sha256','router','provider','model'):
+def compare(before: dict, after: dict, *, allow_router_change: bool = False) -> dict:
+    if allow_router_change and ({before.get('mode'), after.get('mode')} - {'offline', 'oracle_model'}):
+        raise ValueError('router treatment comparison requires oracle STT')
+    for key in ('schema','mode','corpus_sha256','workload_sha256','router','provider','model','split','rows_suppressed','router_settings'):
         if before.get(key) != after.get(key):
+            if allow_router_change and not before.get('stt_measured') and not after.get('stt_measured'):
+                if key in {'router', 'router_settings'} or (key == 'mode' and {before.get(key), after.get(key)} <= {'offline', 'oracle_model'}):
+                    continue
             raise ValueError(f'incomparable {key}')
+    if before.get('translations_sha256') != after.get('translations_sha256'):
+        raise ValueError('incomparable stored readings')
+    if before.get('rows_suppressed') and before['overall']['cases'] != after['overall']['cases']:
+        raise ValueError('incomplete holdout workload')
     def index(report: dict) -> dict:
         result = {}
         for r in report['rows']:
@@ -53,7 +62,9 @@ def compare(before: dict, after: dict) -> dict:
         old, new = left.get(key), right.get(key)
         metrics[key] = {'before':old, 'after':new,
                         'delta':round(new-old,8) if old is not None and new is not None else None}
-    return {'comparable':True,'cases':len(a),'delta':delta,'metrics':metrics,
+    suppressed = bool(before.get('rows_suppressed'))
+    return {'comparable':True,'cases':before['overall']['cases'] if suppressed else len(a),
+            'individual_regressions_measured':not suppressed,'delta':delta,'metrics':metrics,
             'regressions':regressions,'improvements':improvements}
 
 
@@ -61,9 +72,10 @@ def main(argv: list[str] | None = None) -> int:
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('before',type=Path)
     parser.add_argument('after',type=Path)
+    parser.add_argument('--compare-routing', action='store_true', help='explicit router treatment comparison with oracle STT only')
     args=parser.parse_args(argv)
     try:
-        result=compare(json.loads(args.before.read_text()),json.loads(args.after.read_text()))
+        result=compare(json.loads(args.before.read_text()),json.loads(args.after.read_text()), allow_router_change=args.compare_routing)
     except (ValueError,KeyError,OSError):
         print(json.dumps({'comparable':False}))
         return 2

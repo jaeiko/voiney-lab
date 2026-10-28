@@ -1,0 +1,336 @@
+{
+  "schema": 1,
+  "origin": "Offline evaluation translations of corpus.json; not human-reviewed; same source licences apply.",
+  "readings": [
+    {
+      "protocol": "pio_37443_passaging",
+      "source_sha256": "ddf9d29a291d00173274d5b5b5c414cd2ea298fb0e01785538c7488c22eb86bc",
+      "key": "protocol/protocol_purpose",
+      "source": "This SOP is for the routine maintenance and expansion of adherent cancer cell lines. \nIt also details how cells are harvested and counted for use in downstream protocols.\nThis protocol is also used in expasion of Cas9 transduced cell lines, prior to banking.",
+      "korean": "이 프로토콜은 부착성 암세포주의 일상적인 유지와 증식을 다뤄요. 후속 프로토콜에 사용할 세포의 수확과 계수도 설명해요. 보관 전에 Cas9 유전자가 도입된 세포주를 증식하는 데도 사용해요."
+    },
+    {
+      "protocol": "pio_37443_passaging",
+      "source_sha256": "ddf9d29a291d00173274d5b5b5c414cd2ea298fb0e01785538c7488c22eb86bc",
+      "key": "step_1/current_step",
+      "source": "1 Remove the old culture media using a sterile aspirator pipette.",
+      "korean": "1 기존 배지를 멸균 흡인 피펫으로 제거해요."
+    },
+    {
+      "protocol": "pio_37443_passaging",
+      "source_sha256": "ddf9d29a291d00173274d5b5b5c414cd2ea298fb0e01785538c7488c22eb86bc",
+      "key": "step_2/current_step",
+      "source": "2 Gently wash the cells with PBS (see Table 1, column B for recommended volume).\nAspirate the PBS from the flask.",
+      "korean": "2 PBS로 세포를 부드럽게 세척해요. 권장 부피는 표 1의 B열을 봐요. 플라스크에서 PBS를 빨아들여 제거해요."
+    },
+    {
+      "protocol": "pio_37443_passaging",
+      "source_sha256": "ddf9d29a291d00173274d5b5b5c414cd2ea298fb0e01785538c7488c22eb86bc",
+      "key": "step_3/current_step",
+      "source": "3 Add sufficient TrypLE Express Enzyme to cover the bottom of the flask (see Table 1,\ncolumn C for recommended volume). Rock the flask to allow the TrypLE to cover the\nsurface of the cells.",
+      "korean": "3 플라스크 바닥을 덮을 만큼 TrypLE Express Enzyme을 넣어요. 권장 부피는 표 1의 C열을 봐요. 플라스크를 기울여 TrypLE이 세포 표면을 덮게 해요."
+    },
+    {
+      "protocol": "pio_37443_passaging",
+      "source_sha256": "ddf9d29a291d00173274d5b5b5c414cd2ea298fb0e01785538c7488c22eb86bc",
+      "key": "step_4/current_step",
+      "source": "4 Incubate the flask at 37 °C  for 3-5 minutes. Use the microscope to check if the\ncells have detached. If necessary, tap the side of the flask, or return to incubator until all\ncells have detached.",
+      "korean": "4 플라스크를 37 °C에서 3-5 minutes 동안 배양해요. 현미경으로 세포가 떨어졌는지 확인해요. 필요하면 플라스크 옆면을 두드리거나 모든 세포가 떨어질 때까지 배양기에 다시 넣어요."
+    },
+    {
+      "protocol": "pio_67395_hek293t_transfection",
+      "source_sha256": "cb8f2311e6896889413465c57638d63e4517cad73c48dacf2d502760a06b4a2c",
+      "key": "protocol/protocol_purpose",
+      "source": "This protocol describes a standard procedure culturing and transfecting HEK293T cells",
+      "korean": "이 프로토콜은 HEK293T 세포의 배양과 형질주입을 위한 표준 절차를 설명해요."
+    },
+    {
+      "protocol": "pio_67395_hek293t_transfection",
+      "source_sha256": "cb8f2311e6896889413465c57638d63e4517cad73c48dacf2d502760a06b4a2c",
+      "key": "step-0001/current_step",
+      "source": "1 HEK293T cells are cultured in HEK293T medium in 10 cm dishes.\n1.1 HEK293T Medium\nA B\nDMEM, high glucose 385 ml  \nFetal Bovine Serum (FBS) 50 ml  \nL-Glutamine (100X) 5 ml  \nMEM Non-Essential\nAmino Acids\n(100X)\n5 ml  \nSodium Pyruvate 100 mM 5 ml\nFinal volume: 500 mL",
+      "korean": "1 HEK293T 세포를 10 cm 접시에서 HEK293T 배지로 배양해요.\n1.1 HEK293T 배지\nDMEM, high glucose 385 ml\nFetal Bovine Serum (FBS) 50 ml\nL-Glutamine (100X) 5 ml\nMEM Non-Essential Amino Acids (100X) 5 ml\nSodium Pyruvate 100 mM 5 ml\n최종 부피: 500 mL"
+    },
+    {
+      "protocol": "pio_67395_hek293t_transfection",
+      "source_sha256": "cb8f2311e6896889413465c57638d63e4517cad73c48dacf2d502760a06b4a2c",
+      "key": "step-0002/current_step",
+      "source": "2 Passage cells when the culture reaches 80% confluency.",
+      "korean": "2 배양의 confluency가 80%에 도달하면 계대배양해요."
+    },
+    {
+      "protocol": "pio_67395_hek293t_transfection",
+      "source_sha256": "cb8f2311e6896889413465c57638d63e4517cad73c48dacf2d502760a06b4a2c",
+      "key": "step-0003/current_step",
+      "source": "3 Remove medium",
+      "korean": "3 배지를 제거해요."
+    },
+    {
+      "protocol": "pio_67395_hek293t_transfection",
+      "source_sha256": "cb8f2311e6896889413465c57638d63e4517cad73c48dacf2d502760a06b4a2c",
+      "key": "step-0004/current_step",
+      "source": "4 Wash once with 5 ml DPBS",
+      "korean": "4 DPBS 5 ml로 한 번 세척해요."
+    },
+    {
+      "protocol": "pio_493_neuro2a_transfection",
+      "source_sha256": "f32765da97cae5a16aabbbc9f50b1e0d2d1f3983e301540767467af1472acd3b",
+      "key": "protocol/protocol_purpose",
+      "source": "Transfection of Neuro2a cells with PolyJet",
+      "korean": "이 프로토콜은 PolyJet을 이용한 Neuro2a 세포의 형질주입을 다뤄요."
+    },
+    {
+      "protocol": "pio_493_neuro2a_transfection",
+      "source_sha256": "f32765da97cae5a16aabbbc9f50b1e0d2d1f3983e301540767467af1472acd3b",
+      "key": "step_1/current_step",
+      "source": "1 Vendor Recommnded Amounts for Different Culture Vessels\n1 Culture Dish Culture Medium (mL) Plasmid (ug) Diluent (mL) PolyJet (uL)\n2 48-well 0.3 0.25 2 x 0.015 0.75\n3 12-well 0.75 0.75 2 x 0.038 2.25 \n4 6-well 1.0 1.0 2 x 0.05 3.0 \n5 35 mm dish 1.0 1.0 2 x 0.05 3.0 \n6 60 mm dish 2.8 2.5 2 x 0.10 7.5 \n7 10 cm dish 5.0 5.0 2 x 0.25 15.0 \n8 T75 flask 8.0 9.8 - 18.0 2 x 0.40 27.0 - 54.0 \n9 250 mL flask 18 25 - 50 2 x 0.8 75.0 - 150.0",
+      "korean": "1 배양용기별 제조사 권장량이에요.\n1 배양용기 배지(mL) Plasmid(ug) 희석액(mL) PolyJet(uL)\n2 48-well 0.3 0.25 2 x 0.015 0.75\n3 12-well 0.75 0.75 2 x 0.038 2.25\n4 6-well 1.0 1.0 2 x 0.05 3.0\n5 35 mm 접시 1.0 1.0 2 x 0.05 3.0\n6 60 mm 접시 2.8 2.5 2 x 0.10 7.5\n7 10 cm 접시 5.0 5.0 2 x 0.25 15.0\n8 T75 플라스크 8.0 9.8 - 18.0 2 x 0.40 27.0 - 54.0\n9 250 mL 플라스크 18 25 - 50 2 x 0.8 75.0 - 150.0"
+    },
+    {
+      "protocol": "pio_493_neuro2a_transfection",
+      "source_sha256": "f32765da97cae5a16aabbbc9f50b1e0d2d1f3983e301540767467af1472acd3b",
+      "key": "step_2/current_step",
+      "source": "2 Split cells 18 - 24hrs prior to transfection",
+      "korean": "2 형질주입 18 - 24hrs 전에 세포를 나눠요."
+    },
+    {
+      "protocol": "pio_493_neuro2a_transfection",
+      "source_sha256": "f32765da97cae5a16aabbbc9f50b1e0d2d1f3983e301540767467af1472acd3b",
+      "key": "step_3/current_step",
+      "source": "3 Cells should be at 30 - 80% confluence depending on experiment. \nIf I plan to collect cells 3 days later, I will transfect at 30% confluence. If I will collect\nthem 1 day later, then I will transfect ~80% confluence",
+      "korean": "3 세포의 confluence는 실험에 따라 30 - 80%여야 해요. 3 days 뒤에 세포를 수집할 계획이면 이 원문의 저자는 30%에서 형질주입해요. 1 day 뒤에 수집할 계획이면 ~80%에서 형질주입해요."
+    },
+    {
+      "protocol": "pio_493_neuro2a_transfection",
+      "source_sha256": "f32765da97cae5a16aabbbc9f50b1e0d2d1f3983e301540767467af1472acd3b",
+      "key": "step_4/current_step",
+      "source": "4 For a 6-well plate:\nReplace media with 1.0mL fresh culture media 30 - 45 minutes prior to transfection",
+      "korean": "4 6-well plate의 경우, 형질주입 30 - 45 minutes 전에 배지를 새 배지 1.0mL로 교체해요."
+    },
+    {
+      "protocol": "pio_16372_qpcr_setup",
+      "source_sha256": "d394f6cec6ca5927b3241606e161f6bcef64284667f8776d7a15ad841bc790de",
+      "key": "protocol/protocol_purpose",
+      "source": "GoTaq® qPCR Master Mix(a,b) is a reagent system for quantitative PCR (qPCR). The system contains a new\nfluorescent DNA-binding dye that often exhibits greater fluorescence enhancement upon binding to double-\nstranded DNA (dsDNA) than SYBR. Green I.",
+      "korean": "GoTaq® qPCR Master Mix(a,b)는 정량 PCR(qPCR)용 시약 시스템이에요. 이 시스템에는 이중 가닥 DNA(dsDNA)에 결합할 때 SYBR. Green I보다 형광 증가가 더 큰 경우가 많은 새로운 형광 DNA 결합 염료가 들어 있어요."
+    },
+    {
+      "protocol": "pio_16372_qpcr_setup",
+      "source_sha256": "d394f6cec6ca5927b3241606e161f6bcef64284667f8776d7a15ad841bc790de",
+      "key": "step-0001/current_step",
+      "source": "1 Prepare the standard DNA dilution series and experimental samples in nuclease-free\nwater. Store on ice until use.",
+      "korean": "1 표준 DNA 희석 계열과 실험 시료를 nuclease-free water로 준비해요. 사용할 때까지 얼음 위에 보관해요."
+    },
+    {
+      "protocol": "pio_16372_qpcr_setup",
+      "source_sha256": "d394f6cec6ca5927b3241606e161f6bcef64284667f8776d7a15ad841bc790de",
+      "key": "step-0002/current_step",
+      "source": "2 Carefully add 10μl of template (or water for no-template control reactions) to the\nappropriate wells of the reaction plate. Store plate at room temperature or on ice.\n10 µL Template (or water)",
+      "korean": "2 적절한 반응 플레이트 웰에 template 10μl를 조심스럽게 넣어요. template이 없는 대조 반응에는 물을 넣어요. 플레이트를 실온 또는 얼음 위에 보관해요.\n10 µL Template 또는 물"
+    },
+    {
+      "protocol": "pio_16372_qpcr_setup",
+      "source_sha256": "d394f6cec6ca5927b3241606e161f6bcef64284667f8776d7a15ad841bc790de",
+      "key": "step-0003/current_step",
+      "source": "3 Thaw the GoTaq® qPCR Master Mix at room temperature.\n20 °C Thawing GoTaq® qPCR Master Mix\nGoTaq® qPCR Master Mix Promega Catalog #A6001",
+      "korean": "3 GoTaq® qPCR Master Mix를 실온에서 녹여요.\n20 °C GoTaq® qPCR Master Mix 해동\nGoTaq® qPCR Master Mix Promega Catalog #A6001"
+    },
+    {
+      "protocol": "pio_16372_qpcr_setup",
+      "source_sha256": "d394f6cec6ca5927b3241606e161f6bcef64284667f8776d7a15ad841bc790de",
+      "key": "step-0004/current_step",
+      "source": "4 Gently vortex to ensure it is adequately mixed. Take care to avoid foaming or extended\nexposure to light. Store on ice until use.",
+      "korean": "4 충분히 섞이도록 부드럽게 볼텍스로 섞어요. 거품이 생기거나 빛에 오래 노출되지 않도록 주의해요. 사용할 때까지 얼음 위에 보관해요."
+    },
+    {
+      "protocol": "pio_54201_sds_page",
+      "source_sha256": "0d6c015d63bf46726a3e41c6fd891d5f656ba4d21d3b10c0df8fd5f204e46c11",
+      "key": "protocol/protocol_purpose",
+      "source": "SDS-PAGE gel electrophoresis protocol for analyzing samples from plant leaf tissue via immunofluorescence. In\nthis protocol no Coomassie blue is added to samples, the reason is that this interferes with the fluorescent signal\nduring immunoblot. Instead, samples have already been prepared in Laemmli buffer (minus coomassie, protein\nextraction procedure), the leading edge of samples can be visualized due to the presence of chlorophyll.",
+      "korean": "이 프로토콜은 식물 잎 조직 시료를 면역형광으로 분석하는 SDS-PAGE 젤 전기영동을 다뤄요. Coomassie blue가 immunoblot의 형광 신호를 방해하므로 시료에 넣지 않아요. 대신 시료는 Coomassie를 뺀 Laemmli buffer로 이미 준비되어 있으며, 엽록소 때문에 시료의 선두를 볼 수 있어요."
+    },
+    {
+      "protocol": "pio_54201_sds_page",
+      "source_sha256": "0d6c015d63bf46726a3e41c6fd891d5f656ba4d21d3b10c0df8fd5f204e46c11",
+      "key": "step-1/current_step",
+      "source": "Create a 1X working dilution of  Tris/Glycine/SDS buffer (~ 1 L  is required per gel\ntank) by diluting 10X stock 1:10 with distilled H2O.",
+      "korean": "10X stock을 증류수 H2O로 1:10 희석해 Tris/Glycine/SDS buffer의 1X 작업용 희석액을 만들어요. 젤 탱크마다 ~ 1 L가 필요해요."
+    },
+    {
+      "protocol": "pio_54201_sds_page",
+      "source_sha256": "0d6c015d63bf46726a3e41c6fd891d5f656ba4d21d3b10c0df8fd5f204e46c11",
+      "key": "step-2/current_step",
+      "source": "Carefully remove the comb from the precast gel and the tape across the bottom.",
+      "korean": "미리 만든 젤에서 comb와 바닥의 테이프를 조심스럽게 제거해요."
+    },
+    {
+      "protocol": "pio_54201_sds_page",
+      "source_sha256": "0d6c015d63bf46726a3e41c6fd891d5f656ba4d21d3b10c0df8fd5f204e46c11",
+      "key": "step-3/current_step",
+      "source": "Assemble the Mini-PROTEAN electrophoresis cell and fill the inner chamber with buffer\nand the outer chamber up to the recommended mark",
+      "korean": "Mini-PROTEAN 전기영동 셀을 조립해요. 안쪽 chamber에는 buffer를 채우고 바깥 chamber에는 권장 표시선까지 채워요."
+    },
+    {
+      "protocol": "pio_54201_sds_page",
+      "source_sha256": "0d6c015d63bf46726a3e41c6fd891d5f656ba4d21d3b10c0df8fd5f204e46c11",
+      "key": "step-4/current_step",
+      "source": "Wash the wells with running buffer by pipetting up and down",
+      "korean": "피펫으로 위아래로 섞어 running buffer로 웰을 세척해요."
+    },
+    {
+      "protocol": "pio_4719_western_detection",
+      "source_sha256": "3067dadf83af1092d5f1e192e8812ce97fe8908aa5992d58ae5edb65068b6121",
+      "key": "protocol/protocol_purpose",
+      "source": "This protocol is a guide to using IRDye Subclass Specific antibodies for Western blotting. For more detailed\ndescriptions of Western blotting, refer to Western Blot Analysis and In-Cell Western Kits I and II on the LI-COR\nBiosciences website (www.licor.com).",
+      "korean": "이 프로토콜은 Western blotting에 IRDye Subclass Specific 항체를 사용하는 방법을 안내해요. 더 자세한 설명은 LI-COR Biosciences 웹사이트(www.licor.com)의 Western Blot Analysis와 In-Cell Western Kits I 및 II를 참고해요."
+    },
+    {
+      "protocol": "pio_4719_western_detection",
+      "source_sha256": "3067dadf83af1092d5f1e192e8812ce97fe8908aa5992d58ae5edb65068b6121",
+      "key": "step_1/current_step",
+      "source": "1 Wet the membrane in PBS for several minutes.",
+      "korean": "1 PBS로 멤브레인을 몇 분 동안 적셔요."
+    },
+    {
+      "protocol": "pio_4719_western_detection",
+      "source_sha256": "3067dadf83af1092d5f1e192e8812ce97fe8908aa5992d58ae5edb65068b6121",
+      "key": "step_2/current_step",
+      "source": "2 Block the membrane in Odyssey Blocking Buffer for 1 hour. Be sure to use sufficient\nblocking buffer to cover the membrane (a minimum of 0.4 mL/cm2 is suggested).\n01:00:00",
+      "korean": "2 Odyssey Blocking Buffer에서 멤브레인을 1 hour 동안 블로킹해요. 멤브레인을 덮을 만큼 충분히 사용해요. 최소 0.4 mL/cm2를 권장해요.\n01:00:00"
+    },
+    {
+      "protocol": "pio_4719_western_detection",
+      "source_sha256": "3067dadf83af1092d5f1e192e8812ce97fe8908aa5992d58ae5edb65068b6121",
+      "key": "step_3/current_step",
+      "source": "3 Dilute primary antibody in Odyssey Blocking Buffer. Optimum dilution depends on the\nantibody and should be determined empirically. A suggested starting range can usually\nbe found in the product information from the vendor. To lower background, add Tween®\n20 to the diluted antibody at a final concentration of 0.1 – 0.2% prior to incubation.",
+      "korean": "3 1차 항체를 Odyssey Blocking Buffer로 희석해요. 최적 희석배수는 항체에 따라 달라 실험으로 정해요. 권장 시작 범위는 보통 제조사 제품 정보에서 찾을 수 있어요. background를 줄이려면 배양 전에 희석한 항체에 Tween® 20을 최종 농도 0.1 – 0.2%로 넣어요."
+    },
+    {
+      "protocol": "pio_4719_western_detection",
+      "source_sha256": "3067dadf83af1092d5f1e192e8812ce97fe8908aa5992d58ae5edb65068b6121",
+      "key": "step_4/current_step",
+      "source": "4 Incubate blot in primary antibody solution for a minimum of 60 minutes at room\ntemperature, with gentle shaking. \n01:00:00 minimum incubation at room temp",
+      "korean": "4 blot을 1차 항체 용액에 넣고 실온에서 부드럽게 흔들며 최소 60 minutes 동안 배양해요.\n01:00:00 실온 최소 배양"
+    },
+    {
+      "protocol": "pio_27069_bca",
+      "source_sha256": "9da63a0ca55bf81519278dba189f1485e55922c699158b6a942c05f96c53d984",
+      "key": "protocol/protocol_purpose",
+      "source": "BCA Assay for protein quantification",
+      "korean": "이 프로토콜은 BCA Assay를 이용한 단백질 정량을 다뤄요."
+    },
+    {
+      "protocol": "pio_27069_bca",
+      "source_sha256": "9da63a0ca55bf81519278dba189f1485e55922c699158b6a942c05f96c53d984",
+      "key": "step-1/current_step",
+      "source": "1 Use provided 0.2% BSA for creating a standard curve: Dilute amount necessary for the\nassay 1:2 using lysis buffer",
+      "korean": "1 제공된 0.2% BSA로 표준 곡선을 만들어요. assay에 필요한 양을 lysis buffer로 1:2 희석해요."
+    },
+    {
+      "protocol": "pio_27069_bca",
+      "source_sha256": "9da63a0ca55bf81519278dba189f1485e55922c699158b6a942c05f96c53d984",
+      "key": "step-2/current_step",
+      "source": "2 Label tubes (1.5 mL Eppendorf) for standards.  \nFinal Conc ug/mL Volume 0.1% BSA Volume buffer  \nStandard (ug)                Volume 0.1% BSA (uL)        Volume buffer(uL) \n0                                                0                                        20 \n2                                                2                                        18 \n4                                                4                                        16 \n6                                                6                                        14 \n8                                                8                                        12 \n10                                                10                                        10 \n15                                                15                                          5\n20                                                    20                                             0",
+      "korean": "2 표준용 튜브(1.5 mL Eppendorf)에 라벨을 붙여요.\n최종 농도 ug/mL 0.1% BSA 부피 buffer 부피\n표준(ug) 0.1% BSA 부피(uL) buffer 부피(uL)\n0 0 20\n2 2 18\n4 4 16\n6 6 14\n8 8 12\n10 10 10\n15 15 5\n20 20 0"
+    },
+    {
+      "protocol": "pio_27069_bca",
+      "source_sha256": "9da63a0ca55bf81519278dba189f1485e55922c699158b6a942c05f96c53d984",
+      "key": "step-3/current_step",
+      "source": "3 Add appropriate amount of Lysis Buffer to all tubes for the standard curve, following\nchart above.",
+      "korean": "3 위 표에 따라 표준 곡선용 모든 튜브에 적절한 양의 Lysis Buffer를 넣어요."
+    },
+    {
+      "protocol": "pio_27069_bca",
+      "source_sha256": "9da63a0ca55bf81519278dba189f1485e55922c699158b6a942c05f96c53d984",
+      "key": "step-4/current_step",
+      "source": "4 Label tubes for samples. \n4.1 Keeping all protein on ice throughout, use 3 uL/ sample + 17 uL Lysis Buffer for a total\nvolume of 20 uL.",
+      "korean": "4 시료용 튜브에 라벨을 붙여요.\n4.1 모든 단백질을 계속 얼음 위에 두고, 시료마다 3 uL와 Lysis Buffer 17 uL를 사용해 총부피를 20 uL로 해요."
+    },
+    {
+      "protocol": "fda_eam_2_3_solution_prep",
+      "source_sha256": "7e947d71e282560a43822c43a97c76ef95d54df28e48e7f8cbc4095526aaaeb5",
+      "key": "protocol/protocol_purpose",
+      "source": "This section discusses sample preparation for atomic spectrometric analysis and is provided for general \ninformation. Instructions and procedures presented here should not be used in place of anything \nspecified in the EAM methods but may be useful for method development and other research.",
+      "korean": "이 절은 원자 분광 분석의 시료 준비를 일반적인 정보로 설명해요. 여기에 제시된 지침과 절차를 EAM 방법에 명시된 사항 대신 사용하면 안 돼요. 방법 개발과 다른 연구에는 유용할 수 있어요."
+    },
+    {
+      "protocol": "fda_eam_2_3_solution_prep",
+      "source_sha256": "7e947d71e282560a43822c43a97c76ef95d54df28e48e7f8cbc4095526aaaeb5",
+      "key": "step-1/current_step",
+      "source": "Transfer analytical portion into a digestion vessel liner (avoid placing material on liner walls;\nmass typically recorded to ≤0.001g).",
+      "korean": "분석할 부분을 분해 용기의 라이너로 옮겨요. 라이너 벽에 시료가 묻지 않게 해요. 질량은 보통 ≤0.001g까지 기록해요."
+    },
+    {
+      "protocol": "fda_eam_2_3_solution_prep",
+      "source_sha256": "7e947d71e282560a43822c43a97c76ef95d54df28e48e7f8cbc4095526aaaeb5",
+      "key": "step-2/current_step",
+      "source": "Optional - Add 1 mL water. (See note below for highly reactive matrices)",
+      "korean": "선택 사항으로 물 1 mL를 넣어요. 반응성이 높은 매트릭스는 아래 주를 봐요."
+    },
+    {
+      "protocol": "fda_eam_2_3_solution_prep",
+      "source_sha256": "7e947d71e282560a43822c43a97c76ef95d54df28e48e7f8cbc4095526aaaeb5",
+      "key": "step-3/current_step",
+      "source": "Add nitric acid (typically ~11.3 g or ~8.0 mL; wash down any material on vessel wall).",
+      "korean": "질산을 넣어요. 보통 ~11.3 g 또는 ~8.0 mL예요. 용기 벽에 묻은 시료를 씻어 내려요."
+    },
+    {
+      "protocol": "fda_eam_2_3_solution_prep",
+      "source_sha256": "7e947d71e282560a43822c43a97c76ef95d54df28e48e7f8cbc4095526aaaeb5",
+      "key": "step-4/current_step",
+      "source": "• After any initial reactions subside (≥20 min), add 1 mL 30% H2O2.",
+      "korean": "초기 반응이 가라앉은 뒤(≥20 min), 30% H2O2 1 mL를 넣어요."
+    },
+    {
+      "protocol": "zenodo_13275242_soil_nutrient",
+      "source_sha256": "06b882f6fcab641099eebff8d291940460fb56d8379b43af536b96895993fd4c",
+      "key": "protocol/protocol_purpose",
+      "source": "Too many macronutrients in soil often interfere \nwith micronutrient availability; thus, a balance \nis very important. Soil nutrient analyses must \nbe conducted before and during all cultivating \nperiod to evaluate nutrient possible uptake from \nthe plants.",
+      "korean": "토양의 다량 영양소가 너무 많으면 미량 영양소의 이용을 방해하는 경우가 많아 균형이 중요해요. 식물의 영양소 흡수 가능성을 평가하기 위해 재배 전과 재배 기간 내내 토양 영양소 분석을 해야 해요."
+    },
+    {
+      "protocol": "zenodo_13275242_soil_nutrient",
+      "source_sha256": "06b882f6fcab641099eebff8d291940460fb56d8379b43af536b96895993fd4c",
+      "key": "kcl_step_1/current_step",
+      "source": "1. Weigh 10 g of sieved dry soil soil.",
+      "korean": "1. 체로 거른 마른 토양 10 g을 달아요."
+    },
+    {
+      "protocol": "zenodo_13275242_soil_nutrient",
+      "source_sha256": "06b882f6fcab641099eebff8d291940460fb56d8379b43af536b96895993fd4c",
+      "key": "kcl_step_2/current_step",
+      "source": "2. Add in a flask the soil sample and 100 mL of KCL (1M)",
+      "korean": "2. 플라스크에 토양 시료와 KCL(1M) 100 mL를 넣어요."
+    },
+    {
+      "protocol": "zenodo_13275242_soil_nutrient",
+      "source_sha256": "06b882f6fcab641099eebff8d291940460fb56d8379b43af536b96895993fd4c",
+      "key": "kcl_step_3/current_step",
+      "source": "3. Shake the sample for at least 1 hour.",
+      "korean": "3. 시료를 최소 1 hour 동안 흔들어요."
+    },
+    {
+      "protocol": "pmc_10560831_perovskite_glovebox",
+      "source_sha256": "bee7b40c74dce4c42020ac7092f3e027bcceddf23be476759c1303c7c5a647b0",
+      "key": "protocol/protocol_purpose",
+      "source": "STEP-BY-STEP METHOD DETAILS",
+      "korean": "단계별 방법의 상세 설명이에요."
+    },
+    {
+      "protocol": "pmc_10560831_perovskite_glovebox",
+      "source_sha256": "bee7b40c74dce4c42020ac7092f3e027bcceddf23be476759c1303c7c5a647b0",
+      "key": "sim-step-2/current_step",
+      "source": "3. Preparation of MAPbBr3:Ni(AcO)2 solution.\na. Mix 1 mL of step two solution with 1 mL of step one.\nb. Stir the vial containing the mixture for 10 min.\nc. Store the ﬁltered solution at room temperature approx. 20C and 40% (RH).",
+      "korean": "3. MAPbBr3:Ni(AcO)2 용액을 준비해요.\na. 두 번째 단계 용액 1 mL와 첫 번째 단계 용액 1 mL를 섞어요.\nb. 혼합물이 든 바이알을 10 min 동안 저어요.\nc. 여과액을 실온 약 20C 및 40%(RH)에 보관해요."
+    },
+    {
+      "protocol": "pmc_10560831_perovskite_glovebox",
+      "source_sha256": "bee7b40c74dce4c42020ac7092f3e027bcceddf23be476759c1303c7c5a647b0",
+      "key": "sim-step-3/current_step",
+      "source": "4. Clean the glass slide substrates.\na. Sonicate the substrates (approx. 25 3 25 mm) in a 3 M HCl solution (35 vol%, VRW Chemicals)\nfor 10 min.",
+      "korean": "4. 유리 슬라이드 기판을 세척해요.\na. 원문 크기 표기가 25 3 25 mm인 기판을 3 M HCl 용액(35 vol%, VRW Chemicals)에서 10 min 동안 초음파 처리해요."
+    }
+  ],
+  "style_version": 5
+}

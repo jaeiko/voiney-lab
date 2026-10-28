@@ -6,6 +6,25 @@
 
 ## 오프라인: 모든 줄의 고치기 전·후 점수
 
+개선에 앞서 `--split development`와 `--split holdout`으로 각각 잰다.
+고정 씨앗은 1027, 시험용 비중은 최소 30%다. 같은 발화는 프로토콜이 달라도
+한쪽에만 들어간다. 프로토콜·갈래와 두 문장 이상인 교차 묶음에 시험용 할당량을
+둔다. 한 문장만 반복되는 갈래는 한쪽에만 속할 수 있다. 필터·문장 수 제한은
+전체 분할을 고정한 뒤 적용한다. 분할 지문과 실제 두 묶음의 수가 결과에 남는다.
+시험용 결과는 개별 행을 저장하지 않고 프로토콜·갈래·교차 점수만 내므로
+문장별 퇴보 비교는 개발용에만 가능하다. 시험용 문장을 보고 규칙을 맞추지 않는다.
+
+```bash
+python scripts/sim/run.py --split development --output ~/reports/sim/development-before.json
+python scripts/sim/run.py --split holdout --output ~/reports/sim/holdout-before.json
+python scripts/sim/run.py --emergency-matrix --split development --output ~/reports/sim/emergency-development.json
+python scripts/sim/run.py --emergency-matrix --split holdout --output ~/reports/sim/emergency-holdout.json
+```
+
+응급 별도 묶음은 눈·피부 노출, 흡입·호흡, 불·연기, 대량 쏟음, 베임·출혈,
+쓰러짐·의식, 가스·냄새, 화상, 감전, 삼킴의 합성 발화와 비응급 대조군이다.
+응급 놓침과 헛경보를 따로 센다. 실제 음성 인식이나 안전 대응의 검증은 아니다.
+
 저장소의 가상환경을 활성화하고 저장소 루트에서 실행한다.
 
 ```bash
@@ -192,6 +211,49 @@ python scripts/sim/diagnostics.py ~/voiney-lab/data/runtime/stt-diagnostics \
 첫 소리·STT·TTS·서버 처리 지연은 p50/p95와 표본 수를 함께 본다. 의도하지 않은 음절
 잘림은 STT 오류에 나타날 수 있지만 여기의 취소 이벤트 수가 모든 음향 잘림을 포착하지는 않는다.
 
-출시 기준은 사람이 첫 실측 뒤 정한다. 제안할 가설은 조용함 이해 95% 이상, 중간 소음
-10 dB 이해 90% 이상, 잘못 바뀐 상태·영어 원문·단계 겹침 0이다. 소음만에서 명령이
+첫 실측 뒤 사람이 확정할 출시 목표는 조용함 이해 95% 이상, 중간 소음
+10 dB 이해 90% 이상, 잘못 바뀐 상태·응급 놓침·번역이 있는 조건의 영어 원문 0이다. 단계 이름 겹침도 별도로 센다. 소음만에서 명령이
 실행되는 수도 0이어야 한다. 오프라인에서만 통과한 수치를 현장 출시 근거로 쓰지 않는다.
+
+## 저장 번역과 라우터 비교
+
+`--translations data/fixtures/evaluation/sim/stored_korean.json`은 공개 원문의
+평가용 번역을 붙인다. 원문 SHA·문장 키·인용문을 대조하고 제품 번역 검사를
+통과한 것만 읽는다. 기계 번역으로 표시하며 사람이 검토한 번역이라 하지 않는다.
+목적 10개와 단계 37개이며, 숫자 표기·부정 검사가 거절한 두 단계는 없는 상태로
+남긴다. 입력의 번역 지침 판을 검증해 보존하고, 판이 없으면 0으로 기록한다.
+결과에 실제 번역 수와 없는 단계 수를 낸다. 번역을 붙여도 상태는 바뀌지 않는다.
+
+라우터만 비교할 때는 정답 글자 STT·가짜 TTS와 기존 서버 라우터를 함께 쓴다.
+아래 첫 명령은 호출 0회 계획이고, 두 번째는 **사람이** 실행한다. 모델 공급자와
+모델·키는 셸에 준비하며 도구가 `.env`를 읽지 않는다. 라우터는 이 명령 밖에서
+켜지지 않는다. `VOINEY_LAB_ROUTER_FIRST=true`를 사람이 앞에 붙여 앞단 규칙의
+위임 범위를 달리한 조건도 잴 수 있다. 다른 제품 기능 스위치는 정답 글자 기준과
+동일하게 초기화한다. 다른 모델 역할은 호출하지 않는다. 결과에는 공급자·모델·
+추론 수준·출력 한도·시간 제한을 남기며, 일반 비교는 이 설정이 다르면 거절한다.
+
+```bash
+python scripts/sim/run.py --configured-router --split development --limit 20 --max-calls 20 --max-usd 5
+VOINEY_LAB_LLM_ROUTER_ENABLED=true python scripts/sim/run.py --configured-router --execute \
+  --split development --limit 20 --max-calls 20 --max-usd 5 \
+  --translations data/fixtures/evaluation/sim/stored_korean.json --output ~/reports/sim/router-development.json
+python scripts/sim/compare.py --compare-routing ~/reports/sim/rules-development.json ~/reports/sim/router-development.json
+```
+
+두 결과는 같은 분할·제한·저장 번역이어야 한다. 계획의 모델 요금은 입력 4000토큰·
+출력 최대 400토큰/턴과 입력 $5·출력 $15/백만 토큰이라는 계산용 가정이다.
+20턴이면 $0.52 어림이며 실제 토큰·요금 확인값이 아니다. 전송마다 기본 $0.25를
+예약해 20회·예약 $5에서 멈춘다. 실제 청구액 상한을 보장하지 않는다. 음성 실측은
+기존 `live.py --configured-models`를 쓰고 음성·번역·라우터의 모든 HTTP 전송을
+함께 예약한다. HTTPX와 SDK의 HTTPX2 전송도 같은 원장에 센다.
+
+|조건|이해|잘못 바뀐 상태|응급 놓침|영어 원문|호출 수|예약액|
+|---|---:|---:|---:|---:|---:|---:|
+|규칙·개발용|실행 결과|실행 결과|실행 결과|실행 결과|0|0|
+|라우터·개발용|사람 실행 뒤|사람 실행 뒤|사람 실행 뒤|사람 실행 뒤|원장|원장|
+|규칙·시험용|집계만|집계만|집계만|집계만|0|0|
+|라우터·시험용|사람 실행 뒤 집계만|사람 실행 뒤|사람 실행 뒤|사람 실행 뒤|원장|원장|
+
+듣기 시험대는 입력 소리가 끝나도 처리 중인 마지막 STT·답변·재생 완료를 기다린다.
+일정 시간 뒤 연결을 닫아 마지막 실패 알림을 잃지 않으며, 기다림 상한이 지나면
+불완전한 점수를 성공으로 내지 않고 시험을 실패시킨다.
