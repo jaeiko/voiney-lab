@@ -80,6 +80,10 @@ voiney-evaluate = "voiney_lab.voice_evaluation:main"
 test = [
   "pytest>=8",
 ]
+# Optional local workers; the default test command stays serial.
+test-parallel = [
+  "pytest-xdist==3.8.0",
+]
 # HEIC photos (lane AN, FM). Optional (human decision 2026-10-13): the
 # pillow-heif source is BSD-3-Clause, but its binary wheels bundle libheif and
 # libde265 (LGPLv3) and x265 (GPLv2) and are GPLv2 as a whole; whether to ship

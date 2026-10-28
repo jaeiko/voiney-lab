@@ -133,6 +133,8 @@
 
 | 2026-10-28 | INFRA1: 서버의 Python 3.14를 유지하고 CI에 3.12·3.14 행렬과 3.14 브라우저 서버를 둔다. requirements는 런타임 21개와 판 제한·순서를 pyproject와 일치시킨다. 안내 CLI 시험은 실행 중인 인터프리터를 사용한다 | 기존 서버 환경을 바꾸지 않고 최소 판과 실제 실행 판을 함께 검사. 누락 10개·판 제한 차이 2개를 회귀 검사로 막는다 | `.github/workflows/ci.yml`, `requirements.txt`, `tests/test_infra1_environment.py`, `tests/test_lane_fx5_guide.py` |
 
+| 2026-10-28 | INFRA1: 기본 pytest 명령은 직렬로 두고 `test-parallel` extra와 `-n 2 --dist=loadfile`을 선택 사항으로 둔다 | 공유 머신에서 작업자 수를 자동으로 늘리지 않고 같은 모듈을 한 작업자에 묶는다. 검증 범위는 Python 3.14·조건 A의 두 로컬 작업자 | `pyproject.toml`, `docs/TEST_ENVIRONMENT.md` |
+
 ## 11. 병합된 서버·기록·화면 결정
 
 | 날짜 | 결정 | 이유·줄 | 코드에서 |
