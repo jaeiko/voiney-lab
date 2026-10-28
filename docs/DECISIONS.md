@@ -135,6 +135,8 @@
 
 | 2026-10-28 | INFRA1: 기본 pytest 명령은 직렬로 두고 `test-parallel` extra와 `-n 2 --dist=loadfile`을 선택 사항으로 둔다 | 공유 머신에서 작업자 수를 자동으로 늘리지 않고 같은 모듈을 한 작업자에 묶는다. 검증 범위는 Python 3.14·조건 A의 두 로컬 작업자 | `pyproject.toml`, `docs/TEST_ENVIRONMENT.md` |
 
+| 2026-10-28 | INFRA1: Android의 `com.getcapacitor.myapp` 견본 시험 두 개를 제거한다 | 하나는 2+2만 검사하고 하나는 실제 `com.voiney.lab`과 다른 견본 패키지를 검사. CI나 기능 시험에서 참조하지 않으며 기기 연결 JS·알람 정책 시험은 유지 | `mobile/android/app/src/`, `tests/test_native_bridge.py`, `tests/test_lane_app1_alarm_clock.py` |
+
 ## 11. 병합된 서버·기록·화면 결정
 
 | 날짜 | 결정 | 이유·줄 | 코드에서 |
