@@ -61,6 +61,17 @@ def test_style_proxy_names_only_mechanical_violations(korean, expected) -> None:
     assert style_issues(korean) == expected
 
 
+def test_response_shape_count_includes_glossary_and_sentence_calls() -> None:
+    from collections import Counter
+    from scripts.model_reasoning_eval import response_shape_failure_calls
+
+    failures = Counter({
+        "response_shape": 2, "empty_response": 1,
+        "glossary_response_shape": 1, "glossary_timeout": 3,
+    })
+    assert response_shape_failure_calls(failures) == 4
+
+
 def test_translation_dry_run_has_both_caps_and_never_builds_a_client(monkeypatch) -> None:
     from scripts import model_reasoning_eval as tool
 

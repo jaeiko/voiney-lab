@@ -333,6 +333,13 @@ def style_issues(korean: str) -> tuple[str, ...]:
     return tuple(issues)
 
 
+def response_shape_failure_calls(failures: Mapping[str, int]) -> int:
+    shapes = {"response_shape", "empty_response", "blocked"}
+    return sum(
+        count for kind, count in failures.items()
+        if kind.removeprefix("glossary_") in shapes)
+
+
 def _usage(value: object) -> dict[str, int]:
     usage: dict[str, int] = {}
     for key in ("prompt_tokens", "completion_tokens", "total_tokens",
@@ -617,9 +624,7 @@ def execute_translation(
             rows, mode=mode, role=role, capture=capture))
     passed = sum(row["check"] == "passed" for row in result_rows)
     styled = sum(bool(row["style_issues"]) for row in result_rows)
-    response_shape_calls = sum(
-        count for kind, count in failures.items()
-        if kind in {"response_shape", "empty_response", "blocked"})
+    response_shape_calls = response_shape_failure_calls(failures)
     capture_summary = _capture_summary(
         capture, input_rate=input_rate, output_rate=output_rate)
     report = {
@@ -650,6 +655,7 @@ def execute_translation(
         } if mode == "spot" else None),
         "transport_requests": budget.calls,
         "reserved_usd": round(budget.usd, 4),
+        "budget_stopped": budget.stopped,
         "caps": {"calls": max_calls, "usd": max_usd,
                  "reserve_usd_per_transport": reserve_usd},
         "calls": capture_summary,
@@ -845,6 +851,7 @@ def execute_analysis(
         "elapsed_ms": _percentiles(row["elapsed_ms"] for row in rows),
         "transport_requests": budget.calls,
         "reserved_usd": round(budget.usd, 4),
+        "budget_stopped": budget.stopped,
         "caps": {"calls": max_calls, "usd": max_usd,
                  "reserve_usd_per_transport": reserve_usd},
         "calls": _capture_summary(
