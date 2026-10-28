@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any, Sequence
 
@@ -60,7 +61,10 @@ def test_client_is_closed_in_its_own_loop_on_success_or_timeout(cancel: bool, gl
         async def create(self, **kwargs: Any) -> SimpleNamespace:
             if cancel:
                 await asyncio.sleep(60)
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{}'))])
+            payload = json.loads(kwargs['messages'][-1]['content'])
+            body = {'items': [{'id': item['id'], 'korean': '옮겨요.'}
+                              for item in payload['items']]} if 'items' in payload else {'entries': []}
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(body)))])
         async def close(self) -> None:
             assert asyncio.get_running_loop() is self.loop
             self.closed = True
@@ -88,7 +92,7 @@ def test_client_is_closed_in_its_own_loop_on_success_or_timeout(cancel: bool, gl
 def test_google_facade_closes_its_async_sdk_before_the_loop_ends() -> None:
     closed = []
     async def create(**kwargs: Any) -> SimpleNamespace:
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{}'))])
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"items":[]}'))])
     async def close() -> None:
         closed.append(asyncio.get_running_loop())
     sdk = SimpleNamespace(aio=SimpleNamespace(aclose=close))
