@@ -353,6 +353,10 @@ python scripts/model_reasoning_eval.py translation \
 `--case`는 기준 분석이 있는 프로토콜 id와 현재 분석 응답 JSON을 짝짓는다. 실행은
 append-only 재분석이고 현재 `ProtocolCatalog.analyze`의 자동 재시도·근거 다시 묻기·
 카드 생성을 그대로 거친다. 원응답은 지정한 개인 보고 폴더에만 두고 커밋하지 않는다.
+0호출 계획의 모든 `cases[].pieces`가 0인 프로토콜만 비교한다. 조각 분석의 개별 응답은
+문서 전체 응답이 아니므로 실행 명령은 조각이 필요한 프로토콜을 공급자 호출 전에
+거부한다. 그런 프로토콜을 비교하려면 병합된 분석을 같은 기준으로 채점하는 별도 도구가
+먼저 필요하다.
 
 ```bash
 ANALYSIS_CASES=(

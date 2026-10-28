@@ -164,6 +164,19 @@ def balanced_sample(
         if not moved:
             raise EvaluationError(
                 f"only {len(chosen)} eligible sentences for requested sample {size}")
+    group_counts = Counter(item.group for item in chosen)
+    balanced = (
+        bool(group_counts)
+        and max(group_counts.values()) - min(group_counts.values()) <= 1
+    )
+    for group in candidates:
+        bands = Counter(item.length_band for item in chosen if item.group == group)
+        balanced = balanced and set(bands) == set(LENGTH_BANDS)
+        balanced = balanced and max(bands.values(), default=0) - min(
+            bands.values(), default=0) <= 1
+    if not balanced:
+        raise EvaluationError(
+            "eligible sentences cannot make a balanced group/length sample")
     return chosen
 
 
@@ -763,6 +776,15 @@ def _score_candidate(
     return payload, index
 
 
+def analysis_card_count(entry: Any | None) -> int | None:
+    """Count review cards while keeping a failed/no-result run distinct."""
+    if entry is None:
+        return None
+    if entry.review_pending is None:
+        return 0
+    return int(entry.review_pending.get("needs_review_count") or 0)
+
+
 def execute_analysis(
     *, data_dir: Path, cases: Sequence[tuple[str, Path]], output_dir: Path,
     max_calls: int, max_usd: float, reserve_usd: float,
@@ -779,22 +801,39 @@ def execute_analysis(
         raise EvaluationError(f"{role.api_key_setting} is unset")
     if role.reasoning not in {"low", "medium"}:
         raise EvaluationError("analysis comparison requires explicit low or medium reasoning")
+    # score_extraction compares one complete provider response. Piece calls
+    # are complete envelopes for only their page slice, while the merged
+    # protocol exists only in the catalog; scoring the last piece as the
+    # document would be false evidence. Reuse the zero-call plan and refuse
+    # before any provider client is built.
+    preflight = analysis_plan(
+        data_dir=data_dir, cases=cases, max_calls=max_calls, max_usd=max_usd,
+        reserve_usd=reserve_usd, input_rate=input_rate, output_rate=output_rate,
+    )
+    piecewise = [
+        str(row["protocol_id"]) for row in preflight["cases"] if row["pieces"]
+    ]
+    if piecewise:
+        raise EvaluationError(
+            "score_extraction needs single-pass protocols; piecewise cases: "
+            + ", ".join(piecewise))
     output_dir = _checked_report_path(output_dir)
     if output_dir.exists():
         raise EvaluationError("analysis output directory already exists")
     output_dir.mkdir(parents=True, mode=0o700)
     capture = _Capture(max_calls)
-    client = build_model_client(
-        role, asynchronous=False, timeout=timeout, capture=capture)
-    model = OpenAICompatibleProtocolAnalysisModel(
-        client, str(role.model), role.reasoning)
     budget = Budget(max_calls, max_usd, reserve_usd, output_dir / "transport.ledger.jsonl")
     store = initialize_protocol_store(ProtocolPersistenceSettings(True, data_dir))
     rows: list[dict[str, Any]] = []
+    client = None
     try:
         catalog = ProtocolCatalog(store)
         with ExitStack() as stack:
             budget.guard(stack)
+            client = build_model_client(
+                role, asynchronous=False, timeout=timeout, capture=capture)
+            model = OpenAICompatibleProtocolAnalysisModel(
+                client, str(role.model), role.reasoning)
             for protocol_id, reference in cases:
                 folder = output_dir / protocol_id
                 folder.mkdir(mode=0o700)
@@ -814,9 +853,7 @@ def execute_analysis(
                 records = capture.records[before:]
                 score, scored_call = _score_candidate(
                     source, reference, records, folder)
-                cards = None
-                if entry is not None and entry.review_pending is not None:
-                    cards = int(entry.review_pending.get("needs_review_count") or 0)
+                cards = analysis_card_count(entry)
                 rows.append({
                     "protocol_id": protocol_id,
                     "analysis_status": entry.analysis_status if entry is not None else None,
@@ -836,7 +873,8 @@ def execute_analysis(
                 })
     finally:
         store.close()
-        client.close()
+        if client is not None:
+            client.close()
     report = {
         "schema": 1,
         "kind": "analysis_reasoning_comparison",

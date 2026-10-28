@@ -35,6 +35,20 @@ def test_balanced_translation_sample_covers_each_group_and_length_band() -> None
         assert set(bands) == {"short", "medium", "long"}
 
 
+def test_balanced_translation_sample_refuses_an_underfilled_group() -> None:
+    from scripts.model_reasoning_eval import EvaluationError, balanced_sample
+
+    candidates = {
+        "biology": [_item("biology", index, 10 + index) for index in range(3)],
+        "chemistry": [_item("chemistry", 100 + index, 10 + index)
+                      for index in range(40)],
+        "materials": [_item("materials", 200 + index, 10 + index)
+                      for index in range(40)],
+    }
+    with pytest.raises(EvaluationError, match="balanced"):
+        balanced_sample(candidates, size=60, seed=1028)
+
+
 def test_sample_manifest_contains_identity_but_no_source_sentence() -> None:
     from scripts.model_reasoning_eval import sample_manifest
 
@@ -115,6 +129,48 @@ def test_analysis_capture_keeps_usage_and_raw_answer_out_of_public_row() -> None
     assert capture.records[0].content == '{"private":"answer"}'
     with pytest.raises(CallCapReached):
         capture.chat.completions.create(model="fake")
+
+
+def test_analysis_execution_refuses_piecewise_plan_before_provider_boundary(
+    monkeypatch, tmp_path,
+) -> None:
+    from scripts import model_reasoning_eval as tool
+
+    monkeypatch.setenv("VOINEY_LAB_ANALYSIS_PROVIDER", "openai")
+    monkeypatch.setenv("VOINEY_LAB_ANALYSIS_MODEL", "fake")
+    monkeypatch.setenv("VOINEY_LAB_ANALYSIS_REASONING", "low")
+    monkeypatch.setenv("OPENAI_API_KEY", "fake")
+    monkeypatch.setattr(tool, "_checked_copy", lambda path: path)
+    monkeypatch.setattr(tool, "analysis_plan", lambda **_kwargs: {
+        "cases": [{"protocol_id": "long-protocol", "pieces": 2}],
+    })
+    monkeypatch.setattr(
+        tool, "initialize_protocol_store",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("piecewise plan crossed the provider boundary")),
+    )
+    monkeypatch.setattr(
+        tool, "build_model_client",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("piecewise plan built a provider client")),
+    )
+
+    with pytest.raises(tool.EvaluationError, match="single-pass"):
+        tool.execute_analysis(
+            data_dir=tmp_path, cases=[("long-protocol", tmp_path / "reference.json")],
+            output_dir=tmp_path / "output", max_calls=2, max_usd=1,
+            reserve_usd=.1, input_rate=1, output_rate=1, timeout=1,
+        )
+
+
+def test_analysis_card_count_distinguishes_no_cards_from_no_result() -> None:
+    from types import SimpleNamespace
+    from scripts.model_reasoning_eval import analysis_card_count
+
+    assert analysis_card_count(None) is None
+    assert analysis_card_count(SimpleNamespace(review_pending=None)) == 0
+    assert analysis_card_count(SimpleNamespace(
+        review_pending={"needs_review_count": 3})) == 3
 
 
 def test_spot_evaluation_uses_server_request_and_production_check(monkeypatch) -> None:
