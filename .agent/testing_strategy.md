@@ -104,8 +104,10 @@ together.
   rate-labelled cost estimate. `analysis` requests append-only reanalysis in a
   catalog copy, counts the resulting cards/calls/time, keeps raw candidates
   only in the private report directory, and invokes `score_extraction.py`
-  against each supplied hand-built reference. Run low and medium on separate
-  copies of the same snapshot. No result is an execution verdict, the style
+  against each supplied hand-built reference. Only single-pass analyses can
+  be scored this way; the tool refuses piecewise cases before constructing a
+  provider client. Run low and medium on separate copies of the same snapshot.
+  No result is an execution verdict, the style
   proxy is not human prose review, returned-token cost omits calls whose usage
   is unavailable, and no report or catalog copy is committed.
 

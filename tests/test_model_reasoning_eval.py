@@ -65,6 +65,10 @@ def test_sample_manifest_contains_identity_but_no_source_sentence() -> None:
     [
         ("1단계: 시료를 섞어요.", ()),
         ("1단계: 시료를 혼합합니다.", ("formal_style",)),
+        ("1단계: 시료를 섞습니다.", ("formal_style",)),
+        ("저희 시료를 확인해요.", ("author_voice",)),
+        ("혼합하는 것이 요구돼요.", ("translationese",)),
+        ("시료가 희끄무레해요.", ("forbidden_wording",)),
         ("귀하는 sample을 vortexing해요.",
          ("addresses_reader", "english_verb", "forbidden_wording")),
     ],
@@ -129,6 +133,105 @@ def test_analysis_capture_keeps_usage_and_raw_answer_out_of_public_row() -> None
     assert capture.records[0].content == '{"private":"answer"}'
     with pytest.raises(CallCapReached):
         capture.chat.completions.create(model="fake")
+
+
+def test_async_capture_counts_a_cancelled_transport_and_stopped_cap() -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from scripts import model_reasoning_eval as tool
+
+    async def wait_forever(**_request):
+        await asyncio.Event().wait()
+
+    inner = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=wait_forever)))
+    measured = tool._Capture(1)
+    client = tool.AsyncCaptureClient(inner, measured)
+
+    async def run() -> None:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(
+                client.chat.completions.create(model="fake"), timeout=.001)
+        second_error = None
+        try:
+            await asyncio.wait_for(
+                client.chat.completions.create(model="fake"), timeout=.001)
+        except BaseException as exc:  # assertion below distinguishes cap from timeout
+            second_error = exc
+        assert isinstance(second_error, tool.CallCapReached)
+
+    asyncio.run(run())
+    summary = tool._capture_summary(measured, input_rate=1, output_rate=1)
+    assert summary["logical_calls"] == 1
+    assert summary["usage_missing_calls"] == 1
+    assert summary["logical_call_cap_stopped"] is True
+    assert measured.records[0].status == "error:CancelledError"
+
+
+def test_translation_execution_requires_explicit_comparison_reasoning(
+    monkeypatch, tmp_path,
+) -> None:
+    from scripts import model_reasoning_eval as tool
+
+    monkeypatch.setenv("VOINEY_LAB_TRANSLATION_PROVIDER", "openai")
+    monkeypatch.setenv("VOINEY_LAB_TRANSLATION_MODEL", "fake")
+    monkeypatch.delenv("VOINEY_LAB_TRANSLATION_REASONING", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "fake")
+    monkeypatch.setattr(tool, "load_sample", lambda *_a, **_k: [])
+    monkeypatch.setattr(tool, "_checked_report_path", lambda path: path)
+    monkeypatch.setattr(
+        tool, "build_model_client",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("unset reasoning built a provider client")),
+    )
+
+    with pytest.raises(tool.EvaluationError, match="explicit low, medium, or high"):
+        tool.execute_translation(
+            data_dir=tmp_path, manifest=tmp_path / "manifest.json", mode="batch",
+            output_dir=tmp_path / "output", max_calls=1, max_usd=1,
+            reserve_usd=.1, input_rate=1, output_rate=1,
+        )
+
+
+def test_analysis_accuracy_summary_compares_the_condition() -> None:
+    from scripts.model_reasoning_eval import analysis_accuracy_summary
+
+    summary = analysis_accuracy_summary([
+        {"accuracy": {
+            "reference_steps": 3, "candidate_steps": 3,
+            "step_count_matches": True, "order_matches": True,
+            "missing_labels": [], "extra_labels": [],
+            "mean_text_similarity": .8, "steps_compared": 3,
+            "steps_with_matching_values": 2,
+            "steps_with_contradicted_values": 1,
+            "steps_unscorable_on_values": 0,
+        }},
+        {"accuracy": {
+            "reference_steps": 2, "candidate_steps": 1,
+            "step_count_matches": False, "order_matches": False,
+            "missing_labels": ["2"], "extra_labels": ["x"],
+            "mean_text_similarity": .6, "steps_compared": 1,
+            "steps_with_matching_values": 1,
+            "steps_with_contradicted_values": 0,
+            "steps_unscorable_on_values": 1,
+        }},
+        {"accuracy": None},
+    ])
+
+    assert summary == {
+        "scored_protocols": 2,
+        "step_count_match_rate": .5,
+        "order_match_rate": .5,
+        "protocol_mean_text_similarity": .7,
+        "reference_steps": 5,
+        "candidate_steps": 4,
+        "missing_labels": 1,
+        "extra_labels": 1,
+        "steps_compared": 4,
+        "steps_with_matching_values": 3,
+        "steps_with_contradicted_values": 1,
+        "steps_unscorable_on_values": 1,
+    }
 
 
 def test_analysis_execution_refuses_piecewise_plan_before_provider_boundary(

@@ -327,11 +327,18 @@ def translation_plan(
     }
 
 
-_FORMAL = re.compile(r"(?:합|됩|입)니다|하십시오")
+_FORMAL = re.compile(r"(?:합|됩|입)니다|습니다|하십시오")
 _ADDRESSES = re.compile(
     r"(?<![가-힣])(?:귀하|당신|여러분)(?=(?:은|는|이|가|을|를|께|도|의)?(?:\s|[,.!?]|$))")
 _ENGLISH_VERB = re.compile(r"[A-Za-z][A-Za-z-]*(?:해요|하면서|합니다|하세요)")
-_FORBIDDEN = re.compile(r"워싱|흡입\s*제거|파이펫|비드|(?<![가-힣])겔(?![가-힣])|vortexing", re.I)
+_AUTHOR_VOICE = re.compile(
+    r"(?<![가-힣])(?:우리|저희)(?=(?:은|는|이|가|을|를|도|의)?(?:\s|[,.!?]|$))")
+_TRANSLATIONESE = re.compile(
+    r"하는 것을 환영합니다|에 의해|하는 것이 요구(?:됩니다|돼요|되어요|돼|되어)")
+_FORBIDDEN = re.compile(
+    r"워싱|흡입\s*제거|파이펫|비드|희끄무레|(?<![가-힣])겔(?![가-힣])|vortexing",
+    re.I,
+)
 
 
 def style_issues(korean: str) -> tuple[str, ...]:
@@ -339,7 +346,9 @@ def style_issues(korean: str) -> tuple[str, ...]:
     issues = []
     for name, pattern in (
         ("formal_style", _FORMAL), ("addresses_reader", _ADDRESSES),
-        ("english_verb", _ENGLISH_VERB), ("forbidden_wording", _FORBIDDEN),
+        ("english_verb", _ENGLISH_VERB), ("author_voice", _AUTHOR_VOICE),
+        ("translationese", _TRANSLATIONESE),
+        ("forbidden_wording", _FORBIDDEN),
     ):
         if pattern.search(korean or ""):
             issues.append(name)
@@ -386,9 +395,11 @@ class _Capture:
     def __init__(self, max_calls: int) -> None:
         self.max_calls = max_calls
         self.records: list[CallRecord] = []
+        self.stopped = False
 
     def before(self) -> None:
         if len(self.records) >= self.max_calls:
+            self.stopped = True
             raise CallCapReached("logical call cap reached")
 
     def keep(self, response: Any, started: float, status: str = "ok") -> None:
@@ -444,6 +455,9 @@ class AsyncCaptureClient:
         started = time.perf_counter()
         try:
             response = await self._inner.chat.completions.create(**request)
+        except asyncio.CancelledError as exc:
+            self._capture.failed(started, exc)
+            raise
         except Exception as exc:
             self._capture.failed(started, exc)
             raise
@@ -486,6 +500,7 @@ def _capture_summary(
         "latency_ms": _percentiles(record.elapsed_ms for record in capture.records),
         "usage": dict(usage),
         "usage_missing_calls": sum(not record.usage for record in capture.records),
+        "logical_call_cap_stopped": capture.stopped,
         "cost_usd_estimate": _cost(usage, input_rate, output_rate),
         "input_usd_per_million_assumed": input_rate,
         "output_usd_per_million_assumed": output_rate,
@@ -625,6 +640,9 @@ def execute_translation(
         raise EvaluationError("VOINEY_LAB_TRANSLATION_PROVIDER is unset")
     if not role.has_key():
         raise EvaluationError(f"{role.api_key_setting} is unset")
+    if role.reasoning not in {"low", "medium", "high"}:
+        raise EvaluationError(
+            "translation comparison requires explicit low, medium, or high reasoning")
     output_dir = _checked_report_path(output_dir)
     if output_dir.exists():
         raise EvaluationError("translation output directory already exists")
@@ -785,6 +803,52 @@ def analysis_card_count(entry: Any | None) -> int | None:
     return int(entry.review_pending.get("needs_review_count") or 0)
 
 
+def analysis_accuracy_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Aggregate comparable extraction fields without making an execution verdict."""
+    scored = [
+        row["accuracy"] for row in rows if isinstance(row.get("accuracy"), dict)
+    ]
+    count = len(scored)
+
+    def total(key: str) -> int:
+        return sum(
+            value for score in scored
+            if isinstance((value := score.get(key)), int)
+            and not isinstance(value, bool) and value >= 0
+        )
+
+    def labels(key: str) -> int:
+        return sum(
+            len(value) for score in scored
+            if isinstance((value := score.get(key)), (list, tuple))
+        )
+
+    similarities = [
+        float(value) for score in scored
+        if isinstance((value := score.get("mean_text_similarity")), (int, float))
+        and not isinstance(value, bool) and math.isfinite(value)
+    ]
+    return {
+        "scored_protocols": count,
+        "step_count_match_rate": (
+            round(sum(score.get("step_count_matches") is True for score in scored)
+                  / count, 4) if count else None),
+        "order_match_rate": (
+            round(sum(score.get("order_matches") is True for score in scored)
+                  / count, 4) if count else None),
+        "protocol_mean_text_similarity": (
+            round(sum(similarities) / len(similarities), 4) if similarities else None),
+        "reference_steps": total("reference_steps"),
+        "candidate_steps": total("candidate_steps"),
+        "missing_labels": labels("missing_labels"),
+        "extra_labels": labels("extra_labels"),
+        "steps_compared": total("steps_compared"),
+        "steps_with_matching_values": total("steps_with_matching_values"),
+        "steps_with_contradicted_values": total("steps_with_contradicted_values"),
+        "steps_unscorable_on_values": total("steps_unscorable_on_values"),
+    }
+
+
 def execute_analysis(
     *, data_dir: Path, cases: Sequence[tuple[str, Path]], output_dir: Path,
     max_calls: int, max_usd: float, reserve_usd: float,
@@ -885,6 +949,7 @@ def execute_analysis(
                  "reasoning": role.reasoning},
         "rows": rows,
         "protocols": len(rows),
+        "accuracy": analysis_accuracy_summary(rows),
         "cards": sum(row["cards"] or 0 for row in rows),
         "elapsed_ms": _percentiles(row["elapsed_ms"] for row in rows),
         "transport_requests": budget.calls,
