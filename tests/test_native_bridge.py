@@ -29,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 #: Every node test of the bridge (lane APP1 added the alarm clock, the
 #: background microphone and the app login beside the timer alerts).
 NODE_TESTS = sorted((ROOT / "tests" / "native_bridge").glob("*.test.js"))
+# Parametrizing an empty list would skip the body and hide a missing suite.
+assert NODE_TESTS, "native bridge suite contains no test files"
 #: A summary line of ``node --test``, TAP (``# pass 43``) or spec (``ℹ pass 43``),
 #: at the start of a line (nested TAP subtests are indented).
 SUMMARY_LINE = re.compile(r"^(?:#|\u2139)[ \t]+(tests|pass|fail|cancelled)[ \t]+(\d+)[ \t]*$", re.MULTILINE)
@@ -61,13 +63,15 @@ def node_tests_failure(returncode: int, output: str) -> str | None:
     return None
 
 
-def test_native_bridge_timer_alerts_under_node() -> None:
+@pytest.mark.parametrize("node_test", NODE_TESTS, ids=lambda path: path.stem)
+def test_native_bridge_timer_alerts_under_node(node_test: Path) -> None:
     node = shutil.which("node")
     if node is None:
-        pytest.skip("node is not installed; run `node --test tests/native_bridge/`")
-    assert NODE_TESTS
+        pytest.skip("node is not installed; run `node --test tests/native_bridge/*.test.js`")
+    # Bound each file independently; an entire suite of successful files
+    # may take over 120 seconds on a contended host.
     result = subprocess.run(
-        [node, "--test", *map(str, NODE_TESTS)],
+        [node, "--test", str(node_test)],
         cwd=ROOT,
         capture_output=True,
         text=True,

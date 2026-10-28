@@ -14,12 +14,14 @@ nothing passes on part of it.
 from __future__ import annotations
 
 import json
+import os
 import re
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from unittest import mock
+from typing import Any
 
 from tests.test_lane_ev2_hollow_pass import write_pages_pdf
 from voiney_lab import experiment_protocol_analysis as analysis_module
@@ -46,7 +48,11 @@ from voiney_lab.experiment_protocol_pdf import (
     clear_protocol_pdf_cache,
     extract_protocol_pdf,
 )
-from voiney_lab.experiment_protocol_store import initialize_protocol_store
+from voiney_lab.experiment_protocol_store import (
+    ProtocolEventRecord,
+    ProtocolStore,
+    initialize_protocol_store,
+)
 from voiney_lab.protocol_catalog import ProtocolCatalog
 
 TITLE = "Plasmid preparation"
@@ -114,7 +120,7 @@ class PieceModel:
             if broken:
                 self.broken[pages[0]] -= 1
         if self.hold is not None and pages[0] > 1:
-            self.hold.wait(10)
+            self.hold.wait()
         if broken:
             return "not json"
         steps = []
@@ -443,21 +449,44 @@ class CatalogPieceTests(_CatalogCase):
             finally:
                 store.close()
 
+        completed = threading.Event()
+        all_started = threading.Event()
+        started_pieces: set[int] = set()
+        append = type(self.store).append_event
+
+        def observed_append(
+            store: ProtocolStore, event_id: str, experiment_id: str, revision: int,
+            event_type: str, payload: dict[str, Any], **kwargs: Any,
+        ) -> ProtocolEventRecord:
+            result = append(store, event_id, experiment_id, revision, event_type, payload, **kwargs)
+            if experiment_id != protocol_id:
+                return result
+            # Signal only after the event is durable. The reading connection
+            # sees the same checkpoint even when this thread is descheduled.
+            if event_type == "protocol_chunk_analysis_started":
+                started_pieces.add(payload["ordinal"])
+                if started_pieces == {1, 2, 3, 4, 5}:
+                    all_started.set()
+            if event_type == "protocol_chunk_analysis_completed" and payload["ordinal"] == 1:
+                completed.set()
+            return result
+
         worker = threading.Thread(target=run)
-        worker.start()
-        try:
-            line = ""
-            for _ in range(200):
+        with mock.patch.object(type(self.store), "append_event", observed_append), mock.patch.dict(
+            os.environ, {"VOINEY_LAB_ANALYSIS_PIECE_CONCURRENCY": "5"}
+        ):
+            worker.start()
+            try:
+                self.assertTrue(all_started.wait(300), "piece starts were not stored")
+                self.assertTrue(completed.wait(300), "first piece completion was not stored")
                 line = self.catalog.pipeline_status(protocol_id)["message"]
-                if "끝난 조각 1/5" in line:
-                    break
-                threading.Event().wait(0.05)
-            self.assertIn("긴 문서를 조각 5개로 나눠 분석 중입니다", line)
-            self.assertIn("조각 2·3·4·5/5 분석 중", line)
-            self.assertIn("끝난 조각 1/5", line)
-        finally:
-            hold.set()
-            worker.join(30)
+                self.assertIn("긴 문서를 조각 5개로 나눠 분석 중입니다", line)
+                self.assertIn("조각 2·3·4·5/5 분석 중", line)
+                self.assertIn("끝난 조각 1/5", line)
+            finally:
+                hold.set()
+                worker.join(300)
+            self.assertFalse(worker.is_alive(), "analysis worker did not finish")
         self.assertEqual(outcome, ["passed"])
 
 

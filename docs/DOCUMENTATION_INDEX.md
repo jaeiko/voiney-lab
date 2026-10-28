@@ -37,7 +37,7 @@
 | [`../.agent/architecture.md`](../.agent/architecture.md) | 지금 구조의 유일한 깊은 설명 |
 | [`../.agent/coding_rules.md`](../.agent/coding_rules.md), [`../.agent/security_rules.md`](../.agent/security_rules.md), [`../.agent/testing_strategy.md`](../.agent/testing_strategy.md) | 코드 쓰는 법, 보안·개인정보·안전 규칙, 시험이 증명해야 할 것과 평가 |
 | [`GIT_WORKFLOW.md`](GIT_WORKFLOW.md) | 브랜치·커밋·PR·병합, 파일 담당 |
-| [`TEST_ENVIRONMENT.md`](TEST_ENVIRONMENT.md) | Python 판·의존성 일치 검사와 선택형 파일 단위 병렬 시험 |
+| [`TEST_ENVIRONMENT.md`](TEST_ENVIRONMENT.md) | Python 판·의존성 일치, 시간 제한 검사와 선택형 파일 단위 병렬 시험 |
 | [`VOICE_AND_TONE.md`](VOICE_AND_TONE.md) | 화면·음성 문구를 쓰는 규칙과 쉬운 말 사전(새 문구에 적용; 지금 문구 바꾸기는 2단계) |
 | [`../assets/brand/README.txt`](../assets/brand/README.txt) | 이름 표기(회사 Voiney, 제품 Voiney Lab · 보이니 랩)와 로고 파일·글꼴·색·여백 규칙. 원본은 `assets/brand/`, 화면은 쓰는 것만 `src/voiney_lab/static/icons/` 에 복사한다 |
 | [`MIGRATION_NOTES.md`](MIGRATION_NOTES.md) | 저장 스키마와 설정 이름이 바뀐 기록 |

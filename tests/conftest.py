@@ -157,3 +157,13 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if os.path.basename(str(item.fspath)) in MODULES_REQUIRING_CANDIDATE_A_SOURCE_PDF:
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _pdf_worker_test_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give real parser subprocesses scheduling room on the shared test host.
+
+    The production default remains 30 s. Deadline-contract tests override or
+    clear this injected test budget; the real hung-worker test still uses 1 s.
+    """
+    monkeypatch.setenv("VOINEY_LAB_PDF_WORKER_TIMEOUT_SECONDS", "120")
