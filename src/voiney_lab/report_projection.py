@@ -201,8 +201,9 @@ def project_protocol_for_report(protocol: ExperimentProtocol | Any) -> Projected
         objective = _extract_text(desc)
     if not objective and metadata is not None:
         objective = _extract_text(getattr(metadata, "description", None))
-    if not objective:
-        objective = f"본 실험 세션의 목적은 '{title}' 지침에 따라 표준화된 실험 절차를 수행하고 검증된 실험 데이터를 기록하는 것이다."
+    # A protocol title is not a research objective.  Leave this empty when
+    # neither the source nor a person supplied one; notebook consumers render
+    # an explicit blank instead of filling it with plausible prose.
 
     # Materials
     materials: list[str] = []

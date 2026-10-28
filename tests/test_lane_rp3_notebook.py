@@ -71,9 +71,8 @@ class OrderAndHeaderTests(_Case):
         headings = [line for line in text.splitlines() if line.startswith("## ")]
         self.assertEqual(headings, list(er.NOTEBOOK_HEADINGS))
         self.assertEqual(headings, [
-            "## 1. 시료와 조건", "## 2. 실제로 한 조건", "## 3. 관찰과 결과",
-            "## 4. 원문과 다르게 한 점·문제", "## 5. 지난번과 다른 점", "## 6. 다음에 바꿀 점·다음 할 일",
-            "## 7. 확인", "## 8. 부록"])
+            "## 실험 정보", "## 목적", "## 방법", "## 관찰·특이사항",
+            "## 결과", "## 해석·다음 할 일", "## 분야별 기록", "## 부록"])
 
     def test_the_header_names_date_experimenter_protocol_version_source_and_progress(self) -> None:
         text = self.markdown(deviation_run(self.temporary.name))
@@ -108,15 +107,15 @@ class OrderAndHeaderTests(_Case):
 
     def test_what_the_body_leaves_out(self) -> None:
         text = self.markdown(cell_run(self.temporary.name), cell_protocol(), start_check=None)
-        body = text.split("## 8. 부록")[0]
+        body = text.split("## 부록")[0]
         for gone in ("한눈 요약", "## 타이머", "편차·이상 모음", "시작 전 확인", "1. 실험 목적", "배경·원리",
                      "재료와 장비", "수행한 단계", "방법 요약", "고찰", "결론", "키워드", "원문에는 목적을",
                      "연구자가 직접 적는다", "확인할 점을 찾지 못했다", "NAME", "TYPE", "SKU", "Catalog #",
                      "연결 끊김", "1분 전 알림", "안전 주의 확인", "시간 기준", "걸린 시간"):
             self.assertNotIn(gone, body, gone)
-        # The source's sentences are not copied into the body.
+        # NOTE1: the method keeps each exact source step beside actual values.
         for sentence in ("Seed A549 cells at 5000 cells per well", "Add the compound at 0.5 µM and 5 µM"):
-            self.assertNotIn(sentence, body)
+            self.assertIn(sentence, body)
 
 
 class SampleTests(_Case):
@@ -127,11 +126,12 @@ class SampleTests(_Case):
             "| 2번 샘플 | 처리군 |   |",
             "| 3번 샘플 | 대조군 | 예 |",
         ])
-        self.assertIn(f"> 말한 그대로: “{CELL_PURPOSE}”", self.section(text, "## 1. 시료와 조건"))
+        self.assertEqual(self.section(text, "## 목적").strip(), CELL_PURPOSE)
 
     def test_nothing_said_is_said_so(self) -> None:
         text = self.markdown(deviation_run(self.temporary.name))
-        self.assertEqual(self.section(text, "## 1. 시료와 조건").strip(), "> 말하지 않음.")
+        self.assertEqual(self.section(text, "## 목적").strip(), "")
+        self.assertNotIn("| 시료 | 조건 | 대조군 |", self.section(text, "## 실험 정보"))
 
     def test_samples_are_read_from_the_words_when_the_event_holds_none(self) -> None:
         self.assertEqual(er.samples_in_text("1번 2번 샘플이 처리군이고 3번은 대조군"), [
@@ -175,11 +175,11 @@ class ConditionTests(_Case):
         ])
         # Only what the source names in a performed step: the thermomixer is
         # listed but no step text names it.
-        self.assertIn("> 쓴 재료·장비: Acetonitrile", self.section(text, "## 2. 실제로 한 조건"))
+        self.assertIn("> 쓴 재료·장비: Acetonitrile", self.section(text, "## 부록"))
         text = self.markdown(cell_run(self.temporary.name), cell_protocol(), start_check=None)
         # Named as the source lists them, without the company and catalog words.
-        self.assertIn("> 쓴 재료·장비: A549 cells · MTT reagent · DMSO · 96-well plate", self.section(text, "## 2. 실제로 한 조건"))
-        self.assertNotIn("Thermomixer", self.section(text, "## 2. 실제로 한 조건"))
+        self.assertIn("> 쓴 재료·장비: A549 cells · MTT reagent · DMSO · 96-well plate", self.section(text, "## 부록"))
+        self.assertNotIn("Thermomixer", self.section(text, "## 부록"))
 
     def test_consecutive_steps_as_the_source_says_are_grouped(self) -> None:
         text = self.markdown(short_run(self.temporary.name), protocol_double(labels=("1", "2")), start_check=None)
@@ -216,12 +216,12 @@ class ConditionTests(_Case):
         rows = self.table(text, "| 과정 | 원문 값 → 실제 |")
         self.assertIn("| 1–2단계 반복 (2단계 원문: “Repeat steps 1-2 until the gel is clear.”) |"
                       " 2회차까지 함 (말로 확인한 돌아가기 기준) |", rows)
-        self.assertIn("> 원문대로 했고, 기록된 문제가 없다.", self.section(text, "## 4. 원문과 다르게 한 점·문제"))
+        self.assertNotIn("원문과 다르게 한 점·문제", text)
 
     def test_without_the_source_the_conditions_say_so(self) -> None:
         record = short_run(self.temporary.name)
         text = record.store.export_markdown(record.report_id, fixture=None, start_check=None, previous=None).decode()
-        self.assertIn("> 프로토콜 원문을 불러오지 못해 원문 값을 적지 못했다.", self.section(text, "## 2. 실제로 한 조건"))
+        self.assertIn("> 프로토콜 원문을 불러오지 못해 원문 값을 적지 못했다.", self.section(text, "## 방법"))
 
 
 class ObservationTests(_Case):
@@ -234,8 +234,8 @@ class ObservationTests(_Case):
             "| 6단계 · Read-out | 2번 샘플 | 2번 샘플 생존율 41% | 12:51 |",
             "| 6단계 · Read-out | — | 사진: 570 nm 판독 화면 | 12:53 |",
         ])
-        section = self.section(text, "## 3. 관찰과 결과")
-        self.assertIn("> 결과 (실험자가 말함): “처리군 생존율이 대조군보다 낮았어.”", section)
+        section = self.section(text, "## 관찰·특이사항")
+        self.assertEqual(self.section(text, "## 결과").strip(), "처리군 생존율이 대조군보다 낮았어.")
         # A deviation and an anomaly are section 4's, not observations.
         self.assertNotIn("40도에서", section)
 
@@ -247,9 +247,9 @@ class ObservationTests(_Case):
 
     def test_no_observation_and_no_result_are_said_so(self) -> None:
         text = self.markdown(short_run(self.temporary.name), protocol_double(labels=("1", "2")), start_check=None)
-        section = self.section(text, "## 3. 관찰과 결과")
+        section = self.section(text, "## 관찰·특이사항")
         self.assertIn("| 1단계 · Gel band destaining | — | 조각 크기 1 mm | 09:33 |", section)
-        self.assertIn("> 결과: 말하지 않음.", section)
+        self.assertEqual(self.section(text, "## 결과").strip(), "")
         record = headspace_run(self.temporary.name)
         text = self.markdown(record, headspace_protocol(), start_check=None)
         self.assertIn("| 1단계 · Materials to autoclave before experiment | — | LB 배지가 맑고 덩어리 없이 다 녹았어 | 09:42 |", text)
@@ -264,7 +264,7 @@ class ObservationTests(_Case):
 class DifferenceTests(_Case):
     def test_deviations_timers_ended_early_and_anomalies_with_their_words(self) -> None:
         text = self.markdown(deviation_run(self.temporary.name))
-        section = self.section(text, "## 4. 원문과 다르게 한 점·문제")
+        section = self.section(text, "### 원문과 다르게 한 점·문제")
         self.assertEqual([line for line in section.splitlines() if line.startswith("- ")], [
             "- 2단계 온도: 원문 37°C → 40°C — “40도에서 씻었어”",
             "- 3단계 타이머: 원문 15분 중 10분에 끝냄",
@@ -274,7 +274,7 @@ class DifferenceTests(_Case):
     def test_a_later_start_a_stop_and_an_unconfirmed_measurement(self) -> None:
         record = unconfirmed_run(self.temporary.name)
         text = self.markdown(record, start_check=None)
-        section = self.section(text, "## 4. 원문과 다르게 한 점·문제")
+        section = self.section(text, "### 원문과 다르게 한 점·문제")
         self.assertEqual([line for line in section.splitlines() if line.startswith("- ")], [
             "- 2단계 양: 원문 500 µL → 450 µL — “세척액 450 µL” [미확인]",
             "- 4단계 양: 원문 200 µL → 180 µL — “acetonitrile 180 µL 넣음” [미확인]",
@@ -284,11 +284,11 @@ class DifferenceTests(_Case):
         later.event("00:48", "steps_skipped", "2", payload={"step_record": {
             "kind": "start_at_step", "start_step": "2", "skipped_step_labels": ["1"]}})
         text = self.markdown(later, protocol_double(labels=("1", "2")), start_check=None)
-        self.assertIn("- 2단계부터 시작 — 1단계 건너뜀", self.section(text, "## 4. 원문과 다르게 한 점·문제"))
+        self.assertIn("- 2단계부터 시작 — 1단계 건너뜀", self.section(text, "### 원문과 다르게 한 점·문제"))
 
     def test_the_coating_run_lists_the_anomaly_and_the_stop(self) -> None:
         text = self.markdown(coating_run(self.temporary.name), coating_protocol(), start_check=None)
-        section = self.section(text, "## 4. 원문과 다르게 한 점·문제")
+        section = self.section(text, "### 원문과 다르게 한 점·문제")
         self.assertEqual([line for line in section.splitlines() if line.startswith("- ")], [
             "- 3단계 속도: 원문 2 mm/s → 4 mm/s — “S2는 4 mm/s로 꺼냈어” [미확인]",
             "- 이상 · 5단계 (11:30): “로 온도가 380도에서 안 올라가” [미확인]",
@@ -299,8 +299,8 @@ class DifferenceTests(_Case):
 class PreviousRunTests(_Case):
     def test_the_first_run_of_a_protocol_says_so(self) -> None:
         text = self.markdown(deviation_run(self.temporary.name))
-        self.assertEqual(self.section(text, "## 5. 지난번과 다른 점").strip(),
-                         "> 처음 실험 — 같은 프로토콜의 앞선 기록이 없다.")
+        self.assertIn("> 처음 실험 — 같은 프로토콜의 앞선 기록이 없다.",
+                      self.section(text, "### 같은 프로토콜의 앞선 내 기록"))
 
     def test_the_run_before_is_found_in_the_store_and_compared(self) -> None:
         record = cell_run(self.temporary.name)
@@ -309,7 +309,7 @@ class PreviousRunTests(_Case):
         self.assertEqual(previous["report_id"], earlier.report_id)
         self.assertIsNone(record.store.previous_finished_report(earlier.doc()))
         text = self.markdown(record, cell_protocol(), start_check=None)
-        section = self.section(text, "## 5. 지난번과 다른 점")
+        section = self.section(text, "### 같은 프로토콜의 앞선 내 기록")
         self.assertIn("> 지난번: 2026년 10월 19일 (월) 09:30 · 이실험 · 끝까지 완료 (6 / 6단계)", section)
         self.assertEqual([line for line in section.splitlines() if line.startswith("- ")], [
             "- 목적: 지난번 “A549 세포에 약물 X 5 µM 처리 뒤 생존율, 시료 2개에 대조군 1개” → 이번 “A549 세포에 약물 X를 0.5랑 5 µM로 처리해서 생존율을 보는 실험”",
@@ -337,7 +337,7 @@ class PreviousRunTests(_Case):
         later.event("00:47", "workflow_completed", "2")
         later.finalize("00:47", "completed")
         text = self.markdown(later, protocol_double(labels=("1", "2")), start_check=None)
-        section = self.section(text, "## 5. 지난번과 다른 점")
+        section = self.section(text, "### 같은 프로토콜의 앞선 내 기록")
         self.assertIn("> 지난번: 2026년 10월 19일 (월) 09:30 · 이실험 · 끝까지 완료 (2 / 2단계)", section)
         self.assertIn("> 지난번과 조건·관찰이 같다.", section)
 
@@ -345,13 +345,13 @@ class PreviousRunTests(_Case):
 class NextAndConfirmationTests(_Case):
     def test_what_to_change_next_and_the_sources_next_step(self) -> None:
         text = self.markdown(cell_run(self.temporary.name), cell_protocol(), start_check=None)
-        self.assertEqual(self.section(text, "## 6. 다음에 바꿀 점·다음 할 일").strip(),
-                         "- 5 µM 농도를 2.5로 낮춰 볼게 (실험자가 말함)")
+        self.assertIn("| 다음 할 일 | 5 µM 농도를 2.5로 낮춰 볼게 |",
+                      self.section(text, "## 해석·다음 할 일"))
         text = self.markdown(coating_run(self.temporary.name), coating_protocol(), start_check=None)
-        self.assertEqual(self.section(text, "## 6. 다음에 바꿀 점·다음 할 일").strip(),
-                         "- 5단계부터 이어서 한다 (원문의 다음 단계)")
+        self.assertIn("| 다음 할 일 |   |", self.section(text, "## 해석·다음 할 일"))
+        self.assertNotIn("5단계부터 이어서 한다 (원문의 다음 단계)", text)
         text = self.markdown(deviation_run(self.temporary.name))
-        self.assertEqual(self.section(text, "## 6. 다음에 바꿀 점·다음 할 일").strip(), "> 말하지 않음.")
+        self.assertIn("| 다음 할 일 |   |", self.section(text, "## 해석·다음 할 일"))
 
     def test_the_confirmation_box_has_a_row_for_the_experimenter_and_the_pi(self) -> None:
         record = deviation_run(self.temporary.name)
@@ -360,7 +360,7 @@ class NextAndConfirmationTests(_Case):
             "| 실험자 |   |   |   |",
             "| PI |   |   |   |",
         ])
-        self.assertIn("> PI 확인: 아직 없음.", self.section(text, "## 7. 확인"))
+        self.assertIn("> PI 확인: 아직 없음.", self.section(text, "### 확인 기록"))
         # Decision ④'s event, read when it is there: name, time, one line.
         record.event("02:00", "pi_confirmed", None, payload={"name": "김교수", "comment": "온도 편차 확인함, 다음엔 항온조 먼저"})
         text = self.markdown(record)
@@ -374,7 +374,7 @@ class NextAndConfirmationTests(_Case):
 class AppendixTests(_Case):
     def test_the_step_times_the_words_as_said_and_one_line_of_system_events(self) -> None:
         text = self.markdown(deviation_run(self.temporary.name))
-        appendix = self.section(text, "## 8. 부록")
+        appendix = self.section(text, "## 부록")
         self.assertEqual(self.table(appendix, "| 단계 | 시작 | 끝 | 소요 | 타이머 (원문 / 실제) |"), [
             "| 1 | 09:30 | 09:36 | 6분 | — |",
             "| 2 | 09:36 | 09:47 | 11분 | — |",
@@ -394,12 +394,12 @@ class AppendixTests(_Case):
                       "멈춤 0회", appendix)
         self.assertIn("> 출처: [1] Kim 2025. Test digestion protocol. protocols.io — 실험에 쓴 프로토콜 원문", appendix)
         self.assertRegex(text.rstrip().splitlines()[-1],
-                         r"^> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다\. AI 가 쓴 문장은 없다\. "
+                         r"^> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다\. 모델이 쓴 문장은 포함하지 않았다\. "
                          r"작성 \d{4}년 \d{1,2}월 \d{1,2}일 \d{2}:\d{2}\.$")
 
     def test_the_sayings_of_the_run_and_the_notices_are_in_the_appendix(self) -> None:
         text = self.markdown(coating_run(self.temporary.name), coating_protocol(), start_check=())
-        appendix = self.section(text, "## 8. 부록")
+        appendix = self.section(text, "## 부록")
         rows = self.table(appendix, "| 시각 | 단계 | 종류 | 말한 그대로 |")
         self.assertEqual(rows[0], "| 09:30 | 1 | 목적·시료 | 졸겔 코팅 두께가 인출 속도에 따라 어떻게 달라지는지 보려고요."
                                   " 시편 S1은 2 mm/s, S2는 4 mm/s |")
@@ -418,8 +418,10 @@ class WordTests(_Case):
             record.report_id, fixture=cell_protocol(), start_check=None)))
         headers = [tuple(cell.text for cell in table.rows[0].cells) for table in document.tables]
         self.assertEqual(headers, [
-            ("항목", "내용"), er.SAMPLE_HEADER, er.CONDITION_HEADER, er.OBSERVATION_HEADER,
-            er.CONFIRM_HEADER, er.APPENDIX_STEP_HEADER, er.APPENDIX_RECORD_HEADER,
+            ("항목", "내용"), er.SAMPLE_HEADER, er.METHOD_HEADER, er.CONDITION_HEADER,
+            er.VALUE_BAR_HEADER, er.TIMELINE_HEADER, er.OBSERVATION_HEADER,
+            ("항목", "내용"), er.DOMAIN_HEADER, er.CONFIRM_HEADER,
+            er.APPENDIX_STEP_HEADER, er.APPENDIX_RECORD_HEADER,
         ])
         for table in document.tables:
             header = tuple(cell.text for cell in table.rows[0].cells)
@@ -428,19 +430,21 @@ class WordTests(_Case):
             for width, share in zip(grid, shares):
                 self.assertAlmostEqual(width / sum(grid), share, places=2, msg=header)
             self.assertEqual(table._tbl.tblPr.find(qn("w:tblLayout")).get(qn("w:type")), "fixed")
-        sign = document.tables[4]
+        sign = document.tables[9]
         self.assertGreater(sign.rows[1].height, 0)
         # The appendix is in smaller type than the body.
-        sizes = {run.font.size.pt for table in document.tables[5:] for row in table.rows[1:]
+        sizes = {run.font.size.pt for table in document.tables[10:] for row in table.rows[1:]
                  for cell in row.cells for paragraph in cell.paragraphs for run in paragraph.runs if run.font.size}
         self.assertEqual(sizes, {8.0})
         text = "\n".join(paragraph.text for paragraph in document.paragraphs)
         self.assertIn("A549 세포에 약물 X를 0.5랑 5 µM로 처리해서 생존율을 보는 실험", text)
-        self.assertIn("7. 확인", text)
+        self.assertIn("확인 기록", text)
 
     def test_every_notebook_table_has_widths_that_sum_to_one(self) -> None:
         for header in (er.SAMPLE_HEADER, er.CONDITION_HEADER, er.OBSERVATION_HEADER, er.CONFIRM_HEADER,
-                       er.APPENDIX_STEP_HEADER, er.APPENDIX_RECORD_HEADER, er.REVIEW_CHANGE_HEADER):
+                       er.APPENDIX_STEP_HEADER, er.APPENDIX_RECORD_HEADER, er.REVIEW_CHANGE_HEADER,
+                       er.METHOD_HEADER, er.TIMELINE_HEADER, er.VALUE_BAR_HEADER,
+                       er.DOMAIN_HEADER, er.SAMPLE_RECORD_HEADER):
             self.assertEqual(len(er.TABLE_WIDTHS[header]), len(header), header)
             self.assertAlmostEqual(sum(er.TABLE_WIDTHS[header]), 1.0, places=6, msg=header)
 
