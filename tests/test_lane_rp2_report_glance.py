@@ -64,10 +64,11 @@ class ReportOrderTests(_GlanceCase):
         text = self.markdown(deviation_run(self.temporary.name))
         headings = [line for line in text.splitlines() if line.startswith("## ")]
         self.assertEqual(headings, list(er.NOTEBOOK_HEADINGS))
-        # The header is the report's first table, right under the title.
+        # The header is the report's first table in the first common section.
         lines = text.splitlines()
         self.assertEqual(lines[0], "# Test digestion protocol")
-        self.assertEqual(lines[4], "| 항목 | 내용 |")
+        self.assertEqual(lines[4], "## 실험 정보")
+        self.assertEqual(lines[6], "| 항목 | 내용 |")
 
     def test_the_header_names_protocol_review_version_and_experimenter(self) -> None:
         text = self.markdown(deviation_run(self.temporary.name))
@@ -169,7 +170,10 @@ class IssueTests(_GlanceCase):
     """The deviations and anomalies, with the source's side, in section 4."""
 
     def issues(self, text: str) -> list[str]:
-        block = text.split("## 4. 원문과 다르게 한 점·문제")[1].split("## 5.")[0]
+        marker = "### 원문과 다르게 한 점·문제"
+        if marker not in text:
+            return []
+        block = text.split(marker, 1)[1].split("## 관찰·특이사항", 1)[0]
         return [line for line in block.splitlines() if line.startswith("- ")]
 
     def test_deviations_and_anomalies_with_the_source_side(self) -> None:
@@ -189,9 +193,10 @@ class IssueTests(_GlanceCase):
         self.assertEqual(self.issues(text)[2], "- 이상 · 4단계 (10:00): “튜브 하나를 쏟았어” [미확인]")
         self.assertIn("| 10:00 | 4 | 이상 | 튜브를 쏟았어 → 10:20 정정: 튜브 하나를 쏟았어 |", text)
 
-    def test_a_run_without_any_says_so(self) -> None:
+    def test_a_run_without_any_adds_no_issue_claim(self) -> None:
         text = self.markdown(short_run(self.temporary.name), protocol_double(labels=("1", "2")))
-        self.assertIn("## 4. 원문과 다르게 한 점·문제\n\n> 원문대로 했고, 기록된 문제가 없다.", text)
+        self.assertEqual(self.issues(text), [])
+        self.assertNotIn("원문대로 했고, 기록된 문제가 없다.", text)
 
 
 class StartCheckTests(_GlanceCase):
@@ -228,7 +233,7 @@ class StartCheckTests(_GlanceCase):
 class SignatureTests(_GlanceCase):
     def test_a_place_for_the_experimenter_and_the_pi(self) -> None:
         text = self.markdown(deviation_run(self.temporary.name))
-        block = text.split("## 7. 확인")[1].split("## 8. 부록")[0]
+        block = text.split("### 확인 기록", 1)[1].split("### 단계 시각표", 1)[0]
         self.assertIn("| 확인 | 이름 | 날짜·시각 | 서명·한 줄 의견 |", block)
         self.assertIn("| 실험자 |", block)
         self.assertIn("| PI |", block)

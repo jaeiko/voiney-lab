@@ -20,8 +20,10 @@ import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields as _dataclass_fields, is_dataclass, replace as _replace_dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from voiney_lab.experiment_protocol_analysis import program_address_shape
@@ -187,8 +189,8 @@ class ExperimentReportStore:
               event_count INTEGER NOT NULL,
               prepared_at TEXT NOT NULL
             );
-            -- NOTE1: organisation notebook headings/order are append-only
-            -- versions.  They change projections only, never experiment state.
+            -- Organisation notebook headings/order are append-only versions.
+            -- They change projections only, never experiment state.
             CREATE TABLE IF NOT EXISTS experiment_notebook_templates (
               id INTEGER PRIMARY KEY,
               organization_id TEXT NOT NULL,
@@ -264,6 +266,67 @@ class ExperimentReportStore:
         if (row is None or row["organization_id"] != organization_id
                 or (not every_owner and row["owner_principal_id"] != owner_principal_id)):
             raise KeyError("experiment report not found")
+
+    @staticmethod
+    def notebook_sharing(report: Mapping[str, Any]) -> dict[str, Any]:
+        """Current opt-in state, derived from the latest append-only event."""
+
+        shared = False
+        changed_at = None
+        changes = 0
+        if report.get("owner_principal_id") is None:
+            return {"shared": False, "changed_at": None, "changes": 0}
+        for event in report.get("events") or ():
+            if str(event.get("event_type") or "") != "notebook_share_changed":
+                continue
+            payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+            if not isinstance(payload.get("shared"), bool):
+                continue
+            shared = bool(payload["shared"])
+            changed_at = event.get("created_at")
+            changes += 1
+        return {"shared": shared, "changed_at": changed_at, "changes": changes}
+
+    def notebook_comparison_reports(
+        self, report_id: str, *, requester_principal_id: str, limit: int = 20,
+    ) -> tuple[dict[str, Any], ...]:
+        """Own and explicitly shared records for one lab/protocol.
+
+        This method does not grant report access.  Its caller must first prove
+        ownership of the anchor and must expose only a bounded read projection.
+        """
+
+        anchor = self.get_report(report_id)
+        requester_principal_id = _clean_identifier(requester_principal_id, "requester_principal_id")
+        if (anchor.get("owner_principal_id") != requester_principal_id
+                or anchor.get("organization_id") is None):
+            raise KeyError("experiment report not found")
+        bounded = max(1, min(int(limit), 20))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT candidate.report_id FROM experiment_reports AS candidate
+                 WHERE candidate.organization_id=? AND candidate.protocol_id=?
+                   AND candidate.owner_principal_id IS NOT NULL AND candidate.ended_at IS NOT NULL
+                   AND (candidate.owner_principal_id=? OR COALESCE((
+                       SELECT json_extract(event.payload,'$.shared')
+                         FROM experiment_report_events AS event
+                        WHERE event.report_id=candidate.report_id
+                          AND event.event_type='notebook_share_changed'
+                        ORDER BY event.id DESC LIMIT 1
+                   ),0)=1)
+                 ORDER BY candidate.started_at,candidate.report_id
+                 LIMIT ?
+                """,
+                (anchor["organization_id"], anchor["protocol_id"], requester_principal_id, bounded),
+            ).fetchall()
+        visible = []
+        for row in rows:
+            report = self.get_report(str(row["report_id"]))
+            if (report.get("owner_principal_id") == requester_principal_id
+                    or self.notebook_sharing(report)["shared"]):
+                visible.append(report)
+        return tuple(visible)
 
     def notebook_template(self, organization_id: str | None) -> dict[str, Any]:
         """Latest lab notebook presentation version, or the product default."""
@@ -990,6 +1053,7 @@ class ExperimentReportStore:
     def export_docx(
         self, report_id: str, narrative: ReportNarrative | None = None,
         *, fixture: Any = None, start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
+        image_resolver: Callable[["NotebookImage"], tuple[bytes, str] | None] | None = None,
     ) -> bytes:
         """The researcher's notebook as .docx (same structure as the Markdown).
 
@@ -997,19 +1061,42 @@ class ExperimentReportStore:
         derived, human-readable projection of it.
         """
 
-        return render_docx(self._narrative(report_id, narrative, fixture, start_check, previous))
+        prepared = self._narrative(report_id, narrative, fixture, start_check, previous)
+        source_fixture = fixture
+        if source_fixture is None:
+            source_fixture, _ = report_protocol_fixture(self.get_report(report_id))
+
+        def resolve(image: NotebookImage) -> tuple[bytes, str] | None:
+            if image_resolver is not None:
+                found = image_resolver(image)
+                if found is not None:
+                    return found
+            if image.kind != "source_figure" or source_fixture is None:
+                return None
+            from voiney_lab import source_figures
+            found = source_figures.figure_content(
+                getattr(source_fixture, "source_pdf_path", None),
+                getattr(source_fixture, "source_pdf_sha256", None), image.asset_id,
+            )
+            return None if found is None else (found[1], found[0].mime_type)
+
+        return render_docx(prepared, image_resolver=resolve)
 
     def export_pdf(
         self, report_id: str, narrative: ReportNarrative | None = None,
         *, fixture: Any = None, start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
         converter: str | None = None, run: Any = None,
+        image_resolver: Callable[["NotebookImage"], tuple[bytes, str] | None] | None = None,
     ) -> bytes:
         """The researcher's notebook as PDF: the .docx above, printed by the
         server's LibreOffice (lane RP2, decision 2). ``ReportPdfError`` when
         it cannot be printed."""
 
         return report_docx_to_pdf(
-            self.export_docx(report_id, narrative, fixture=fixture, start_check=start_check, previous=previous),
+            self.export_docx(
+                report_id, narrative, fixture=fixture, start_check=start_check, previous=previous,
+                image_resolver=image_resolver,
+            ),
             converter=converter, run=run)
 
     def export_meeting_docx(
@@ -2752,9 +2839,11 @@ def build_report_facts(
     facts = _replace_dataclass(facts, glance=build_report_glance(
         facts, events, source_steps=source_steps, zone=zone, reviewer=reviewer,
         start_check=start_check))
-    return _replace_dataclass(facts, notebook=build_lab_notebook(
+    facts = _replace_dataclass(facts, notebook=build_lab_notebook(
         facts, events, source_steps=source_steps, zone=zone, previous=previous,
-        protocol_problem=protocol_problem if fixture is None else ""))
+        protocol_problem=protocol_problem if fixture is None else "",
+        session_id=str(report_data.get("session_id") or "")))
+    return _with_notebook_source_images(facts, fixture, report_data)
 
 
 # --- The report's first pages (lane RP2, decision 1, 2026-10-19) -------------
@@ -3426,6 +3515,20 @@ class NotebookSection:
     name: str
 
 
+@dataclass(frozen=True)
+class NotebookImage:
+    """A recorded photo or an exact crop from the source PDF."""
+
+    kind: str  # photo | source_figure
+    step_label: str
+    caption: str
+    url: str
+    media_type: str
+    asset_id: str
+    source_page: int | None = None
+    interpretation_status: str = ""
+
+
 DEFAULT_NOTEBOOK_TEMPLATE = tuple(
     NotebookSection(section_id, name)
     for section_id, name in zip(NOTEBOOK_SECTION_IDS, NOTEBOOK_SECTIONS)
@@ -3475,6 +3578,7 @@ class LabNotebook:
     interpretation_words: str = ""
     inventory: tuple[NotebookInventoryItem, ...] = ()
     section_template: tuple[NotebookSection, ...] = DEFAULT_NOTEBOOK_TEMPLATE
+    images: tuple[NotebookImage, ...] = ()
 
 
 # Samples named in words (decision ② a-b): "3번 샘플", "샘플 2번", "S2", "대조군",
@@ -3849,6 +3953,76 @@ _DOMAIN_FIELD_PATTERNS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
+_YIELD_NUMBER_UNIT = r"(\d+(?:\.\d+)?)\s*(mmol|[µμu]mol|mol|mg|[µμu]g|ng|g)\b"
+_ACTUAL_YIELD = re.compile(
+    r"(?:실제\s*수득량|actual\s+yield)\s*[:：=]?\s*" + _YIELD_NUMBER_UNIT,
+    re.I,
+)
+_THEORETICAL_YIELD = re.compile(
+    r"(?:이론(?:적)?\s*수득량|theoretical\s+yield)\s*[:：=]?\s*" + _YIELD_NUMBER_UNIT,
+    re.I,
+)
+_YIELD_UNIT = {
+    "ng": ("mass", Decimal("0.000000001")),
+    "µg": ("mass", Decimal("0.000001")),
+    "mg": ("mass", Decimal("0.001")),
+    "g": ("mass", Decimal("1")),
+    "µmol": ("amount", Decimal("0.000001")),
+    "mmol": ("amount", Decimal("0.001")),
+    "mol": ("amount", Decimal("1")),
+}
+
+
+def _yield_unit(unit: str) -> str:
+    return unit.replace("μ", "µ").replace("u", "µ").casefold().replace("µ", "µ")
+
+
+def _decimal_words(value: Decimal) -> str:
+    shown = format(value, "f")
+    return shown.rstrip("0").rstrip(".") if "." in shown else shown
+
+
+def _calculated_yield(
+    record_evidence: Sequence[tuple[str, str, str]],
+) -> NotebookDomainField | None:
+    """Calculate yield only when a person's records contain both raw values."""
+
+    actual: tuple[Decimal, str, str, str] | None = None
+    theoretical: tuple[Decimal, str, str, str] | None = None
+    for origin, key, text in record_evidence:
+        if origin != "record":
+            continue
+        actual_match = _ACTUAL_YIELD.search(text)
+        theoretical_match = _THEORETICAL_YIELD.search(text)
+        try:
+            if actual_match:
+                actual = (Decimal(actual_match.group(1)), _yield_unit(actual_match.group(2)),
+                          actual_match.group(1), key)
+            if theoretical_match:
+                theoretical = (Decimal(theoretical_match.group(1)), _yield_unit(theoretical_match.group(2)),
+                               theoretical_match.group(1), key)
+        except InvalidOperation:
+            continue
+    if actual is None or theoretical is None or theoretical[0] <= 0:
+        return None
+    actual_unit = _YIELD_UNIT.get(actual[1])
+    theoretical_unit = _YIELD_UNIT.get(theoretical[1])
+    if actual_unit is None or theoretical_unit is None or actual_unit[0] != theoretical_unit[0]:
+        return None
+    percent = (
+        actual[0] * actual_unit[1] / (theoretical[0] * theoretical_unit[1]) * Decimal("100")
+    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    percent_words = _decimal_words(percent)
+    actual_words = f"{actual[2]} {actual[1]}"
+    theoretical_words = f"{theoretical[2]} {theoretical[1]}"
+    return NotebookDomainField(
+        label="수득량·수율",
+        value=f"실제 {actual_words} · 이론 {theoretical_words} · 수율 {percent_words}%",
+        origin="calculated",
+        source_keys=tuple(dict.fromkeys((actual[3], theoretical[3]))),
+        formula=f"{actual_words} ÷ {theoretical_words} × 100 = {percent_words}%",
+    )
+
 
 def _select_notebook_domain(
     facts: ReportFacts,
@@ -3902,8 +4076,12 @@ def _notebook_domain(
         for event in events if str(event.get("user_wording") or "").strip()
     ]
     evidence = record_evidence + source_evidence
+    calculated_yield = _calculated_yield(record_evidence) if code == "chemistry" else None
     fields: list[NotebookDomainField] = []
     for label, pattern in _DOMAIN_FIELD_PATTERNS.get(code, ()):
+        if label == "수득량·수율" and calculated_yield is not None:
+            fields.append(calculated_yield)
+            continue
         matches = [(origin, key, text) for origin, key, text in evidence
                    if text and re.search(pattern, text, re.I)]
         values = tuple(dict.fromkeys(text for _, _, text in matches))
@@ -3919,7 +4097,7 @@ def _notebook_domain(
 
 
 _CATALOG_VALUE = re.compile(
-    r"(?:catalog(?:ue)?(?:\s*(?:number|no\.?|#))?|cat\.?\s*(?:no\.?)?|카탈로그\s*(?:번호)?)"
+    r"(?:\bcatalog(?:ue)?(?:\s*(?:number|no\.?|#))?|\bcat\.?\s*(?:no\.?)?|카탈로그\s*(?:번호)?)"
     r"\s*[:：#]?\s*([A-Za-z0-9._/-]+)", re.I,
 )
 _LOT_VALUE = re.compile(
@@ -3947,10 +4125,12 @@ def _notebook_inventory(
         catalog = (_CATALOG_VALUE.search(listed).group(1) if _CATALOG_VALUE.search(listed) else "")
         vendor = ""
         before_catalog = re.split(r"\b(?:Catalog|Cat\.?)\s*#?", listed, maxsplit=1, flags=re.I)[0].strip()
-        if before_catalog.casefold().startswith(short.casefold()):
-            vendor = before_catalog[len(short):].strip(" ,;()")
+        if catalog and before_catalog.casefold().startswith(short.casefold()):
+            vendor = before_catalog[len(short):].strip(" ,;")
         rows[listed] = {
-            "kind": item.kind, "name": listed, "vendor": vendor,
+            # Keep the already-normalised source item name in the name
+            # column; vendor/catalog source text belongs in its own columns.
+            "kind": item.kind, "name": short, "vendor": vendor,
             "catalog_number": catalog, "lot_number": "",
             "stage": "source" if vendor or catalog else "blank", "source_keys": [],
         }
@@ -4006,6 +4186,78 @@ def _notebook_inventory(
         catalog_number=str(row["catalog_number"]), lot_number=str(row["lot_number"]),
         stage=str(row["stage"]), source_keys=tuple(row["source_keys"]),
     ) for row in rows.values())
+
+
+def _notebook_photos(
+    events: Sequence[Mapping[str, Any]], session_id: str,
+) -> tuple[NotebookImage, ...]:
+    """Recorded image metadata; the image bytes remain in workspace evidence."""
+
+    images = []
+    for event in events:
+        if str(event.get("event_type") or "") != "photo_attached":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        evidence_id = str(payload.get("evidence_id") or "")
+        media_type = str(payload.get("media_type") or "image/*")
+        url = ""
+        if session_id and evidence_id:
+            url = (
+                f"/api/workspace/experiments/{quote(session_id, safe='')}/evidence/"
+                f"{quote(evidence_id, safe='')}"
+            )
+        images.append(NotebookImage(
+            kind="photo", step_label=str(event.get("step_label") or ""),
+            caption=" ".join(str(event.get("user_wording") or "사진 첨부").split()),
+            url=url, media_type=media_type, asset_id=evidence_id,
+            interpretation_status=str(payload.get("interpretation_status") or "not_interpreted"),
+        ))
+    return tuple(images)
+
+
+def _with_notebook_source_images(
+    facts: ReportFacts, fixture: Any, report_data: Mapping[str, Any], *, maximum: int = 24,
+) -> ReportFacts:
+    """Attach only deterministic crops of completed steps' source pages."""
+
+    if facts.notebook is None or fixture is None:
+        return facts
+    try:
+        from voiney_lab import source_figures
+
+        steps = tuple(getattr(fixture, "steps", ()) or ())
+        protocol_id = str(report_data.get("protocol_id") or getattr(fixture, "protocol_id", ""))
+        revision_id = str(report_data.get("protocol_revision") or getattr(fixture, "revision_id", ""))
+        completed = set(facts.completed_labels)
+        found: list[NotebookImage] = []
+        for index, step in enumerate(steps):
+            label = str(getattr(step, "source_label", "") or (
+                facts.steps[index].label if index < len(facts.steps) else index + 1
+            ))
+            if completed and label not in completed:
+                continue
+            for figure in source_figures.figures_for_step(fixture, index):
+                found.append(NotebookImage(
+                    kind="source_figure", step_label=label,
+                    caption=figure.caption or f"원문 그림 · PDF p.{figure.source_page}",
+                    url=(
+                        f"/api/protocols/{quote(protocol_id, safe='')}/revisions/"
+                        f"{quote(revision_id, safe='')}/figures/{quote(figure.figure_id, safe='')}"
+                    ),
+                    media_type=figure.mime_type, asset_id=figure.figure_id,
+                    source_page=figure.source_page,
+                ))
+                if len(found) >= maximum:
+                    break
+            if len(found) >= maximum:
+                break
+    except Exception as exc:  # noqa: BLE001 - a visual never fails the notebook
+        log.warning("notebook source figures unavailable error=%s", type(exc).__name__)
+        return facts
+    book = _replace_dataclass(
+        facts.notebook, images=facts.notebook.images + tuple(found),
+    )
+    return _replace_dataclass(facts, notebook=book)
 
 
 _PLATE_POSITION = re.compile(
@@ -4117,6 +4369,7 @@ def build_lab_notebook(
     zone: ZoneInfo,
     previous: ReportFacts | None = None,
     protocol_problem: str = "",
+    session_id: str = "",
 ) -> LabNotebook:
     """The notebook from the record, the source and the run before (decision ①)."""
 
@@ -4644,6 +4897,7 @@ def build_lab_notebook(
     )
     domain = _notebook_domain(facts, events, source_steps)
     inventory = _notebook_inventory(facts, events)
+    images = _notebook_photos(events, session_id)
     return LabNotebook(
         title=title, subtitle=subtitle, header_rows=tuple(header), purpose=purpose, purpose_words=purpose_words,
         samples=tuple(samples), values=tuple(values), condition_rows=tuple(rows), condition_note=condition_note,
@@ -4655,7 +4909,7 @@ def build_lab_notebook(
         run_words=run_words, condition_by_label=condition_by_label,
         method_rows=method_rows, timeline=timeline, value_bars=value_bars,
         plate_positions=plate_positions, sample_rows=sample_rows, domain=domain,
-        interpretation_words="", inventory=inventory,
+        interpretation_words="", inventory=inventory, images=images,
     )
 
 
@@ -4663,6 +4917,7 @@ def audit_notebook_number_provenance(
     notebook: LabNotebook,
     *,
     source_steps: Sequence[Mapping[str, Any]],
+    source_inventory: Sequence[str] = (),
     events: Sequence[Mapping[str, Any]],
 ) -> tuple[str, ...]:
     """Return displayed numbers that cannot be reproduced from source or ledger.
@@ -4680,7 +4935,10 @@ def audit_notebook_number_provenance(
             return value
         return str(int(number)) if number.is_integer() else format(number, ".12g")
 
-    source_blob = json.dumps(list(source_steps), ensure_ascii=False, default=str)
+    source_blob = json.dumps(
+        {"steps": list(source_steps), "inventory": list(source_inventory)},
+        ensure_ascii=False, default=str,
+    )
     event_blob = json.dumps(list(events), ensure_ascii=False, default=str)
     admitted = {normalized(value) for value in _NUMBER.findall(source_blob + "\n" + event_blob)}
     # Source identity (citation/DOI and protocol title) is loaded from the
@@ -4688,12 +4946,19 @@ def audit_notebook_number_provenance(
     admitted.update(normalized(value) for value in _NUMBER.findall(
         "\n".join((notebook.title, notebook.subtitle, notebook.source_words))
     ))
-    # Inventory names are copied from the immutable protocol material and
-    # equipment lists.  They are source evidence even when the abbreviated
-    # ``source_steps`` test input does not repeat that separate list.
-    admitted.update(normalized(value) for value in _NUMBER.findall(
-        "\n".join(item.name for item in notebook.inventory)
-    ))
+    # A displayed yield is admitted only when the same deterministic
+    # calculation can be rebuilt from person-recorded raw values.
+    rebuilt_yield = _calculated_yield([
+        ("record", str(event.get("event_key") or ""),
+         " ".join(str(event.get("user_wording") or "").split()))
+        for event in events if str(event.get("user_wording") or "").strip()
+    ])
+    shown_yield = next((field for field in notebook.domain.fields
+                        if field.label == "수득량·수율"), None)
+    if rebuilt_yield is not None and shown_yield == rebuilt_yield:
+        admitted.update(normalized(value) for value in _NUMBER.findall(
+            rebuilt_yield.value + "\n" + rebuilt_yield.formula
+        ))
     # Counts shown by progress/system summaries are projections of the rows,
     # not claims supplied by a model.
     admitted.update(str(value) for value in range(0, len(events) + len(source_steps) + 2))
@@ -5540,6 +5805,7 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
         blocks += [("h2", "원문 → 실제 값 비교"), _table(VALUE_BAR_HEADER, tuple(
             (item.label, item.source, item.actual) for item in book.value_bars
         ))]
+        blocks.extend(("bar", (item.label, *_notebook_bar_lines(item))) for item in book.value_bars)
     if book.timeline:
         timeline_words = {
             "start": "실험 시작", "step_end": "단계 끝", "timer_start": "타이머 시작",
@@ -5552,6 +5818,11 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
             (item.at, item.step_label or "—", timeline_words.get(item.kind, item.kind), item.text)
             for item in book.timeline
         ))]
+    if book.images:
+        blocks.append(("h2", "단계 사진·원문 그림"))
+        blocks.extend(("image", image) for image in sorted(
+            book.images, key=lambda item: (_label_order(item.step_label), item.kind, item.asset_id)
+        ))
     if book.differences:
         blocks += [("h2", "원문과 다르게 한 점·문제"), ("list", book.differences)]
 
@@ -5575,7 +5846,8 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     blocks.append(("h2", book.domain.label))
     if book.domain.fields:
         blocks.append(_table(DOMAIN_HEADER, tuple(
-            (item.label, item.value, {"source": "원문", "record": "기록", "calculated": "계산", "blank": ""}.get(item.origin, ""))
+            (item.label, item.value + (f"\n계산식: {item.formula}" if item.formula else ""),
+             {"source": "원문", "record": "기록", "calculated": "계산", "blank": ""}.get(item.origin, ""))
             for item in book.domain.fields
         )))
     if book.plate_positions:
@@ -5651,6 +5923,33 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     return ordered
 
 
+def _label_order(label: str) -> tuple[int, str]:
+    match = re.match(r"\d+", str(label))
+    return (int(match.group()) if match else 10**9, str(label))
+
+
+def _notebook_bar_lines(row: NotebookValueBar) -> tuple[str, str]:
+    """Two deterministic text bars, scaled only from the displayed values."""
+
+    source = _condition_measures(row.source)
+    actual = _condition_measures(row.actual)
+    if not source or not actual or source[0].family != actual[0].family:
+        return (f"원문 {row.source}", f"실제 {row.actual}")
+    left, right = source[0], actual[0]
+    try:
+        left_value = float(left.number) * _CONDITION_BASE.get(left.unit, 1.0)
+        right_value = float(right.number) * _CONDITION_BASE.get(right.unit, 1.0)
+    except ValueError:
+        return (f"원문 {row.source}", f"실제 {row.actual}")
+    maximum = max(left_value, right_value)
+    if maximum <= 0:
+        return (f"원문 {row.source}", f"실제 {row.actual}")
+    width = 18
+    left_bar = "█" * max(1, round(width * left_value / maximum))
+    right_bar = "█" * max(1, round(width * right_value / maximum))
+    return (f"원문 {row.source} {left_bar}", f"실제 {row.actual} {right_bar}")
+
+
 def authorship_line(narrative: ReportNarrative) -> str:
     """Who wrote the notebook's sentences, and when (decision ①: the server)."""
 
@@ -5658,11 +5957,11 @@ def authorship_line(narrative: ReportNarrative) -> str:
     written = _local(narrative.written_at, facts.zone if facts is not None else report_timezone())
     when = f"{written.year}년 {written.month}월 {written.day}일 {written:%H:%M}" if written else "시각 기록 없음"
     base = "이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다."
-    # NOTE1: observations stay verbatim, results stay person-authored, and
+    # Observations stay verbatim and results stay person-authored, while
     # interpretation stays blank.  A separately prepared model suggestion is
     # therefore never part of the notebook body, even when its grounding
     # check passed.
-    line = f"{base} 모델이 쓴 문장은 포함하지 않았다."
+    line = f"{base} AI 가 쓴 문장은 없다."
     return f"{line} 작성 {when}."
 
 
@@ -5742,6 +6041,16 @@ def render_markdown(narrative: ReportNarrative) -> str:
             lines += [f"> **{content[0]}** — {content[1]}", ""]
         elif kind == "list":
             lines += [f"- {item}" for item in content] + [""]
+        elif kind == "bar":
+            label, source_line, actual_line = content
+            lines += [f"**{label}**", f"- {source_line}", f"- {actual_line}", ""]
+        elif kind == "image":
+            caption = f"{content.step_label}단계 · {content.caption}" if content.step_label else content.caption
+            safe_caption = caption.replace("[", "(").replace("]", ")")
+            if content.url:
+                lines += [f"![{safe_caption}]({content.url})", ""]
+            else:
+                lines += [f"> {safe_caption}", ""]
         elif kind in {"table", "sign"}:
             header, rows, widths = content
             lines.append("| " + " | ".join(cell(h) for h in header) + " |")
@@ -5767,6 +6076,8 @@ DOCX_SPACING: dict[str, tuple[float, float, float]] = {
     "note": (2, 4, 1.15),
     "alert": (2, 2, 1.15),
     "list": (0, 1, 1.15),
+    "bar": (0, 2, 1.0),
+    "image": (0, 4, 1.0),
     "table": (0, 0, 1.0),
 }
 
@@ -5781,11 +6092,17 @@ def _space(paragraph: Any, kind: str, *, after: float | None = None) -> None:
     form.line_spacing = line
 
 
-def render_docx(narrative: ReportNarrative) -> bytes:
-    return _render_docx_blocks(report_blocks(narrative))
+def render_docx(
+    narrative: ReportNarrative,
+    image_resolver: Callable[[NotebookImage], tuple[bytes, str] | None] | None = None,
+) -> bytes:
+    return _render_docx_blocks(report_blocks(narrative), image_resolver=image_resolver)
 
 
-def _render_docx_blocks(blocks: Sequence[tuple[str, Any]]) -> bytes:
+def _render_docx_blocks(
+    blocks: Sequence[tuple[str, Any]],
+    *, image_resolver: Callable[[NotebookImage], tuple[bytes, str] | None] | None = None,
+) -> bytes:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
     from docx.oxml import OxmlElement
@@ -5870,6 +6187,41 @@ def _render_docx_blocks(blocks: Sequence[tuple[str, Any]]) -> bytes:
                     for run in paragraph.runs:
                         run.font.size = Pt(8.5)
                 _space(paragraph, "list", after=DOCX_SPACING["p"][1] if last else None)
+        elif kind == "bar":
+            label, source_line, actual_line = content
+            heading = document.add_paragraph()
+            heading.add_run(str(label)).bold = True
+            _space(heading, "bar")
+            for line, color in ((source_line, RGBColor(90, 110, 100)),
+                                (actual_line, RGBColor(32, 105, 72))):
+                paragraph = document.add_paragraph()
+                run = paragraph.add_run(str(line))
+                run.font.color.rgb = color
+                run.font.name = REPORT_FONT
+                _space(paragraph, "bar")
+        elif kind == "image":
+            caption = f"{content.step_label}단계 · {content.caption}" if content.step_label else content.caption
+            added = False
+            if image_resolver is not None:
+                try:
+                    resolved = image_resolver(content)
+                    if resolved is not None and resolved[0] and len(resolved[0]) <= 32 * 1024 * 1024:
+                        paragraph = document.add_paragraph()
+                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        paragraph.add_run().add_picture(io.BytesIO(resolved[0]), width=Cm(12.5))
+                        _space(paragraph, "image")
+                        added = True
+                except Exception as exc:  # noqa: BLE001 - caption still survives
+                    log.warning("notebook image not embedded error=%s", type(exc).__name__)
+            paragraph = document.add_paragraph(caption)
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in paragraph.runs:
+                run.italic = True
+                run.font.size = Pt(8.5 if small else 9)
+                run.font.color.rgb = RGBColor(90, 90, 90)
+            if not added and content.url:
+                paragraph.add_run(f" · {content.url}")
+            _space(paragraph, "image")
         elif kind == "pagebreak":
             # Lane RP2, decision 1: the sections start on the page after the first pages.
             paragraph = document.add_paragraph()

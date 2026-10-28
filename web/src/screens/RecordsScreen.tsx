@@ -1,7 +1,7 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type MouseEvent } from 'react';
+import { useState, type MouseEvent, type ReactNode } from 'react';
 import { postJson } from '../api/client';
-import { experimentPath, recordsApi, reportPath, type RecordEvent, type ReviewValue } from '../api/recordsApi';
+import { experimentPath, recordsApi, reportPath, type Notebook, type NotebookResponse, type NotebookSection, type RecordEvent, type ReviewValue } from '../api/recordsApi';
 import { isSessionExpired, signedOut, useExperiments, useSignOutOnExpiry, useWorkspaceSession } from '../api/queries';
 import type { AuthSession, Experiment } from '../api/types';
 import { EmptyBox, ErrorBox, LoadingBox, Note } from '../components/Pieces';
@@ -167,30 +167,123 @@ function PiConfirmation({ reportId, refresh }: { reportId: string; refresh: () =
   return <section className='record-section'><h2>{c.pi}</h2><p>{c.piWhy}</p><label className='field'><span>{c.piComment}</span><input maxLength={300} value={comment} onChange={e => setComment(e.target.value)} /></label><button className='btn' disabled={busy} onClick={() => void save()}>{c.piSave}</button>{message ? <p role='status'>{message}</p> : null}</section>;
 }
 
+const DEFAULT_NOTEBOOK_SECTIONS: NotebookSection[] = [
+  ['experiment_info', c.sectionExperiment], ['purpose', c.sectionPurpose], ['methods', c.sectionMethods],
+  ['observations', c.sectionObservations], ['results', c.sectionResults],
+  ['interpretation_next', c.sectionInterpretation], ['domain', c.sectionDomain], ['appendix', c.appendix],
+].map(([id, name]) => ({ id, name }));
+
+function NotebookVisuals({ notebook }: { notebook: Notebook }) {
+  const bars = notebook.value_bars ?? [], timeline = notebook.timeline ?? [], images = notebook.images ?? [];
+  return <>
+    {bars.length ? <div className='notebook-bars'><h3>{c.valueBars}</h3>{bars.map((bar, i) => {
+      const source = Number(bar.source_number), actual = Number(bar.actual_number), maximum = Math.max(source, actual, 0);
+      const sourceWidth = maximum > 0 && Number.isFinite(source) ? Math.max(3, source / maximum * 100) : 0;
+      const actualWidth = maximum > 0 && Number.isFinite(actual) ? Math.max(3, actual / maximum * 100) : 0;
+      return <article className='notebook-bar' data-testid='notebook-value-bar' key={`${bar.label}-${i}`}><strong>{bar.label}</strong>
+        <div><span>{c.sourceValue(bar.source)}</span><i style={{ width: `${sourceWidth}%` }} /></div>
+        <div><span>{c.actualValue(bar.actual)}</span><i className='actual' style={{ width: `${actualWidth}%` }} /></div>
+      </article>;
+    })}</div> : null}
+    {timeline.length ? <div className='notebook-timeline'><h3>{c.runTimeline}</h3><ol>{timeline.map((item, i) => <li key={`${item.at}-${item.step_label}-${i}`}><time>{item.at}</time><strong>{item.step_label ? c.step(item.step_label) : c.outside}</strong><span>{c.notebookTimelineKinds[item.kind] || item.text}</span>{item.text !== (c.notebookTimelineKinds[item.kind] || item.text) ? <p>{item.text}</p> : null}</li>)}</ol></div> : null}
+    {images.length ? <div className='notebook-images'><h3>{c.images}</h3>{images.map((item, i) => {
+      const label = `${item.step_label ? c.step(item.step_label) + ' · ' : ''}${item.caption}`;
+      return <figure key={`${item.kind}-${item.asset_id}-${i}`}>{item.url ? <img loading='lazy' src={item.url} alt={label} /> : <div className='notebook-image-missing'>{c.imageMissing}</div>}<figcaption><strong>{item.kind === 'photo' ? c.photo : c.sourceFigure}</strong> · {label}{item.kind === 'photo' ? <span>{c.photoUninterpreted}</span> : null}</figcaption></figure>;
+    })}</div> : null}
+  </>;
+}
+
+function DomainNotebook({ notebook, reportId, editable, refresh }: { notebook: Notebook; reportId: string; editable: boolean; refresh: () => void }) {
+  const domain = notebook.domain;
+  const [selected, setSelected] = useState(domain?.code || 'general');
+  const [busy, setBusy] = useState(false), [message, setMessage] = useState('');
+  async function save() { setBusy(true); setMessage(''); try { await recordsApi.selectDomain(reportId, selected); setMessage(c.saved); refresh(); } catch { setMessage(c.saveFailed); } finally { setBusy(false); } }
+  return <>
+    {editable ? <div className='record-actions'><label className='field'><span>{c.domainProfile}</span><select value={selected} onChange={event => setSelected(event.target.value)}>{Object.entries(c.domainOptions).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></label><button className='btn' disabled={busy || selected === domain?.code} onClick={() => void save()}>{c.domainSave}</button>{message ? <p role='status'>{message}</p> : null}</div> : null}
+    <h3>{domain?.label || c.domainOptions.general}</h3>
+    <Rows heads={c.domainHeads} rows={(domain?.fields ?? []).map(field => [field.label, field.value, [c.fieldOrigins[field.origin] || '', field.formula ? c.formula(field.formula) : ''].filter(Boolean).join('\n')])} />
+    {(notebook.plate_positions ?? []).length ? <><h3>{c.plateLayout}</h3><div className='notebook-plate'>{notebook.plate_positions!.map((position, i) => <article key={`${position.label}-${i}`}><strong>{position.label}</strong><span>{position.step_label ? c.step(position.step_label) : c.outside}</span><p>{position.words}</p></article>)}</div></> : null}
+    {(notebook.sample_rows ?? []).length ? <><h3>{c.sampleRecords}</h3><Rows heads={c.sampleRecordHeads} rows={notebook.sample_rows!.map(row => [row.identifier, row.records.join('\n')])} /></> : null}
+  </>;
+}
+
+function InventoryNotebook({ notebook, reportId, editable, refresh }: { notebook: Notebook; reportId: string; editable: boolean; refresh: () => void }) {
+  const inventory = notebook.inventory ?? [];
+  const [selected, setSelected] = useState(inventory[0]?.name || '');
+  const [vendor, setVendor] = useState(''), [catalog, setCatalog] = useState(''), [lot, setLot] = useState('');
+  const [stage, setStage] = useState('after'), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
+  function choose(name: string) { const item = inventory.find(row => row.name === name); setSelected(name); setVendor(item?.vendor || ''); setCatalog(item?.catalog_number || ''); setLot(item?.lot_number || ''); }
+  async function save() { setBusy(true); setMessage(''); try { await recordsApi.recordInventory(reportId, { item_name: selected, vendor, catalog_number: catalog, lot_number: lot, stage }); setMessage(c.saved); refresh(); } catch { setMessage(c.saveFailed); } finally { setBusy(false); } }
+  return <>
+    <h3>{c.methodsInventory}</h3>
+    <Rows heads={c.inventoryHeads} rows={inventory.map(item => [item.name, item.kind, item.vendor, item.catalog_number, item.lot_number, c.inventoryStages[item.stage] || ''])} />
+    {editable && inventory.length ? <div className='notebook-inventory-form'><label className='field'><span>{c.inventoryItem}</span><select value={selected} onChange={event => choose(event.target.value)}>{inventory.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label><label className='field'><span>{c.vendor}</span><input maxLength={200} value={vendor} onChange={event => setVendor(event.target.value)} /></label><label className='field'><span>{c.catalog}</span><input maxLength={200} value={catalog} onChange={event => setCatalog(event.target.value)} /></label><label className='field'><span>{c.lot}</span><input maxLength={200} value={lot} onChange={event => setLot(event.target.value)} /></label><label className='field'><span>{c.inputStage}</span><select value={stage} onChange={event => setStage(event.target.value)}><option value='before'>{c.inventoryStages.before}</option><option value='after'>{c.inventoryStages.after}</option></select></label><button className='btn' disabled={busy || !selected || ![vendor, catalog, lot].some(value => value.trim())} onClick={() => void save()}>{c.inventorySave}</button>{message ? <p role='status'>{message}</p> : null}</div> : null}
+  </>;
+}
+
+function SharingComparison({ reportId, editable }: { reportId: string; editable: boolean }) {
+  const sharing = useQuery({ queryKey: ['notebook-sharing', reportId], queryFn: () => recordsApi.sharing(reportId), enabled: editable });
+  const comparison = useQuery({ queryKey: ['notebook-comparisons', reportId], queryFn: () => recordsApi.comparisons(reportId), enabled: editable });
+  const [busy, setBusy] = useState(false), [failed, setFailed] = useState(false);
+  if (!editable) return null;
+  async function toggle() { if (!sharing.data) return; setBusy(true); setFailed(false); try { await recordsApi.changeSharing(reportId, !sharing.data.shared); await sharing.refetch(); await comparison.refetch(); } catch { setFailed(true); } finally { setBusy(false); } }
+  return <section className='record-section notebook-comparison'><h2>{c.comparison}</h2><p>{c.comparisonWhy}</p>
+    {sharing.isPending ? <LoadingBox label={c.loading} /> : sharing.isError ? <Note>{c.comparisonFailed}</Note> : <button className='btn' disabled={busy} onClick={() => void toggle()}>{sharing.data.shared ? c.shareOff : c.shareOn}</button>}
+    {failed ? <Note>{c.saveFailed}</Note> : null}
+    {comparison.isPending ? <LoadingBox label={c.loading} /> : comparison.isError ? <Note>{c.comparisonFailed}</Note> : <div className='comparison-grid'>{comparison.data.records.map((record, i) => <article key={`${record.label}-${i}`} className={record.record_scope === 'shared' ? 'shared' : ''}><h3>{record.label}</h3>{record.value_rows.length ? <Rows heads={c.compareValueHeads} rows={record.value_rows.map(row => [row.step_label, row.source, row.actual])} /> : null}{record.method_rows.length ? <Rows heads={c.compareMethodHeads} rows={record.method_rows.map(row => [row.step_label, row.actual_values, [row.started_at, row.ended_at, row.timer].filter(Boolean).join(' · ')])} /> : null}{record.notes.map((note, j) => <p key={`${note.at}-${j}`}><strong>{note.step_label ? c.step(note.step_label) : c.outside}</strong> · {note.at} · {note.text}</p>)}</article>)}</div>}
+    <p className='muted'>{c.comparisonRule}</p>
+  </section>;
+}
+
+function NotebookTemplateEditor({ template, refresh }: { template: NotebookSection[]; refresh: () => void }) {
+  const [sections, setSections] = useState(template), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
+  function rename(index: number, name: string) { setSections(rows => rows.map((row, i) => i === index ? { ...row, name } : row)); }
+  function move(index: number, by: number) { setSections(rows => { const target = index + by; if (target < 0 || target >= rows.length) return rows; const next = [...rows]; [next[index], next[target]] = [next[target], next[index]]; return next; }); }
+  async function save() { setBusy(true); setMessage(''); try { await recordsApi.saveNotebookTemplate(sections); setMessage(c.saved); refresh(); } catch { setMessage(c.saveFailed); } finally { setBusy(false); } }
+  return <details className='record-section notebook-template'><summary>{c.template}</summary><p>{c.templateWhy}</p><ol>{sections.map((section, i) => <li key={section.id}><input aria-label={c.templateName} maxLength={60} value={section.name} onChange={event => rename(i, event.target.value)} /><button className='btn' aria-label={c.moveUp(section.name)} disabled={i === 0} onClick={() => move(i, -1)}>↑</button><button className='btn' aria-label={c.moveDown(section.name)} disabled={i === sections.length - 1} onClick={() => move(i, 1)}>↓</button></li>)}</ol><button className='btn' disabled={busy || sections.some(section => !section.name.trim())} onClick={() => void save()}>{c.templateSave}</button>{message ? <p role='status'>{message}</p> : null}</details>;
+}
+
+function GroundedNotebookSections({ notebook: n, data, reportId, editable, refresh }: { notebook: Notebook; data: NotebookResponse; reportId: string; editable: boolean; refresh: () => void }) {
+  const methodRows = (n.method_rows ?? []).map(row => [
+    row.label + (row.source_page ? ` · PDF p.${row.source_page}` : ''), row.source_text,
+    row.actual_values, [row.started_at && row.ended_at ? `${row.started_at}–${row.ended_at}` : row.started_at || row.ended_at, row.timer].filter(Boolean).join(' · '),
+  ]);
+  const blank = <div className='notebook-blank'>{c.blank}</div>;
+  const content: Record<string, ReactNode> = {
+    experiment_info: <><Rows rows={n.header_rows} /><h3>{c.samples}</h3><Rows heads={c.sampleHeads} rows={n.samples.map(sample => [sample.name, [sample.condition, sample.control ? c.control : ''].filter(Boolean).join(' · ')])} /></>,
+    purpose: n.purpose_words ? <p>{n.purpose_words}</p> : blank,
+    methods: <><Rows heads={c.methodHeads} rows={methodRows} />{n.condition_rows.length ? <><h3>{c.conditions}</h3><Rows heads={c.tableHeads} rows={n.condition_rows} /></> : null}{n.condition_note ? <p>{n.condition_note}</p> : null}<NotebookVisuals notebook={n} />{n.differences.length ? <><h3>{c.differences}</h3>{n.differences.map((line, i) => <p key={i}>{line}</p>)}</> : null}</>,
+    observations: n.observations.length ? <Rows heads={c.observationHeads} rows={n.observations.map(observation => [observation.label, observation.at, observation.shown])} /> : blank,
+    results: (n.result_words || n.result) ? <p>{n.result_words || n.result}</p> : blank,
+    interpretation_next: <div className='notebook-two-columns'><article><h3>{c.interpretation}</h3>{n.interpretation_words ? <p>{n.interpretation_words}</p> : blank}</article><article><h3>{c.next}</h3>{n.next_change || n.next_lines.length ? <>{[n.next_change, ...n.next_lines].filter(Boolean).map((line, i) => <p key={i}>{line}</p>)}</> : blank}</article></div>,
+    domain: <DomainNotebook notebook={n} reportId={reportId} editable={editable} refresh={refresh} />,
+    appendix: <><InventoryNotebook notebook={n} reportId={reportId} editable={editable} refresh={refresh} />{n.materials_words ? <p>{n.materials_words}</p> : null}<h3>{c.previous}</h3>{[n.previous_words, ...n.previous_lines].filter(Boolean).length ? [n.previous_words, ...n.previous_lines].filter(Boolean).map((line, i) => <p key={i}>{line}</p>) : blank}<h3>{c.confirmation}</h3><ul className='record-events'>{data.review.map(item => <ValueReview key={item.item_id} item={item} reportId={reportId} editable={editable && data.report.status !== 'in_progress'} refresh={refresh} />)}</ul><Rows rows={n.pi_rows} /><details><summary>{c.appendixRecords}</summary><Rows rows={n.appendix_step_rows} /><Rows rows={n.appendix_record_rows} /><p>{n.system_words}</p></details><h3>{c.source}</h3><p>{n.source_words}</p></>,
+  };
+  const template = n.section_template?.length === DEFAULT_NOTEBOOK_SECTIONS.length ? n.section_template : DEFAULT_NOTEBOOK_SECTIONS;
+  return <>{template.map(section => <section className='record-section notebook-section' data-section={section.id} key={section.id}><h2>{section.name}</h2>{content[section.id]}</section>)}</>;
+}
+
 export function NotebookScreen({ sessionId, reportId, session }: { sessionId: string; reportId: string; session: AuthSession }) {
   const client = useQueryClient();
   const query = useQuery({ queryKey: notebookKey(reportId), queryFn: () => recordsApi.notebook(reportId) });
   const workspace = useWorkspaceSession();
-  useSignOutOnExpiry([query.error, workspace.error].find(isSessionExpired));
+  const labTemplate = useQuery({ queryKey: ['notebook-template'], queryFn: recordsApi.notebookTemplate, enabled: Boolean(session.account?.admin) });
+  useSignOutOnExpiry([query.error, workspace.error, labTemplate.error].find(isSessionExpired));
   const data = query.data, mismatched = Boolean(data?.report.session_id && data.report.session_id !== sessionId), n = data?.notebook;
   const editable = Boolean(workspace.data?.principal_id && data?.report.owner_principal_id === workspace.data.principal_id);
   const otherOwner = Boolean(workspace.data?.principal_id && data?.report.owner_principal_id && data.report.owner_principal_id !== workspace.data.principal_id);
   const refresh = () => { void query.refetch(); void client.invalidateQueries({ queryKey: ['report-prose', reportId] }); };
+  const refreshTemplate = () => { void labTemplate.refetch(); refresh(); };
   return <section className='records-screen notebook-screen' data-testid='notebook-screen'>
     <a className='btn btn-quiet' href={routes.record(sessionId)}>{c.timeline}</a><h1>{c.notebooks}</h1><p className='page-why'>{c.notebookWhy}</p>
     {query.isSuccess && !mismatched ? <ReportPreparation key={reportId} reportId={reportId} editable={editable && data!.report.status !== 'in_progress'} refresh={refresh} /> : null}
     {query.isPending ? <LoadingBox label={c.loading} /> : query.isError || mismatched ? <ErrorBox message={c.failed} onRetry={refresh} /> : !n ? <EmptyBox message={c.noNotebook} /> : <>
-      <h2>{n.title}</h2><Downloads key={reportId} reportId={reportId} /><Rows rows={n.header_rows} />
+      <h2>{n.title}</h2><Downloads key={reportId} reportId={reportId} />
       {!editable ? <p>{otherOwner ? c.readOnly : c.readOnlyGeneral}</p> : null}
-      {n.purpose_words ? <section className='record-section'><h2>{c.purpose}</h2><p>{n.purpose_words}</p></section> : null}
-      <section className='record-section'><h2>{c.samples}</h2><Rows heads={c.sampleHeads} rows={n.samples.map(s => [s.name, [s.condition, s.control ? c.control : ''].filter(Boolean).join(' · ')])} />{n.materials_words ? <p>{n.materials_words}</p> : null}</section>
-      <section className='record-section'><h2>{c.conditions}</h2><Rows heads={c.tableHeads} rows={n.condition_rows} />{n.condition_note ? <p>{n.condition_note}</p> : null}</section>
-      <section className='record-section'><h2>{c.observations}</h2><Rows heads={c.observationHeads} rows={n.observations.map(o => [o.label, o.at, o.shown])} /><p>{n.result_words || n.result}</p></section>
-      {([[c.differences, n.differences], [c.previous, [n.previous_words, ...n.previous_lines]], [c.next, [n.next_change, ...n.next_lines]]] as const).map(([head, lines]) => <section className='record-section' key={head}><h2>{head}</h2>{lines.filter(Boolean).map((line, i) => <p key={i}>{line}</p>)}</section>)}
-      <section className='record-section'><h2>{c.confirmation}</h2><ul className='record-events'>{data.review.map(item => <ValueReview key={item.item_id} item={item} reportId={reportId} editable={editable && data.report.status !== 'in_progress'} refresh={refresh} />)}</ul><Rows rows={n.pi_rows} /></section>
+      {session.account?.admin && labTemplate.data?.sections.length ? <NotebookTemplateEditor key={labTemplate.data.version} template={labTemplate.data.sections} refresh={refreshTemplate} /> : null}
+      <GroundedNotebookSections notebook={n} data={data} reportId={reportId} editable={editable} refresh={refresh} />
       {session.account?.admin ? <PiConfirmation reportId={reportId} refresh={refresh} /> : null}
-      <details><summary>{c.appendix}</summary><Rows rows={n.appendix_step_rows} /><Rows rows={n.appendix_record_rows} /><p>{n.system_words}</p></details>
-      <section className='record-section'><h2>{c.source}</h2><p>{n.source_words}</p></section>
+      <SharingComparison reportId={reportId} editable={editable} />
     </>}
   </section>;
 }

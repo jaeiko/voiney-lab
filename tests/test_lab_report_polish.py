@@ -53,13 +53,14 @@ class WordSpacingTests(_ReportCase):
             form = paragraph.paragraph_format
             return form.space_before, form.space_after, form.line_spacing
 
-        # Lane RP3, decision ①: the notebook's headings and lists.
-        self.assertEqual(spacing(paragraphs[texts.index("1. 시료와 조건")]), (Pt(12), Pt(4), 1.0))
+        self.assertEqual(spacing(paragraphs[texts.index("실험 정보")]), (Pt(12), Pt(4), 1.0))
         self.assertEqual(spacing(paragraphs[texts.index("단계 시각표")]), (Pt(8), Pt(3), 1.0))
-        note = paragraphs[texts.index("1. 시료와 조건") + 1]
+        note = paragraphs[next(index for index, value in enumerate(texts)
+                              if value.startswith("쓴 재료·장비:"))]
         self.assertEqual(spacing(note), (Pt(2), Pt(4), 1.15))
-        # 4. 원문과 다르게 한 점·문제: one list; its items are close, its last item is not.
-        start = texts.index("4. 원문과 다르게 한 점·문제") + 1
+        # The differences subsection is one list; its items are close, its
+        # last item gets normal body spacing.
+        start = texts.index("원문과 다르게 한 점·문제") + 1
         items = []
         while texts[start + len(items)].startswith("• "):
             items.append(paragraphs[start + len(items)])
@@ -157,7 +158,7 @@ class MaterialsAndEquipmentTablesTests(_ReportCase):
         # the notebook names the items the performed steps' text names.
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         self.assertIn("> 쓴 재료·장비: Ammonium bicarbonate", text)
-        self.assertNotIn("MilliporeSigma", text)
+        self.assertIn("| Ammonium bicarbonate | 재료 | Merck MilliporeSigma (Sigma-Aldrich) | A6141 |", text)
         self.assertNotIn("이름 (원문 그대로)", text)
         self.assertNotIn("Catalog #", text)
         self.assertNotIn("NAME", text)
@@ -204,7 +205,10 @@ class LaterStartAndReturnTests(_ReportCase):
         return self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
 
     def deviations(self, text: str) -> list[str]:
-        block = text.split("## 4. 원문과 다르게 한 점·문제")[1].split("## 5.")[0]
+        marker = "### 원문과 다르게 한 점·문제"
+        if marker not in text:
+            return []
+        block = text.split(marker, 1)[1].split("## 관찰·특이사항", 1)[0]
         return [line[2:] for line in block.splitlines() if line.startswith("- ")]
 
     def test_a_later_start_is_written_from_its_event(self) -> None:

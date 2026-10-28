@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import Mock
+import base64
+import io
 
 import pytest
 from fastapi.encoders import jsonable_encoder
@@ -157,3 +159,143 @@ def test_lab_admin_sets_only_notebook_section_names_and_order(records: Records) 
     invalid = devices['admin'].request('PUT', '/api/notebook-template', json={'sections': changed[:-1]})
     assert invalid.status_code == 422
     assert devices['outside'].get('/api/notebook-template').json()['sections'] != changed
+
+
+def test_same_protocol_comparison_requires_owner_opt_in_and_stays_read_only(
+    records: Records, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.lane_rp3_support import cell_protocol
+    from voiney_lab import experiment_reports as er
+    from voiney_lab.workspace_store import initialize_workspace_store
+
+    devices, store, owner_report_id = records
+    monkeypatch.setattr(er, 'report_protocol_fixture', lambda report: (cell_protocol(), ''))
+    # Resolve the legacy fixture's owner before selecting same-lab candidates.
+    assert devices['owner'].get(f'/api/experiment-reports/{owner_report_id}/notebook').status_code == 200
+    peer = srv._account_for_cookie(devices['peer'].session_cookie).principal()
+    workspace = initialize_workspace_store(srv._workspace_settings())
+    workspace.bootstrap_principal(peer)
+    workspace.start_experiment(
+        peer, session_id='session-peer-comparison', protocol_id='protocol-shared',
+        protocol_revision_id='revision-two',
+    )
+    peer_report = store.open_report(
+        session_id='session-peer-comparison', protocol_id='protocol-shared',
+        protocol_title='Fictional source', protocol_revision='revision-two',
+        protocol_sha256='a' * 64, readiness_status='ready', development_only=True,
+        organization_id=peer.organization_id, owner_principal_id=peer.principal_id,
+    )
+    peer_report_id = peer_report['report_id']
+    workspace.bind_resource(peer, 'experiment_report', peer_report_id)
+    workspace.close()
+    store.append_event(
+        peer_report_id, event_key='peer-started', event_type='session_started',
+        payload={'run_changes': []},
+    )
+    store.append_event(
+        peer_report_id, event_key='peer-note', event_type='observation', step_id='p-3',
+        step_label='3', user_wording='A1 well 탁함', category='note',
+    )
+    store.finalize(peer_report_id, status='completed', event_key='peer-finished')
+
+    before = devices['owner'].get(
+        f'/api/experiment-reports/{owner_report_id}/comparisons'
+    )
+    assert before.status_code == 200, before.text
+    assert [item['record_scope'] for item in before.json()['records']] == ['mine']
+    assert before.json()['permission']['judgment'] == 'none'
+
+    shared = devices['peer'].post(
+        f'/api/experiment-reports/{peer_report_id}/sharing', json={'shared': True},
+    )
+    assert shared.status_code == 200, shared.text
+    assert shared.json()['shared'] is True
+    compared = devices['owner'].get(
+        f'/api/experiment-reports/{owner_report_id}/comparisons'
+    )
+    assert compared.status_code == 200, compared.text
+    records_json = compared.json()['records']
+    assert [item['record_scope'] for item in records_json] == ['mine', 'shared']
+    other = records_json[1]
+    assert any(note['text'] == 'A1 well 탁함' for note in other['notes'])
+    assert other['label'].startswith('공유 기록 ')
+    forbidden = {'owner_principal_id', 'report_id', 'purpose', 'result', 'interpretation',
+                 'recommendation', 'event_key'}
+    assert forbidden.isdisjoint(other)
+    assert all(forbidden.isdisjoint(row) for rows in (
+        other['value_rows'], other['method_rows'], other['timeline'], other['notes'],
+    ) for row in rows)
+    assert compared.json()['permission'] == {
+        'scope': 'same_organization_same_protocol',
+        'other_records': 'opt_in_read_only',
+        'withdrawal': 'latest_append_only_event',
+        'judgment': 'none',
+    }
+
+    before_events = store.get_report(peer_report_id)['events']
+    for who in ('owner', 'admin', 'outside'):
+        assert devices[who].post(
+            f'/api/experiment-reports/{peer_report_id}/sharing', json={'shared': False},
+        ).status_code == 404
+    assert store.get_report(peer_report_id)['events'] == before_events
+    assert devices['admin'].get(
+        f'/api/experiment-reports/{owner_report_id}/comparisons'
+    ).status_code == 404
+    assert devices['outside'].get(
+        f'/api/experiment-reports/{owner_report_id}/comparisons'
+    ).status_code == 404
+
+    withdrawn = devices['peer'].post(
+        f'/api/experiment-reports/{peer_report_id}/sharing', json={'shared': False},
+    )
+    assert withdrawn.status_code == 200
+    assert withdrawn.json()['shared'] is False
+    after = devices['owner'].get(
+        f'/api/experiment-reports/{owner_report_id}/comparisons'
+    ).json()['records']
+    assert [item['record_scope'] for item in after] == ['mine']
+    share_events = [event for event in store.get_report(peer_report_id)['events']
+                    if event['event_type'] == 'notebook_share_changed']
+    assert [event['payload']['shared'] for event in share_events] == [True, False]
+    assert devices['peer'].post(
+        f'/api/experiment-reports/{peer_report_id}/sharing', json={'shared': True},
+    ).json()['shared'] is True
+    share_events = [event for event in store.get_report(peer_report_id)['events']
+                    if event['event_type'] == 'notebook_share_changed']
+    assert [event['payload']['shared'] for event in share_events] == [True, False, True]
+
+
+def test_word_export_embeds_authenticated_record_photo(
+    records: Records, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from docx import Document
+    from fastapi import Response
+    from tests.lane_rp3_support import cell_protocol
+    from voiney_lab import experiment_reports as er
+
+    devices, store, report_id = records
+    monkeypatch.setattr(er, 'report_protocol_fixture', lambda report: (cell_protocol(), ''))
+    assert devices['owner'].get(f'/api/experiment-reports/{report_id}/notebook').status_code == 200
+    store.append_event(
+        report_id, event_key='photo-evidence-word', event_type='photo_attached',
+        step_id='p-1', step_label='1', user_wording='1단계 배양 사진',
+        payload={
+            'evidence_id': 'evidence-word-photo', 'media_type': 'image/png',
+            'interpretation_status': 'not_interpreted',
+        },
+    )
+    png = base64.b64decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+    )
+    requested = []
+
+    def evidence(session_id, evidence_id):
+        requested.append((session_id, evidence_id))
+        return Response(content=png, media_type='image/png')
+
+    monkeypatch.setattr(srv, 'download_workspace_experiment_evidence', evidence)
+    response = devices['owner'].get(f'/api/experiment-reports/{report_id}.docx')
+    assert response.status_code == 200, response.text
+    document = Document(io.BytesIO(response.content))
+    assert len(document.inline_shapes) == 1
+    assert requested == [('session-owned', 'evidence-word-photo')]

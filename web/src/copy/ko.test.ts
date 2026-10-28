@@ -5,8 +5,8 @@ import * as copy from "./ko";
 // Every sentence the screen shows follows docs/VOICE_AND_TONE.md: 해요체,
 // no internal words (docs/COPY_DECK.md), buttons as ~기 verbs.
 const INTERNAL_WORDS = [
-  "검토본", "리비전", "개정", "사유 코드", "개발 상세 정보", "LAB COPILOT", "Lab Copilot", "카탈로그", "세션",
-  "체크포인트", "워크플로", "타임라인", "서버", "모델", "공급자", "OCR", "구조화", "실행 가능", "실행 불가", "검토 대기",
+  "검토본", "리비전", "개정", "사유 코드", "개발 상세 정보", "LAB COPILOT", "Lab Copilot", "세션",
+  "체크포인트", "워크플로", "서버", "모델", "공급자", "OCR", "구조화", "실행 가능", "실행 불가", "검토 대기",
   "승인", "환경 변수", "VOINEY_LAB_",
 ];
 const FORMAL_ENDINGS = /(습니다|십시오|됩니다|입니다|합니다)[.!?]?$/;

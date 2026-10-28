@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Callable, TypeVar
 from urllib.parse import quote, unquote_plus, urlsplit
 from xml.sax.saxutils import escape as xml_escape
 import requests
@@ -6761,10 +6761,13 @@ async def record_experiment_notebook_inventory(report_id:str,request:Request)->R
         assert facts is not None
         item=next((entry for entry in facts.items
                    if item_name in {entry.listed or entry.name,entry.name}),None)
-        if item is None:
+        projected=next((entry for entry in facts.notebook.inventory
+                        if entry.name==item_name),None)
+        if item is None and projected is None:
             raise HTTPException(status_code=422,detail="inventory item is not in the source")
         payload={
-            "item_kind":item.kind,"item_name":item.listed or item.name,
+            "item_kind":item.kind if item is not None else projected.kind,
+            "item_name":((item.listed or item.name) if item is not None else projected.name),
             **values,"stage":stage,
         }
         report=store.append_event(
@@ -6778,6 +6781,124 @@ async def record_experiment_notebook_inventory(report_id:str,request:Request)->R
     return JSONResponse(status_code=201,content=jsonable_encoder({
         "report_id":report_id,"inventory":notebook.inventory,
         "event_inserted":bool(report.get("event_inserted")),
+    }),headers={"Cache-Control":"private, no-store"})
+
+
+def _notebook_sharing_response(report:Mapping[str,Any],*,inserted:bool=False)->dict[str,Any]:
+    sharing=ExperimentReportStore.notebook_sharing(report)
+    return {
+        "report_id":report["report_id"],"shared":sharing["shared"],
+        "changed_at":sharing["changed_at"],"event_inserted":inserted,
+    }
+
+
+@app.get("/api/experiment-reports/{report_id}/sharing")
+def get_experiment_notebook_sharing(report_id:str)->Response:
+    """The owner's current record-level comparison consent."""
+
+    store=_report_prose_store(report_id,write=True)
+    try:
+        report=store.get_report(report_id)
+        content=_notebook_sharing_response(report)
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(content=jsonable_encoder(content),headers={"Cache-Control":"private, no-store"})
+
+
+@app.post("/api/experiment-reports/{report_id}/sharing")
+async def change_experiment_notebook_sharing(report_id:str,request:Request)->Response:
+    """Append the owner's opt-in or withdrawal; never changes workflow state."""
+
+    body=await _json_object(request)
+    if not isinstance(body.get("shared"),bool):
+        raise HTTPException(status_code=422,detail="sharing choice is invalid")
+    requested=bool(body["shared"])
+    store=_report_prose_store(report_id,write=True)
+    try:
+        report=store.get_report(report_id)
+        current=store.notebook_sharing(report)
+        inserted=False
+        if current["shared"]!=requested:
+            payload={"shared":requested}
+            event_key="note-share-"+hashlib.sha256(
+                f"{report_id}\x1f{current['changes']+1}\x1f{int(requested)}".encode("utf-8")
+            ).hexdigest()[:32]
+            report=store.append_event(
+                report_id,event_key=event_key,event_type="notebook_share_changed",
+                source_tier="operator",payload=payload,
+            )
+            inserted=bool(report.get("event_inserted"))
+        content=_notebook_sharing_response(report,inserted=inserted)
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(content=jsonable_encoder(content),headers={"Cache-Control":"private, no-store"})
+
+
+def _comparison_record(
+    store:ExperimentReportStore,report:Mapping[str,Any],*,mine:bool,shared_number:int,
+)->dict[str,Any]:
+    """A fact-only comparison projection; no owner identity or model prose."""
+
+    narrative=store._narrative(str(report["report_id"]),None,None)
+    book=narrative.facts.notebook
+    started=str(report.get("started_at") or "")
+    when=started.replace("T"," ")[:16]
+    label=("내 기록" if mine else f"공유 기록 {shared_number}")+(f" · {when}" if when else "")
+    result={
+        "record_scope":"mine" if mine else "shared",
+        "label":label,"started_at":started,"ended_at":report.get("ended_at"),
+        "protocol_revision":report.get("protocol_revision"),
+        "value_rows":[{
+            "step_label":row.label,"kind":row.kind,"source":row.source,
+            "actual":row.actual,"unit":row.unit,
+        } for row in book.value_bars],
+        "method_rows":[{
+            "step_label":row.label,"source_text":row.source_text,
+            "actual_values":row.actual_values,"started_at":row.started_at,
+            "ended_at":row.ended_at,"timer":row.timer,
+        } for row in book.method_rows],
+        "timeline":[{
+            "at":row.at,"step_label":row.step_label,"kind":row.kind,"text":row.text,
+        } for row in book.timeline],
+        "notes":[{
+            "step_label":row.label,"at":row.at,"kind":row.kind,"text":row.shown,
+        } for row in book.observations],
+    }
+    if mine:
+        result["report_id"]=report["report_id"]
+    return result
+
+
+@app.get("/api/experiment-reports/{report_id}/comparisons")
+def compare_experiment_notebooks(report_id:str)->Response:
+    """Owner-only anchor; other records are opt-in, fact-only and read-only."""
+
+    principal,_workspace=_commercial_workspace()
+    _workspace.close()
+    store=_report_prose_store(report_id,write=True)
+    try:
+        reports=store.notebook_comparison_reports(
+            report_id,requester_principal_id=principal.principal_id,
+        )
+        records=[]
+        shared_number=0
+        for report in reports:
+            mine=report.get("owner_principal_id")==principal.principal_id
+            if not mine:
+                shared_number+=1
+            records.append(_comparison_record(
+                store,report,mine=mine,shared_number=shared_number,
+            ))
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(content=jsonable_encoder({
+        "anchor_report_id":report_id,"records":records,
+        "permission":{
+            "scope":"same_organization_same_protocol",
+            "other_records":"opt_in_read_only",
+            "withdrawal":"latest_append_only_event",
+            "judgment":"none",
+        },
     }),headers={"Cache-Control":"private, no-store"})
 
 
@@ -7004,6 +7125,23 @@ def post_protocol_review_version_pi_confirmation(
         raise _catalog_http_error(exc) from exc
 
 
+def _report_photo_resolver(report:Mapping[str,Any])->Callable[[Any],tuple[bytes,str]|None]:
+    """Resolve only this report's authenticated workspace image evidence."""
+
+    session_id=str(report.get("session_id") or "")
+
+    def resolve(image:Any)->tuple[bytes,str]|None:
+        if getattr(image,"kind","")!="photo" or not getattr(image,"asset_id",""):
+            return None
+        response=download_workspace_experiment_evidence(session_id,str(image.asset_id))
+        media_type=str(response.media_type or "")
+        if not media_type.startswith("image/"):
+            return None
+        return bytes(response.body),media_type
+
+    return resolve
+
+
 @app.get("/api/experiment-reports/{report_id}.{format_name}")
 def export_experiment_report(report_id:str,format_name:str):
     """Export one configured report without exposing its database location."""
@@ -7014,6 +7152,7 @@ def export_experiment_report(report_id:str,format_name:str):
         if not settings.enabled or settings.database_path is None:
             raise HTTPException(status_code=404,detail="experiment report unavailable")
         store=ExperimentReportStore(settings.database_path)
+        photo_resolver=_report_photo_resolver(store.get_report(report_id))
         if format_name=="json":
             content=store.export_json(report_id)
             media_type="application/json"
@@ -7028,14 +7167,14 @@ def export_experiment_report(report_id:str,format_name:str):
             media_type="text/csv; charset=utf-8"
         elif format_name=="docx":
             _prepared_report_prose(store,report_id)
-            content=store.export_docx(report_id)
+            content=store.export_docx(report_id,image_resolver=photo_resolver)
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         elif format_name=="pdf":
             # Lane RP2, decision 2: the Word report printed by the server's
             # LibreOffice; without it (or when it fails) the format is refused by name.
             _prepared_report_prose(store,report_id)
             try:
-                content=store.export_pdf(report_id)
+                content=store.export_pdf(report_id,image_resolver=photo_resolver)
             except ReportPdfError as exc:
                 raise HTTPException(status_code=503,detail=exc.code) from exc
             media_type="application/pdf"

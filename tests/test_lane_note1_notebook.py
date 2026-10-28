@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import unittest
+import base64
 from types import SimpleNamespace
+from unittest import mock
 
 from tests.lane_rp3_support import (
     CELL_PURPOSE,
@@ -113,6 +115,11 @@ class NotebookDraftTests(unittest.TestCase):
                     er.audit_notebook_number_provenance(
                         book,
                         source_steps=er._source_steps_from_fixture(fixture),
+                        source_inventory=tuple(
+                            item.name_source_text
+                            for item in (*fixture.draft.protocol.materials,
+                                         *fixture.draft.protocol.equipment)
+                        ),
                         events=record.doc()["events"],
                     ),
                     (),
@@ -162,7 +169,96 @@ class NotebookDraftTests(unittest.TestCase):
         markdown = record.store.export_markdown(
             record.report_id, fixture=cell_protocol(), start_check=None, previous=None,
         ).decode()
-        self.assertIn("| MTT reagent Sigma-Aldrich Catalog #M5655 | 재료 | Sigma-Aldrich | M5655 | VOICE-L25 | 실험 후 |", markdown)
+        self.assertIn("| MTT reagent | 재료 | Sigma-Aldrich | M5655 | VOICE-L25 | 실험 후 |", markdown)
+        coating = self.book(coating_run(self.temporary.name), coating_protocol())
+        teos = next(item for item in coating.inventory if item.name.startswith("TEOS"))
+        self.assertEqual((teos.vendor, teos.catalog_number), ("", ""))
+
+    def test_yield_is_calculated_only_from_person_recorded_raw_values_with_formula(self) -> None:
+        record = coating_run(self.temporary.name)
+        key = record.event(
+            "11:26", "observation", "6",
+            user_wording="실제 수득량 2 mg, 이론 수득량 3 mg",
+            category="measurement",
+        )
+        book = self.book(record, coating_protocol())
+        field = next(item for item in book.domain.fields if item.label == "수득량·수율")
+        self.assertEqual(field.origin, "calculated")
+        self.assertEqual(field.value, "실제 2 mg · 이론 3 mg · 수율 66.67%")
+        self.assertEqual(field.formula, "2 mg ÷ 3 mg × 100 = 66.67%")
+        self.assertEqual(field.source_keys, (key,))
+        markdown = record.store.export_markdown(
+            record.report_id, fixture=coating_protocol(), start_check=None, previous=None,
+        ).decode()
+        self.assertIn("계산식: 2 mg ÷ 3 mg × 100 = 66.67%", markdown)
+        self.assertEqual(
+            er.audit_notebook_number_provenance(
+                book,
+                source_steps=er._source_steps_from_fixture(coating_protocol()),
+                source_inventory=tuple(
+                    item.name_source_text
+                    for item in (*coating_protocol().draft.protocol.materials,
+                                 *coating_protocol().draft.protocol.equipment)
+                ),
+                events=record.doc()["events"],
+            ),
+            (),
+        )
+
+    def test_record_photos_source_figures_and_bars_stay_bound_to_their_step(self) -> None:
+        from docx import Document
+        import io
+        from voiney_lab.source_figures import SourceFigure
+
+        record = cell_run(self.temporary.name, session="session-note1-images")
+        record.event(
+            "03:58", "photo_attached", "6", user_wording="6단계 판독 사진",
+            payload={
+                "evidence_id": "evidence-photo-1", "media_type": "image/png",
+                "interpretation_status": "not_interpreted",
+            },
+        )
+        fixture = cell_protocol()
+        fixture.protocol_id = "protocol-rp3-cell"
+        fixture.revision_id = "rev-rp3-1"
+        fixture.source_pdf_sha256 = "a" * 64
+        fixture.steps = tuple(step for section in fixture.draft.protocol.sections for step in section.steps)
+        figure = SourceFigure(
+            figure_id="source-figure-2-1", source_page=2,
+            bounding_box=(10.0, 20.0, 210.0, 160.0), caption="원문 plate 배치 그림",
+            mime_type="image/png", sha256="b" * 64, byte_size=68,
+            width_px=200, height_px=140,
+        )
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+
+        def figures_for_step(_fixture, index):
+            return (figure,) if index == 0 else ()
+
+        with mock.patch("voiney_lab.source_figures.figures_for_step", side_effect=figures_for_step):
+            book = self.book(record, fixture)
+            self.assertEqual(
+                [(item.kind, item.step_label) for item in book.images if item.asset_id],
+                [("photo", "6"), ("source_figure", "1")],
+            )
+            recorded_photo = next(item for item in book.images if item.asset_id == "evidence-photo-1")
+            self.assertEqual(
+                recorded_photo.url,
+                "/api/workspace/experiments/session-note1-images/evidence/evidence-photo-1",
+            )
+            markdown = record.store.export_markdown(
+                record.report_id, fixture=fixture, start_check=None, previous=None,
+            ).decode()
+            self.assertIn("![6단계 · 6단계 판독 사진]", markdown)
+            self.assertIn("원문 plate 배치 그림", markdown)
+            self.assertIn("█", markdown)
+            docx = record.store.export_docx(
+                record.report_id, fixture=fixture, start_check=None, previous=None,
+                image_resolver=lambda image: (png, "image/png") if image.asset_id else None,
+            )
+        document = Document(io.BytesIO(docx))
+        self.assertEqual(len(document.inline_shapes), 2)
 
 
 if __name__ == "__main__":
