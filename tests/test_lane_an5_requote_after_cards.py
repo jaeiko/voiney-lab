@@ -237,6 +237,9 @@ class TimeLimitTests(_RequoteCase):
             self.assertTrue(all(not future.done() for future in futures))
             return set(), set(futures)
 
+        watchdog = threading.Timer(300, release.set)
+        watchdog.daemon = True
+        watchdog.start()
         try:
             with patch("voiney_lab.protocol_catalog.REQUOTE_TIME_LIMIT_SECONDS", 0.2), patch.object(
                 analysis_module, "wait_for_futures", expire
@@ -246,9 +249,11 @@ class TimeLimitTests(_RequoteCase):
             self.assertTrue(pending)
             self.assertTrue(all(not future.done() for future in pending))
         finally:
+            watchdog.cancel()
             release.set()
             for future in pending:
                 future.result(timeout=300)
+            watchdog.join(300)
         self.assertEqual(entry.review_pending["needs_review_count"], 2)
         self.assertEqual(self.events("protocol_analysis_review_cards_closed"), [])
         (event,) = self.events("protocol_analysis_evidence_requote")
