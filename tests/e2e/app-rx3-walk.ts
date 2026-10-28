@@ -20,6 +20,7 @@ export async function mockRecords(page: Page, admin = false) {
       if (record[2] === 'reports') return route.fulfill({ json: { reports: [{ ...REPORT, report_id: `report-${row.session_id}`, protocol_title: row.protocol_title, owner_principal_id: row.owner_principal_id }] } });
       if (record[2].startsWith('evidence/')) return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="96"><rect width="160" height="96" fill="#efefec"/><text x="16" y="52">Synthetic sample</text></svg>' });
     }
+    if (/^\/api\/experiment-reports\/report-rx3-[0-2]\/prose$/.test(path)) return route.fulfill({ json: { state: 'ready', label: '보고서 문장이 준비됐어요.' } });
     const notebook = /^\/api\/experiment-reports\/report-(rx3-[0-2])\/notebook$/.exec(path);
     if (notebook) {
       const row = RECORDS.find(r => r.session_id === notebook[1])!;
@@ -89,9 +90,10 @@ export async function entryWalk(page: Page) {
   await page.goto('/index.html#/settings/?from=bookmark');
   await expect(page).toHaveURL(/\/app\/#\/settings\/\?from=bookmark$/);
   await expect(page.getByTestId('settings-screen')).toBeVisible();
-  // A protocol detail still belongs to the retained screen: a one-way escape, never a redirect loop.
+  // Protocol details now stay on the new screen, including a missing-detail error.
   await page.goto('/app/#/protocols/source-0');
-  await expect(page).toHaveURL(/\/index.html\?legacy=1#\/protocols\/source-0$/);
+  await expect(page).toHaveURL(/\/app\/#\/protocols\/source-0$/);
+  await expect(page.getByTestId('protocol-detail')).toBeVisible();
   await page.goto('/?invite=synthetic-invite#/records');
   await expect(page).toHaveURL(/\/app\/\?invite=synthetic-invite#\/records$/);
   const manifest = await page.request.get('/manifest.webmanifest');

@@ -75,7 +75,7 @@ from voiney_lab.language import Transcription
 from voiney_lab.replay_turns import _demo_fixture
 from voiney_lab.server import ListenerSession, voice_socket
 from voiney_lab.tools import ToolContext
-from voiney_lab.vad import EndpointDetector, VadConfig
+from voiney_lab.vad import EndpointDetector, VadConfig, TurnState
 
 SAMPLES = FRAME_BYTES // 2
 SPEED = 10.0
@@ -194,6 +194,7 @@ class BenchSocket:
         self.inbox: list[dict] = []
         self.frames_sent = 0
         self.paused = False
+        self.changed = asyncio.Event()
 
     async def accept(self):
         return None
@@ -202,10 +203,18 @@ class BenchSocket:
         if self.inbox:
             return {"type": "websocket.receive", "text": json.dumps(self.inbox.pop(0))}
         if not self.script:
-            await asyncio.sleep(2.0 / SPEED)
-            if self.inbox:
-                return {"type": "websocket.receive", "text": json.dumps(self.inbox.pop(0))}
-            return {"type": "websocket.disconnect", "code": 1000}
+            # Audio time can end before a worker scheduled under machine
+            # load returns its final STT result. Drain that real turn and
+            # the page's playback receipt before disconnecting. The guard is
+            # a failed bench, never a successful partial measurement.
+            async with asyncio.timeout(10):
+                while True:
+                    self.changed.clear()
+                    if self.inbox:
+                        return {"type": "websocket.receive", "text": json.dumps(self.inbox.pop(0))}
+                    if self.session.detector.state not in {TurnState.PROCESSING, TurnState.AGENT_SPEAKING}:
+                        return {"type": "websocket.disconnect", "code": 1000}
+                    await self.changed.wait()
         kind, value = self.script.pop(0)
         if kind == "text" and str(value.get("type", "")).startswith("bench."):  # type: ignore[union-attr]
             # Lane HEAR2: the bench's own directions, never sent to the server.
@@ -227,6 +236,7 @@ class BenchSocket:
     async def send_text(self, value):
         message = json.loads(value)
         self.sent.append((self.frames_sent, message))
+        self.changed.set()
         if message.get("type") == "audio.segment.start":
             frames = int(message.get("frame_count") or 0)
             turn_id = message.get("turn_id")
@@ -236,6 +246,7 @@ class BenchSocket:
         await asyncio.sleep(frames * 0.02 / SPEED)
         if isinstance(turn_id, int) and turn_id > 0:
             self.inbox.append({"type": "playback.ended", "turn_id": turn_id})
+            self.changed.set()
 
     async def send_bytes(self, value):
         return None

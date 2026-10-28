@@ -4129,7 +4129,7 @@ _TIMER_CONTROL_PATTERNS: tuple[tuple[CuratedProtocolAction, re.Pattern[str]], ..
         rf"^{_TIMER_WORD}\s*(?:좀|잠깐|잠시|잠깐만|잠시만)?\s*"
         rf"(?:일시\s*정지|일시\s*중지|멈춰|멈춤|멈추|정지|중지|스톱|stop|pause|포즈|홀드|hold){_TIMER_ENDINGS}$", re.I)),
     (CuratedProtocolAction.TIMER_RESUME, re.compile(
-        rf"^{_TIMER_WORD}\s*(?:다시\s*시작|재개|계속|이어서|resume|continue){_TIMER_ENDINGS}$", re.I)),
+        rf"^{_TIMER_WORD}\s*(?:다시\s*시작|재개|계속(?:\s*돌려)?|이어서(?:\s*돌려)?|resume|continue){_TIMER_ENDINGS}$", re.I)),
     (CuratedProtocolAction.TIMER_CANCEL, re.compile(
         rf"^{_TIMER_WORD}\s*(?:취소|꺼|끄기|끄자|꺼줘|없애|지워|해제|cancel|clear|off){_TIMER_ENDINGS}$", re.I)),
     (CuratedProtocolAction.TIMER_RESTART, re.compile(
@@ -4231,6 +4231,8 @@ FRONT_RULES: dict[str, str] = {
                     "'N단계 완료하셨나요?' as before where the endpoint is still to "
                     "be observed, a timer at the step has not run out, 바로 확인 "
                     "was chosen or it is the last step (lane VX, decision 1)",
+    "forward_jump": "a named later step asked for as a move: explain how to "
+                    "continue one step at a time, without completing or skipping steps",
     "start_command": "an explicit start of an experiment that has never "
                      "started, and any start or resume after it ended, "
                      "which is not restarted by voice (decision 2, 2026-10-03)",
@@ -4689,6 +4691,7 @@ def _near_resume_word(transcript: str) -> bool:
 
 
 _TIMER_START_PATTERNS = (
+    re.compile(rf"^{_TIMER_WORD}\s*(?:켜|맞춰|설정){_TIMER_ENDINGS}$", re.I),
     re.compile(r"(?:타이머|시간\s*측정|배양\s*시간).*(?:시작|재기\s*시작|재줘|틀어)"),
     re.compile(r"^(?:지금\s*)?시작했어$"),
     re.compile(r"^(?:지금\s*)?timer\s*(?:를|을)?\s+시작(?:\s*해(?:줘|줄래)?)?$", re.I),
@@ -5790,6 +5793,7 @@ _PREVIOUS_STEP = re.compile(
     rf"(?:되?돌아\s*(?:가(?:자|요)?{_REVERT_POLITE}|갈게요?|갈래요?)|가(?:자|요)?{_REVERT_POLITE}"
     rf"|이동(?:해)?{_REVERT_POLITE})$"
 )
+_BACK_ONE_STEP = re.compile(rf"^(?:한|1)\s*단계\s*뒤로(?:\s*(?:돌아가|가|이동해))?{_REVERT_POLITE}$")
 _UNDO_COMPLETION = re.compile(
     r"^(?:(?:그럼|자|아)\s+)*(?:(?P<number>[1-9][0-9]?)\s*단계\s*|(?:방금|마지막|아까)\s*)?"
     r"(?:완료(?:한\s*(?:거|것|단계))?(?:를|을)?\s*)취소(?:해|하자|할게|할래)?"
@@ -5809,7 +5813,7 @@ def step_revert_request(transcript: str) -> StepRevertRequest | None:
     said = " ".join(transcript.split()).strip(" .!。")
     if not said or "?" in said or "？" in said:
         return None
-    if _PREVIOUS_STEP.fullmatch(said):
+    if _PREVIOUS_STEP.fullmatch(said) or _BACK_ONE_STEP.fullmatch(said):
         return StepRevertRequest("previous", None)
     match = _UNDO_COMPLETION.fullmatch(said)
     if match is not None:
@@ -6198,7 +6202,7 @@ _NEXT_INFORMATION_PATTERNS = (
     re.compile(
         r"^(?:(?:이제|그럼|혹시)\s*)?"
         r"(?:다음\s*(?:단계|스텝)|next\s*step)"
-        r"(?:(?:는|가|에\s*대해|에\s*대해서|의|은)?\s*)"
+        r"(?:(?:는|가|에서|에\s*대해|에\s*대해서|의|은)?\s*)"
         r"(?:(?:내용(?:만)?\s*)?(?:미리\s*)?"
         r"(?:뭐야|무엇|어떤\s*(?:단계(?:야)?|거야?|것이야?|내용이야?|작업이야?)|"
         r"(?:뭘|무엇을?|뭐)\s*(?:하는\s*(?:단계(?:야)?|거(?:야)?|것(?:이야)?|일(?:이야)?|동작(?:이야)?)|해)|"
@@ -8576,6 +8580,13 @@ def curated_intent_from_arbitration(
         "confidence_source": "authoritative_request_arbiter",
         "question_dimensions": decision.dimensions,
     }
+    if decision.reason_code == 'problem_contingency_question':
+        return CuratedControlIntent(
+            intent_kind='problem_contingency_question',
+            action=CuratedProtocolAction.RELATED_QUESTION,
+            target_step='authoritative_current_step', question_kind='troubleshooting',
+            **common,
+        )
     if decision.intent is RequestIntent.LEARNING:
         warning_only = decision.reason_code == "current_step_warning"
         return CuratedControlIntent(
@@ -8587,6 +8598,18 @@ def curated_intent_from_arbitration(
             **common,
         )
     if decision.intent is RequestIntent.COMBINED_LEARNING_NEXT:
+        if decision.reason_code == "learning_and_next_command":
+            return CuratedControlIntent(
+                intent_kind="next_step_confirmation_required",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+                requested_transition="next",
+                requested_followup="explain_then_confirm_completion",
+                target_step="authoritative_current_step",
+                question_kind="combined_information",
+                requires_confirmation=True,
+                allows_state_mutation=False,
+                **common,
+            )
         return CuratedControlIntent(
             # Read by the CLARIFY_COMPLETION branch, which answers the
             # rationale and the next step together and asks nothing back
@@ -9993,6 +10016,39 @@ _TRANSLATABLE_TERMS = frozenset({
 })
 
 
+# The v5 translation glossary and both reading checks use this same table.
+COMMON_LAB_WORDS = {
+    "band": "밴드", "gel": "젤", "vial": "바이알", "tube": "튜브",
+    "bead": "비즈", "supernatant": "상층액", "pipette": "피펫",
+}
+
+
+def _translation_term_present(term: str, reading: str) -> bool:
+    """Keep a required name, allowing only v5's explicit common-noun forms.
+
+    Replace whole whitespace-delimited words only, so Band100, Gel-100 and
+    longer names keep their spelling. Capitalised words inside a mixed name
+    also stay English; a standalone common noun may be capitalised.
+    """
+    folded = " ".join(reading.split()).casefold()
+    source = " ".join(term.split())
+    if source.casefold() in _TRANSLATABLE_TERMS or source.casefold() in folded:
+        return True
+
+    def common(word: str) -> str | None:
+        stem = word.casefold()
+        if stem.endswith("s"):
+            stem = stem[:-1]
+        return COMMON_LAB_WORDS.get(stem)
+
+    words = source.split()
+    common_phrase = bool(words) and all(common(word) is not None for word in words)
+    equivalent = " ".join(
+        (common(word) or word) if common_phrase or word.islower() else word
+        for word in words).casefold()
+    return equivalent in folded
+
+
 def _normalized_counts(value: str) -> str:
     """Count words as digits, the same rules for a source and a reading."""
 
@@ -10197,11 +10253,8 @@ def reader_translation_issue(
     if bool(_SOURCE_NEGATION.search(source)) != bool(
             _KOREAN_NEGATION.search(_without_un_renderings(source, reading))):
         return "negation_changed"
-    folded = text.casefold()
     for term in required_terms:
-        if term.casefold() in _TRANSLATABLE_TERMS:
-            continue
-        if term.casefold() not in folded:
+        if not _translation_term_present(term, text):
             return "term_missing"
     return None
 
@@ -15095,6 +15148,16 @@ class CuratedProtocolSession:
             return None
         elif request.kind == "from" and (target is None or target > current):
             kind = "start_at_step"
+        elif request.kind == "go" and target is not None and target > current:
+            # A named future step is not evidence that intermediate steps
+            # happened. Explain the boundary without completing or skipping.
+            self._last_front_rule = 'forward_jump'
+            plan = self._words_plan(
+                f"{steps[target].source_label}단계로 바로 이동하지 않았어요. 한 단계씩 진행하려면 '다음'이라고 말씀해 주세요.",
+                intent_kind='forward_jump_clarification', action=CuratedProtocolAction.CLARIFY_REFERENCE,
+            )
+            self._replay[turn_id] = plan
+            return plan
         elif request.kind in {"from", "go"} and target is not None and target >= current:
             return None
         elif (
@@ -16935,10 +16998,10 @@ class CuratedProtocolSession:
             # The step's purpose is the section the source puts it in, named
             # as the source names it -- never a sentence written for one PDF.
             # Lane SAY, decision 4: 해요체, short.
-            if section_title:
+            if section_title and _HANGUL_LETTER.search(section_title):
                 purpose = f"원문의 ‘{concise(section_title, 90)}’ 부분"
             else:
-                purpose = "원문 순서대로 다음 단계를 준비하는 단계"
+                purpose = None
 
             if warning_only:
                 speech = (
@@ -16948,7 +17011,11 @@ class CuratedProtocolSession:
                     else "현재 PDF에는 이 단계의 별도 주의사항이 명시되어 있지 않습니다. 추가 안전 판단은 담당자에게 확인해 주세요."
                 )
             else:
-                speech = f"이 단계는 {purpose}이에요." if purpose.endswith("분") else f"이 단계는 {purpose}예요."
+                speech = (
+                    f"이 단계는 {purpose}이에요." if purpose and purpose.endswith("분")
+                    else f"이 단계는 {purpose}예요." if purpose
+                    else "이 단계의 원문 설명을 화면에 띄웠어요."
+                )
                 if expected_facts:
                     localized_expected = (
                         self._localized_fact(step.step_id, expected_facts[0].fact_id)
@@ -16987,7 +17054,9 @@ class CuratedProtocolSession:
                 if warning_facts:
                     speech += f" The source warning is: {concise(warning_facts[0].text)}"
 
-        display_lines = [speech, "", "Source evidence"]
+        display_lines = [speech, "", "원문 · English" if language == "ko" else "Source evidence"]
+        if section_title:
+            display_lines.append(section_title)
         display_lines.extend(
             f"- PDF p.{fact.source_page} · {fact.text}" for fact in evidence
         )
@@ -17416,7 +17485,11 @@ class CuratedProtocolSession:
                 normalized_transcript=_utterance_key(transcript),
             )
         shared_decision = arbitration or arbitrate_request(transcript)
-        intent = _front_control_intent(transcript, language) or curated_intent_from_arbitration(
+        combined_move = (
+            curated_intent_from_arbitration(shared_decision, language=language)
+            if shared_decision.reason_code == "learning_and_next_command" else None
+        )
+        intent = combined_move or _front_control_intent(transcript, language) or curated_intent_from_arbitration(
             shared_decision,
             language=language,
         ) or classify_curated_control_intent(
@@ -19278,6 +19351,9 @@ class CuratedProtocolSession:
     def _question_checkpoint(self, transcript: str, language: str) -> tuple[Any, ...] | None:
         if (language == "ko"
                 and is_question_or_speculation(transcript, literal_record=True)
+                # An indirect question in "왜 하는지 알려주고 ... 넘어가"
+                # does not erase the explicitly requested completion gate.
+                and arbitrate_request(transcript).reason_code != "learning_and_next_command"
                 and not _asserted_spill_clause(transcript)):
             return self._checkpoint()
         return None
@@ -23809,12 +23885,17 @@ class CuratedProtocolSession:
                 ),
                 }).get(language, "현재 단계를 완료하고 다음으로 이동할지 확인해 주세요.")
             if intent.intent_kind != "learning_and_next_preview":
+                learning_facts = ()
+                if intent.requested_followup == "explain_then_confirm_completion":
+                    learning_display, learning_speech, learning_facts, _ = self._step_learning_presentation(language=language)
+                    reask_speech = f"{learning_speech} {response}"
+                    response = f"{learning_display}\n\n{response}"
                 plan = CuratedProtocolTurnPlan(
                     action=CuratedProtocolAction.CLARIFY_COMPLETION,
                     display_text=response,
                     speech_text=reask_speech or response,
                     speech_mode=CuratedProtocolSpeechMode.BLOCKED,
-                    facts=(),
+                    facts=learning_facts,
                     step_label=step.source_label,
                     final_step=self.current_index == len(steps) - 1,
                     state_changed=False,

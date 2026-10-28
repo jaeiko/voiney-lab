@@ -8,7 +8,7 @@ import type { CatalogEntry } from "../api/types";
 import { Chip, EmptyBox, ErrorBox, LoadingBox, Note } from "../components/Pieces";
 import { StepProgress } from "../components/StepProgress";
 import { start as copy } from "../copy/ko";
-import { go, oldRoutes, routes } from "../lib/navigation";
+import { go, routes } from "../lib/navigation";
 import { protocolStatus, sortEntries } from "../lib/protocolStatus";
 import { loadVoiceScripts, primeStart, startRun } from "../voice/engine";
 import { RunChangesStep } from "../components/RunChangesStep";
@@ -185,7 +185,7 @@ function CheckStep({ protocolId, onLoaded, onNext, onBack }: { protocolId: strin
           <div className="start-choices">
             {(wrong.followups ?? []).map((item) =>
               item.choice_id === "open_card" ? (
-                <a key={item.choice_id} className="btn btn-big" href={oldRoutes.protocol(protocolId)}>
+                <a key={item.choice_id} className="btn btn-big" href={routes.review(protocolId)}>
                   {copy.check.openCard}
                 </a>
               ) : item.request ? (

@@ -259,7 +259,7 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "stt_unreliable", "pause", "end_command", "yes_no_open_question",
             "observation_reply", "timer_remaining", "coreference_clarify",
             "repeat_last_reply", "cancel_background_job", "targeted_completion",
-            "start_command", "server_value_query", "step_lookup",
+            "start_command", "server_value_query", "step_lookup", "forward_jump",
             # lane M1, decision 5a
             "quantity_target",
             # lane XO, decision 5

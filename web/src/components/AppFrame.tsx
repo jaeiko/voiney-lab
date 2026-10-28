@@ -19,7 +19,7 @@ interface Props {
 
 /** The menu item a route belongs to: the upload, the analysis, the cards and today's values are the protocols'. */
 export function menuKeyOf(current: RouteName): string {
-  if (current === "upload" || current === "analysis" || current === "review" || current === "changes") return "protocols";
+  if (current === "protocol" || current === "upload" || current === "analysis" || current === "review" || current === "changes") return "protocols";
   // Lane RX2: the start flow and the run are the experiment's.
   if (current === "start" || current === "run") return "experiment";
   if (current === "record" || current === "notebook") return "records";

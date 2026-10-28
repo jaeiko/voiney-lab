@@ -6,6 +6,8 @@ import { isSessionExpired, signedOut, useExperiments, useSignOutOnExpiry, useWor
 import type { AuthSession, Experiment } from '../api/types';
 import { EmptyBox, ErrorBox, LoadingBox, Note } from '../components/Pieces';
 import { records as c } from '../copy/ko';
+import { RecordCapture, CheckpointRestart, ReportPreparation } from './RecordActions';
+import { useRun } from '../voice/runStore';
 import { oldRoutes, routes } from '../lib/navigation';
 
 const recordKey = (id: string, part: string) => ['records', id, part];
@@ -87,6 +89,7 @@ function Timeline({ items, sessionId }: { items: RecordEvent[]; sessionId: strin
 
 export function RecordDetailScreen({ sessionId }: { sessionId: string }) {
   const client = useQueryClient();
+  const run = useRun();
   const experiment = useQuery({ queryKey: recordKey(sessionId, 'session'), queryFn: () => recordsApi.experiment(sessionId) });
   const timeline = useQuery({ queryKey: recordKey(sessionId, 'timeline'), queryFn: () => recordsApi.timeline(sessionId), enabled: experiment.isSuccess });
   const reports = useQuery({ queryKey: recordKey(sessionId, 'reports'), queryFn: () => recordsApi.reports(sessionId), enabled: experiment.isSuccess });
@@ -118,6 +121,10 @@ export function RecordDetailScreen({ sessionId }: { sessionId: string }) {
         {timelineFailed ? <ErrorBox message={c.failed} onRetry={refresh} /> : null}
         {items.length ? <Timeline items={items} sessionId={sessionId} /> : !timelineLoading && !timelineFailed ? <EmptyBox message={c.noEvents} /> : null}
       </section>
+      {workspace.data?.principal_id && experiment.data.owner_principal_id === workspace.data.principal_id ? <>
+        <RecordCapture key={sessionId} sessionId={sessionId} refresh={refresh} />
+        {experiment.data.status === 'stopped' && timeline.isSuccess ? <CheckpointRestart sessionId={sessionId} version={timeline.data.session?.version ?? experiment.data.version ?? 0} recovery={timeline.data.recovery} refresh={refresh} disabled={run.active || run.phase === 'starting' || run.phase === 'stopping'} /> : null}
+      </> : null}
       <details><summary>{c.legacy}</summary><p>{c.legacyWhy}</p><a className='btn' href={oldRoutes.record(sessionId)}>{c.legacy}</a></details>
     </>}
   </section>;
@@ -161,15 +168,17 @@ function PiConfirmation({ reportId, refresh }: { reportId: string; refresh: () =
 }
 
 export function NotebookScreen({ sessionId, reportId, session }: { sessionId: string; reportId: string; session: AuthSession }) {
+  const client = useQueryClient();
   const query = useQuery({ queryKey: notebookKey(reportId), queryFn: () => recordsApi.notebook(reportId) });
   const workspace = useWorkspaceSession();
   useSignOutOnExpiry([query.error, workspace.error].find(isSessionExpired));
   const data = query.data, mismatched = Boolean(data?.report.session_id && data.report.session_id !== sessionId), n = data?.notebook;
   const editable = Boolean(workspace.data?.principal_id && data?.report.owner_principal_id === workspace.data.principal_id);
   const otherOwner = Boolean(workspace.data?.principal_id && data?.report.owner_principal_id && data.report.owner_principal_id !== workspace.data.principal_id);
-  const refresh = () => void query.refetch();
+  const refresh = () => { void query.refetch(); void client.invalidateQueries({ queryKey: ['report-prose', reportId] }); };
   return <section className='records-screen notebook-screen' data-testid='notebook-screen'>
     <a className='btn btn-quiet' href={routes.record(sessionId)}>{c.timeline}</a><h1>{c.notebooks}</h1><p className='page-why'>{c.notebookWhy}</p>
+    {query.isSuccess && !mismatched ? <ReportPreparation key={reportId} reportId={reportId} editable={editable && data!.report.status !== 'in_progress'} refresh={refresh} /> : null}
     {query.isPending ? <LoadingBox label={c.loading} /> : query.isError || mismatched ? <ErrorBox message={c.failed} onRetry={refresh} /> : !n ? <EmptyBox message={c.noNotebook} /> : <>
       <h2>{n.title}</h2><Downloads key={reportId} reportId={reportId} /><Rows rows={n.header_rows} />
       {!editable ? <p>{otherOwner ? c.readOnly : c.readOnlyGeneral}</p> : null}

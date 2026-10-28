@@ -29,7 +29,6 @@ def test_real_server_read_only_and_completion_confirmation():
     assert score_case(cases['current'], read)['wrong_state'] is False
 
 
-@pytest.mark.xfail(reason='Existing explicit explain+next wording returns current_step_learning; SIM records this miss; no product behaviour change in this lane', strict=False)
 def test_existing_mixed_command_must_stage_completion_confirmation():
     protocol=load_corpus()[0]
     case=next(c for c in generate_cases(protocol) if c.family=='mixed' and '왜' in c.text)
@@ -291,7 +290,6 @@ def test_english_copy_finds_short_instructions_but_allows_term_names():
     assert not english_copy('HPLC water를 사용해요.','Use HPLC water.')
 
 
-@pytest.mark.xfail(reason='Existing emergency gate misses eye chemical splash; source server unchanged in SIM; score retains forbidden anomaly mutation',strict=False)
 def test_existing_eye_splash_emergency_must_never_record_anomaly():
     p=load_corpus()[0]
     c=next(c for c in generate_cases(p) if c.family=='emergency' and '눈' in c.text)

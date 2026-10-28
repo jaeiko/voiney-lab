@@ -11,6 +11,8 @@ import { useRun } from "../voice/runStore";
 import { CaptionBar } from "./run/CaptionBar";
 import { EndScreen } from "./run/EndScreen";
 import { FigurePanel } from "./run/FigurePanel";
+import type { AuthSession } from "../api/types";
+import { RunTools } from "./run/RunTools";
 import { RecordsPanel } from "./run/RecordsPanel";
 
 // The experiment screen (lane RX2, person's decision 2 of 2026-10-25): the
@@ -238,7 +240,7 @@ function StopDialog({ disabled, testId = "run-stop" }: { disabled: boolean; test
   );
 }
 
-export function RunScreen() {
+export function RunScreen({ session }: { session?: AuthSession } = {}) {
   const snapshot = useRun();
   const narrow = useNarrow();
   const now = useClock(500);
@@ -353,6 +355,7 @@ export function RunScreen() {
           ) : null}
         </StepPanel>
         <FigurePanel figures={figures} />
+        <RunTools session={session ?? { mode: "accounts", signed_in: true, account: null }} />
       </main>
       <RecordsPanel experimentId={snapshot.experimentId} refreshKey={recordsKey(model)} narrow={narrow} />
       <CaptionBar caption={model.caption} log={model.log} />

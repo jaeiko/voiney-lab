@@ -654,9 +654,7 @@ follows the switch while retaining installation id `/`. The launchers call
 build fails. It keeps the old hash routes (`#/home`, `#/protocols`) and has its own
 (`#/upload`, `#/protocols/<id>/analysis`, `#/protocols/<id>/review`,
 `#/protocols/<id>/changes` — lane RX1; `#/start`, `#/start/<id>`,
-`#/experiment`, `#/settings`, `#/welcome` — lane RX2); a route it has not
-taken over (`#/protocols/<id>`) is opened on the old screen at
-`/index.html?legacy=1`. Records and notebooks have their own routes
+`#/experiment`, `#/settings`, `#/welcome` — lane RX2); the full protocol detail (`#/protocols/<id>`) reads the existing review, reagent-table and review-version APIs. Only an unknown route uses the old screen at `/index.html?legacy=1`. Records and notebooks have their own routes
 (`#/records`, `#/records/<session>`,
 `#/records/<session>/notebook/<report>`). The read-only
 `GET /api/experiment-reports/{report}/notebook` returns the existing
@@ -670,7 +668,7 @@ the session's events (the audio and fence conditions as index.html's
 `onMessage`; `tests/test_lane_rx2_voice_core.py` compares them) and draws the
 server's protocol state through `runModel.ts`. The start flow, the settings
 and the first guide use the same HTTP routes as the old start sheet and
-settings.
+settings. Record owners can append typed notes and files, create a new paused experiment from the server checkpoint/version, and explicitly regenerate report prose; reads never prepare prose. The run settings dialog saves preferences for the next run. Language, microphone and gain choices remain device-local. Dropped-speech reasons (last 50, total count) and allowlisted diagnostic codes/timings (last 50, developer/admin only) stay in browser memory and reset on a new run.
 It holds no workflow state: the home's one card and the list's chips are
 read from `/api/auth/session`, `/api/protocols`, `/api/protocols/{id}`
 (`analysis_run` for a row being analysed), `/api/workspace/experiments` and

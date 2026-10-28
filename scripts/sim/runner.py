@@ -64,7 +64,8 @@ class Capture:
 
 async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                    transcriber: Callable[..., Any] | None = None, synthesizer: Callable[..., bytes] | None = None,
-                   router_settings: Any = None, offline: bool = True, classifier: Callable | None = None, stt_provider: str = 'google_cloud', role_client: Callable | None = None) -> dict:
+                   router_settings: Any = None, offline: bool = True, classifier: Callable | None = None, stt_provider: str = 'google_cloud', role_client: Callable | None = None,
+                   oracle_environment: bool = False) -> dict:
     """Only provider boundaries are replaced; emergency/front rules/gates are production code."""
     from voiney_lab.curated_protocol import CuratedProtocolSession
     from voiney_lab.vad import EndpointDetector, VadConfig
@@ -72,10 +73,15 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
     from voiney_lab.tools import ToolContext
     from pathlib import Path
     with ExitStack() as stack:
-        if offline:
-            # No inherited keys or feature switches, even on a developer shell.
-            safe = {k:v for k,v in os.environ.items() if k in {'PATH', 'HOME', 'LANG', 'PYTEST_VERSION'}}
+        if offline or oracle_environment:
+            # Oracle comparisons differ only in their explicit router treatment.
+            # Networked oracle runs keep provider authentication, but no other
+            # inherited product switches. Their router client is already built.
+            safe = ({k:v for k,v in os.environ.items() if k in {'PATH', 'HOME', 'LANG', 'PYTEST_VERSION'}}
+                    if offline else {k:v for k,v in os.environ.items()
+                                     if not k.startswith('VOINEY_LAB_')})
             stack.enter_context(patch.dict(os.environ, safe, clear=True))
+        if offline:
             stack.enter_context(patch.object(socket.socket, 'connect', side_effect=RuntimeError('offline_network_forbidden')))
         # Disable persistence/diagnostic capture; neither mode writes lab runtime data.
         stack.enter_context(patch.dict(os.environ, {
@@ -145,7 +151,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                 tb=tb.tb_next
             error_codes.append(f'{kind.__name__}:{Path(tb.tb_frame.f_code.co_filename).name}:{tb.tb_lineno}' if kind and tb else 'server_error')
         stack.enter_context(patch.object(server.log, 'exception', side_effect=error))
-        if offline:
+        if offline or role_client is not None:
             # Missing roles remain visibly unavailable, with no fallback provider.
             stack.enter_context(patch.object(server, '_role_client', side_effect=role_client or RuntimeError('sim_role_unavailable')))
         source = oracle_audio(case.family == 'noise') if pcm is None else pcm
@@ -207,9 +213,15 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         if not committed and not drops:
             drops = ['no_vad_endpoint']
         timings = done.get('timings_ms', {})
+        from scripts.sim.metrics import protected_scientific_names
+        protected = protected_scientific_names(
+            list((protocol.fixture.localizations or {}).values()) + list((protocol.fixture.machine_localizations or {}).values()),
+            ' '.join(page.text for page in protocol.fixture.draft.extraction.pages))
         return {
+            'protected_names':protected,
             'invalid_state':invalid_state, 'error_codes': error_codes, 'action': done.get('result_kind', decision.get('action')), 'intent_kind': done.get('intent_kind'),
             'route': done.get('route'), 'runtime_router':decision.get('runtime_router'),
+            'front_rule':workflow.last_front_rule,
             'router_handled':decision.get('router',{}).get('handled_by'), 'changed_fields': sorted(k for k in before if before[k] != after[k]),
             'step_before': before['step'][0], 'step_after': after['step'][0],
             'transcript': ' '.join(hypotheses), 'spoken': ' '.join(capture.spoken),
