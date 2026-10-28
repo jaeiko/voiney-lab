@@ -112,6 +112,26 @@ describe("RunScreen", () => {
     expect(screen.getByTestId("run-far-prompt")).not.toHaveTextContent("화면에 나온 선택지");
   });
 
+  it("far view continues after the server has recorded an observation", () => {
+    act(() => setDisplayMode("far"));
+    running({}, { card: { turnId: 5, kind: "record", text: "투명해졌다고 기록했어요.", candidates: [], values: ["투명해졌어요"], stepId: "step-4" } });
+
+    renderWithClient(<RunScreen />);
+
+    expect(screen.getByTestId("run-far-prompt")).toHaveTextContent('끝났으면 "다음"이라고 말해 주세요.');
+    expect(screen.getByTestId("run-far-prompt")).not.toHaveTextContent("남길 내용을 말해 주세요");
+  });
+
+  it("far view asks for the words again when a retry card has no choices", () => {
+    act(() => setDisplayMode("far"));
+    running({}, { card: { turnId: 6, kind: "clarify", text: "한 번 더 말해 주세요.", candidates: [], values: [], stepId: "step-4" } });
+
+    renderWithClient(<RunScreen />);
+
+    expect(screen.getByTestId("run-far-prompt")).toHaveTextContent("한 번 더 말해 주세요.");
+    expect(screen.getByTestId("run-far-prompt")).not.toHaveTextContent("선택지를 다시 말해 주세요");
+  });
+
   it("while paused: the band across the screen, the word 일시정지, [다시 시작] resumes", async () => {
     const user = userEvent.setup();
     running({ workflow_status: "paused" });

@@ -312,9 +312,7 @@ export function RunScreen({ session }: { session?: AuthSession } = {}) {
         ? copy.far.confirm
         : model.card?.kind === "clarify"
           ? copy.far.clarify(model.card.candidates)
-          : model.card?.kind === "record"
-            ? copy.far.record
-            : copy.far.continue;
+          : copy.far.continue;
     return (
       <div className="run run-far" data-testid="run-screen" data-display="far" data-paused={paused}>
         <p id="run-announcer" className="sr-only" aria-live="assertive" />

@@ -242,9 +242,8 @@ export const run = {
     confirm: '맞으면 “네”, 아니면 “아니요”라고 말해 주세요.',
     clarify: (choices: readonly string[] | string) => {
       const names = typeof choices === "string" ? [choices] : choices;
-      return names.length ? `${names.map((choice) => `“${choice}”`).join(" 또는 ")}라고 말해 주세요.` : "선택지를 다시 말해 주세요.";
+      return names.length ? `${names.map((choice) => `“${choice}”`).join(" 또는 ")}라고 말해 주세요.` : "한 번 더 말해 주세요.";
     },
-    record: "남길 내용을 말해 주세요.",
     normal: '“보통 화면”이라고 말하면 돌아가요.',
   },
   listening: {
