@@ -32,7 +32,7 @@ export async function hood1Walk(page: Page) {
   expect(far.step).toBeGreaterThanOrEqual(72);
   expect(far.timer).toBeGreaterThanOrEqual(144);
   expect(far.prompt).toBeGreaterThanOrEqual(32);
-  expect(far.background).toBe('rgb(0, 0, 0)');
+  expect(far.background).toBe('rgb(28, 28, 26)');
   expect(far.color).toBe('rgb(255, 255, 255)');
   expect(await overflow(page)).toBe(0);
 

@@ -292,6 +292,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "mixed_move",
             # lane HEAR2, decision 3 (2026-10-26): the timer's voice commands
             "timer_control",
+            # lane HOOD1: device display only; no workflow checkpoint changes
+            "display_mode",
         })
 
 
