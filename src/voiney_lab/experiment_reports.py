@@ -3465,6 +3465,8 @@ class NotebookValueBar:
     source_number: str
     actual_number: str
     unit: str
+    source_unit: str
+    actual_unit: str
     source_key: str
 
 
@@ -4264,7 +4266,14 @@ _PLATE_POSITION = re.compile(
     r"(?<![A-Za-z0-9])(?:[A-Ha-h](?:[1-9]|1[0-2])|\d+\s*번)\s*(?:well|웰)(?![A-Za-z])",
     re.I,
 )
-_MATERIAL_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,8}[-_]\d{1,6})(?![A-Za-z0-9])")
+_MATERIAL_IDENTIFIER = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"[A-Za-z]{1,8}[-_]\d{1,6}"
+    r"|\d+\s*번\s*(?:셀|cell|시료|샘플|sample)"
+    r"|(?:셀|cell|시료|샘플|sample)\s*\d+\s*번"
+    r")(?![A-Za-z0-9])",
+    re.I,
+)
 
 
 def _notebook_visual_facts(
@@ -4326,7 +4335,8 @@ def _notebook_visual_facts(
             label=f"{value.label}단계 · {value.kind}", kind=value.kind,
             source=left.written, actual=right.written,
             source_number=left.number, actual_number=right.number,
-            unit=left.unit, source_key=value.key,
+            unit=left.unit, source_unit=left.unit, actual_unit=right.unit,
+            source_key=value.key,
         ))
     sample_rows = tuple(NotebookSampleRow(identifier, tuple(dict.fromkeys(records)))
                         for identifier, records in sample_records.items())
@@ -4959,9 +4969,6 @@ def audit_notebook_number_provenance(
         admitted.update(normalized(value) for value in _NUMBER.findall(
             rebuilt_yield.value + "\n" + rebuilt_yield.formula
         ))
-    # Counts shown by progress/system summaries are projections of the rows,
-    # not claims supplied by a model.
-    admitted.update(str(value) for value in range(0, len(events) + len(source_steps) + 2))
     moments = []
     for event in events:
         try:
@@ -5961,7 +5968,7 @@ def authorship_line(narrative: ReportNarrative) -> str:
     # interpretation stays blank.  A separately prepared model suggestion is
     # therefore never part of the notebook body, even when its grounding
     # check passed.
-    line = f"{base} AI 가 쓴 문장은 없다."
+    line = f"{base} 모델이 쓴 문장은 포함하지 않았다."
     return f"{line} 작성 {when}."
 
 

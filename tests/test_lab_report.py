@@ -477,14 +477,14 @@ class ReportLayoutTests(_ReportCase):
         self.at("02:00")
         text = er.render_markdown(self.narrative())
         self.assertTrue(text.rstrip().endswith(
-            "> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다. AI 가 쓴 문장은 없다. "
+            "> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다. 모델이 쓴 문장은 포함하지 않았다. "
             "작성 2026년 10월 6일 11:00."), text[-300:])
         # Model output may be prepared for other derived exports, but the
         # handoff notebook itself remains source-and-record only.
         text = er.render_markdown(self.narrative(GOOD_REPLY))
         self.assertTrue(text.rstrip().endswith(
             "> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다. "
-            "AI 가 쓴 문장은 없다. 작성 2026년 10월 6일 11:00."), text[-300:])
+            "모델이 쓴 문장은 포함하지 않았다. 작성 2026년 10월 6일 11:00."), text[-300:])
 
 
 class _SlowClient(_Client):
@@ -550,7 +550,7 @@ class ReportProsePreparationTests(_ReportCase):
         self.store.export_docx(self.report_id, fixture=self.fixture)
         self.assertEqual(len(client.calls), 1)
         self.assertNotIn("> AI 정리 —", text)
-        self.assertIn("AI 가 쓴 문장은 없다", text)
+        self.assertIn("모델이 쓴 문장은 포함하지 않았다", text)
 
     def test_asking_again_is_a_second_call(self) -> None:
         self.run_steps_one_to_four_then_stop()
@@ -566,7 +566,7 @@ class ReportProsePreparationTests(_ReportCase):
         self.assertEqual((status["state"], status["ai_written"]), ("ready", False))
         self.assertIn("서버 문장", status["label"])
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
-        self.assertIn("AI 가 쓴 문장은 없다", text)
+        self.assertIn("모델이 쓴 문장은 포함하지 않았다", text)
 
     def test_a_failed_model_leaves_the_servers_sentences(self) -> None:
         self.run_steps_one_to_four_then_stop()
@@ -577,7 +577,7 @@ class ReportProsePreparationTests(_ReportCase):
         self.assertIn("AI 문장을 쓰지 못함: 모델 답 실패(JSONDecodeError)", status["label"])
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         self.assertNotIn("AI 정리 —", text)
-        self.assertIn("AI 가 쓴 문장은 없다", text)
+        self.assertIn("모델이 쓴 문장은 포함하지 않았다", text)
 
     def test_records_added_after_preparing_appear_and_are_counted(self) -> None:
         self.run_steps_one_to_four_then_stop()

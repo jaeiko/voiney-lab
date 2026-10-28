@@ -252,7 +252,7 @@ class ExperimentReportStoreTests(unittest.TestCase):
         self.assertIn("젤 밴드를 1x1 mm 크기로 잘랐습니다.", text)
         self.assertIn("워시 완충액을 넣었습니다.", text)
         self.assertNotIn("모든 단계가 정상적으로 완료되었다", text)
-        self.assertIn("AI 가 쓴 문장은 없다", text)
+        self.assertIn("모델이 쓴 문장은 포함하지 않았다", text)
 
     def test_docx_export_contains_grounded_step_table(self):
         report = self.open()

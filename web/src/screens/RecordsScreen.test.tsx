@@ -130,7 +130,7 @@ it('shows the grounded notebook skeleton, deterministic visuals, Methods fields 
       ...NOTEBOOK.notebook,
       method_rows: [{ label: '1', source_text: 'Mix for 60 s.', actual_values: '60 s → 90 s', started_at: '10:00', ended_at: '10:02', timer: '실제 90초' }],
       timeline: [{ at: '10:00', step_label: '1', kind: 'start', text: '실험 시작' }, { at: '10:01', step_label: '1', kind: 'observation', text: 'A1 well 탁함' }],
-      value_bars: [{ label: '1단계 · 시간', kind: '시간', source: '60 s', actual: '90 s', source_number: '60', actual_number: '90', unit: 's' }],
+      value_bars: [{ label: '1단계 · 양', kind: '양', source: '1000 µL', actual: '1 mL', source_number: '1000', source_unit: 'µL', actual_number: '1', actual_unit: 'mL', unit: 'µL' }],
       images: [
         { kind: 'photo', step_label: '1', caption: '배양 사진', url: '/api/workspace/experiments/rx3-0/evidence/photo-note', media_type: 'image/png', asset_id: 'photo-note' },
         { kind: 'source_figure', step_label: '1', caption: 'Figure 1. 원문 plate', url: '/api/protocols/p/revisions/r/figures/source-figure-1-1', media_type: 'image/png', asset_id: 'source-figure-1-1', source_page: 1 },
@@ -163,7 +163,11 @@ it('shows the grounded notebook skeleton, deterministic visuals, Methods fields 
   expect(screen.getByText('LOT-24')).toBeInTheDocument();
   expect(screen.getByRole('img', { name: '1단계 · 배양 사진' })).toHaveAttribute('src', '/api/workspace/experiments/rx3-0/evidence/photo-note');
   expect(screen.getByRole('img', { name: '1단계 · Figure 1. 원문 plate' })).toBeInTheDocument();
-  expect(screen.getByTestId('notebook-value-bar')).toBeInTheDocument();
+  const valueBar = screen.getByTestId('notebook-value-bar');
+  expect(valueBar).toBeInTheDocument();
+  const scales = valueBar.querySelectorAll('i');
+  expect(scales[0]).toHaveStyle({ width: '100%' });
+  expect(scales[1]).toHaveStyle({ width: '100%' });
   expect(await screen.findByText((_, node) => node?.tagName === 'P' && Boolean(node.textContent?.includes('A1 well 침전 있음')))).toBeInTheDocument();
   await userEvent.click(await screen.findByRole('button', { name: '이 기록 비교 공유 켜기' }));
   const share = calls.find(call => call.path.endsWith('/sharing') && call.init?.method === 'POST');

@@ -173,11 +173,26 @@ const DEFAULT_NOTEBOOK_SECTIONS: NotebookSection[] = [
   ['interpretation_next', c.sectionInterpretation], ['domain', c.sectionDomain], ['appendix', c.appendix],
 ].map(([id, name]) => ({ id, name }));
 
+const NOTEBOOK_UNIT_SCALE: Record<string, number> = {
+  h: 3600, min: 60, s: 1,
+  'µL': 1, mL: 1000, L: 1_000_000,
+  ng: 0.001, 'µg': 1, mg: 1000, g: 1_000_000,
+  nM: 1, 'µM': 1000, mM: 1_000_000, M: 1_000_000_000,
+};
+
+function notebookPlotValue(number: string, unit: string | undefined) {
+  const parsed = Number(number);
+  if (!Number.isFinite(parsed)) return Number.NaN;
+  return parsed * (unit ? NOTEBOOK_UNIT_SCALE[unit] ?? 1 : 1);
+}
+
 function NotebookVisuals({ notebook }: { notebook: Notebook }) {
   const bars = notebook.value_bars ?? [], timeline = notebook.timeline ?? [], images = notebook.images ?? [];
   return <>
     {bars.length ? <div className='notebook-bars'><h3>{c.valueBars}</h3>{bars.map((bar, i) => {
-      const source = Number(bar.source_number), actual = Number(bar.actual_number), maximum = Math.max(source, actual, 0);
+      const source = notebookPlotValue(bar.source_number, bar.source_unit || bar.unit);
+      const actual = notebookPlotValue(bar.actual_number, bar.actual_unit || bar.unit);
+      const maximum = Math.max(source, actual, 0);
       const sourceWidth = maximum > 0 && Number.isFinite(source) ? Math.max(3, source / maximum * 100) : 0;
       const actualWidth = maximum > 0 && Number.isFinite(actual) ? Math.max(3, actual / maximum * 100) : 0;
       return <article className='notebook-bar' data-testid='notebook-value-bar' key={`${bar.label}-${i}`}><strong>{bar.label}</strong>

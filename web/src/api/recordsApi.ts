@@ -18,7 +18,7 @@ export interface ReviewValue {
 }
 export interface NotebookMethodRow { label: string; source_text: string; actual_values: string; started_at: string; ended_at: string; timer: string; source_page?: number | null }
 export interface NotebookTimelineItem { at: string; step_label: string; kind: string; text: string }
-export interface NotebookValueBar { label: string; kind: string; source: string; actual: string; source_number: string; actual_number: string; unit: string }
+export interface NotebookValueBar { label: string; kind: string; source: string; actual: string; source_number: string; actual_number: string; unit: string; source_unit?: string; actual_unit?: string }
 export interface NotebookImage { kind: 'photo' | 'source_figure'; step_label: string; caption: string; url: string; media_type: string; asset_id: string; source_page?: number | null; interpretation_status?: string }
 export interface NotebookDomainField { label: string; value: string; origin: 'source' | 'record' | 'calculated' | 'blank'; source_keys?: string[]; formula?: string }
 export interface NotebookInventoryItem { kind: string; name: string; vendor: string; catalog_number: string; lot_number: string; stage: string; source_keys?: string[] }
@@ -43,7 +43,7 @@ export interface NotebookResponse {
 export interface SharingResponse { report_id: string; shared: boolean; changed_at: string | null; event_inserted?: boolean }
 export interface ComparisonRecord {
   record_scope: 'mine' | 'shared'; label: string; report_id?: string; started_at?: string; ended_at?: string | null;
-  protocol_revision?: string; value_rows: Array<{ step_label: string; kind: string; source: string; actual: string; unit: string }>;
+  protocol_revision?: string; value_rows: Array<{ step_label: string; kind: string; source: string; actual: string; unit: string; source_unit?: string; actual_unit?: string }>;
   method_rows: Array<{ step_label: string; source_text: string; actual_values: string; started_at: string; ended_at: string; timer: string }>;
   timeline: NotebookTimelineItem[]; notes: Array<{ step_label: string; at: string; kind: string; text: string }>;
 }

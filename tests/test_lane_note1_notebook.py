@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import unittest
 import base64
+import json
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 from tests.lane_rp3_support import (
     CELL_PURPOSE,
@@ -135,6 +138,54 @@ class NotebookDraftTests(unittest.TestCase):
         battery = self.book(battery_run(self.temporary.name), battery_protocol())
         self.assertTrue(any(row.identifier == "B-17" for row in battery.sample_rows))
         self.assertTrue(any(bar.source and bar.actual for bar in battery.value_bars))
+
+    def test_numbered_korean_cell_identifier_is_grouped_in_the_sample_table(self) -> None:
+        record = battery_run(self.temporary.name)
+        record.event(
+            "01:02", "observation", "4",
+            user_wording="2번 셀 질량 12.3 mg", category="measurement",
+        )
+        book = self.book(record, battery_protocol())
+        row = next(item for item in book.sample_rows if item.identifier == "2번 셀")
+        self.assertEqual(row.records, ("2번 셀 질량 12.3 mg",))
+
+    def test_value_bar_keeps_both_units_for_equivalent_scale(self) -> None:
+        values = (
+            er.NotebookValue(
+                label="1", kind="양", family="volume", written="1000 µL", actual="1 mL",
+            ),
+        )
+        _timeline, bars, _positions, _samples = er._notebook_visual_facts(
+            SimpleNamespace(zone=ZoneInfo("UTC")), (), values,
+        )
+        self.assertEqual(
+            (bars[0].source_number, bars[0].source_unit, bars[0].actual_number, bars[0].actual_unit),
+            ("1000", "µL", "1", "mL"),
+        )
+
+    def test_number_audit_rejects_a_small_number_absent_from_source_and_record(self) -> None:
+        record = cell_run(self.temporary.name, session="session-note1-number-audit")
+        fixture = cell_protocol()
+        book = self.book(record, fixture)
+        source_steps = er._source_steps_from_fixture(fixture)
+        events = record.doc()["events"]
+        raw_numbers = set(er._NUMBER.findall(json.dumps(
+            {"steps": source_steps, "events": events}, ensure_ascii=False, default=str,
+        )))
+        candidate = "31"
+        self.assertNotIn(candidate, raw_numbers)
+        self.assertLess(int(candidate), len(events) + len(source_steps) + 2)
+        tampered = replace(book, interpretation_words=f"근거 없이 넣은 값 {candidate}")
+        problems = er.audit_notebook_number_provenance(
+            tampered,
+            source_steps=source_steps,
+            source_inventory=tuple(
+                item.name_source_text
+                for item in (*fixture.draft.protocol.materials, *fixture.draft.protocol.equipment)
+            ),
+            events=events,
+        )
+        self.assertIn(f"notebook.interpretation_words: {candidate}", problems)
 
     def test_protocol_projection_never_invents_an_objective(self) -> None:
         protocol = SimpleNamespace(

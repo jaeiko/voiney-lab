@@ -6851,6 +6851,7 @@ def _comparison_record(
         "value_rows":[{
             "step_label":row.label,"kind":row.kind,"source":row.source,
             "actual":row.actual,"unit":row.unit,
+            "source_unit":row.source_unit,"actual_unit":row.actual_unit,
         } for row in book.value_bars],
         "method_rows":[{
             "step_label":row.label,"source_text":row.source_text,

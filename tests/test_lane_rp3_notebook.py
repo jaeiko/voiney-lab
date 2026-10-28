@@ -394,7 +394,7 @@ class AppendixTests(_Case):
                       "멈춤 0회", appendix)
         self.assertIn("> 출처: [1] Kim 2025. Test digestion protocol. protocols.io — 실험에 쓴 프로토콜 원문", appendix)
         self.assertRegex(text.rstrip().splitlines()[-1],
-                         r"^> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다\. AI 가 쓴 문장은 없다\. "
+                         r"^> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다\. 모델이 쓴 문장은 포함하지 않았다\. "
                          r"작성 \d{4}년 \d{1,2}월 \d{1,2}일 \d{2}:\d{2}\.$")
 
     def test_the_sayings_of_the_run_and_the_notices_are_in_the_appendix(self) -> None:
