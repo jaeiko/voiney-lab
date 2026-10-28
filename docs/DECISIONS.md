@@ -130,15 +130,10 @@
 | 2026-10-23 | 파일럿 기준판은 **원래 폴더 조건 A 확인 → 사람의 음성 시험 → 사람의 태그·main 반영** 순서다 | 조건 B만 확인한 음성·서버 변경은 dev 병합 뒤 태그 전에 조건 A로 확인한다. dev 자동 배포가 음성 시험이나 기준판 지정은 아니다 | `AGENTS.md`, `docs/PILOT_GUIDE.md` 8절 |
 | 2026-10-23 | 파일럿 문서 넷을 PILOT_GUIDE 하나로 합치고 나머지 셋은 보관한다. PILOT_COMPARISON은 독립된 비교 절차로 둔다 | 로그인·안전 확인·데이터 처리·HTTPS·참가자 안내를 서로 다른 전제로 읽지 않게 한다 | `docs/PILOT_GUIDE.md`, `docs/DOCUMENTATION_INDEX.md` |
 | 2026-10-25 | `node --test` 결과는 출력 모양(TAP `# fail 0`·spec `ℹ fail 0`)과 상관없이 종료 코드와 마지막 요약의 수로 판정하고, CI 의 Node 버전은 고정하지 않는다(줄 CIFIX) | GitHub 실행기 ubuntu-26.04 의 Node 24 가 spec 으로 찍어 node 시험 43개가 모두 통과했는데도 pytest 가 실패했고, 그 때문에 dev CI 와 dev 자동 배포가 멈췄다. 판정이 모양을 가리지 않으므로 버전 고정은 필요 없다 | `tests/test_native_bridge.py` |
-
 | 2026-10-28 | INFRA1: 서버의 Python 3.14를 유지하고 CI에 3.12·3.14 행렬과 3.14 브라우저 서버를 둔다. requirements는 런타임 21개와 판 제한·순서를 pyproject와 일치시킨다. 안내 CLI 시험은 실행 중인 인터프리터를 사용한다 | 기존 서버 환경을 바꾸지 않고 최소 판과 실제 실행 판을 함께 검사. 누락 10개·판 제한 차이 2개를 회귀 검사로 막는다 | `.github/workflows/ci.yml`, `requirements.txt`, `tests/test_infra1_environment.py`, `tests/test_lane_fx5_guide.py` |
-
 | 2026-10-28 | INFRA1: 기본 pytest 명령은 직렬로 두고 `test-parallel` extra와 `-n 2 --dist=loadfile`을 선택 사항으로 둔다 | 공유 머신에서 작업자 수를 자동으로 늘리지 않고 같은 모듈을 한 작업자에 묶는다. 검증 범위는 Python 3.14·조건 A의 두 로컬 작업자 | `pyproject.toml`, `docs/TEST_ENVIRONMENT.md` |
-
 | 2026-10-28 | INFRA1: Android의 `com.getcapacitor.myapp` 견본 시험 두 개를 제거한다 | 하나는 2+2만 검사하고 하나는 실제 `com.voiney.lab`과 다른 견본 패키지를 검사. CI나 기능 시험에서 참조하지 않으며 기기 연결 JS·알람 정책 시험은 유지 | `mobile/android/app/src/`, `tests/test_native_bridge.py`, `tests/test_lane_app1_alarm_clock.py` |
-
 | 2026-10-28 | INFRA1: staging 워크플로는 그대로 두고 사람의 `~/bin/vl-after-merge`와 범위·실패 처리·잠금·커밋 선택 차이를 운영 안내에 기록한다 | 자동 경로는 성공한 dev push CI 뒤 원격 `deploy`만 호출한다. 사람 경로는 로컬 검사 결과가 달라도 먼저 재시작하며 두 경로에 공통 잠금이 없다. 원격 구현·실제 배포 성공은 확인 안 됨 | `docs/DEPLOYMENT_RUNBOOK.md`, `.github/workflows/deploy-staging.yml` |
-
 | 2026-10-28 | INFRA1: 시험의 PDF 작업자 예산만 120초로 주입하고, 재인용 제한과 조각 진행 줄은 사건으로 검사하며 Node는 파일마다 120초를 적용한다 | 제품 PDF 기본 30초·실제 hang 시험 1초·재인용 제한 300초와 데이터·카드·문구 단언은 유지. 총 경과시간 대신 미완료 future·저장된 시작/완료 사건을 확인하고 늦은 답 뒤 카드도 검사 | `tests/conftest.py`, `tests/test_pdf_worker_isolation.py`, `tests/test_lane_an5_requote_after_cards.py`, `tests/test_lane_ld_pieces.py`, `tests/test_native_bridge.py`, `docs/TEST_ENVIRONMENT.md` |
 
 ## 11. 병합된 서버·기록·화면 결정
