@@ -9,6 +9,8 @@ import wave
 from dataclasses import replace
 from pathlib import Path
 
+import requests
+
 from voiney_lab.audio import SAMPLE_RATE
 from voiney_lab.configuration import ConfigurationError
 from voiney_lab.voice_providers import (
@@ -93,6 +95,11 @@ def main(arguments: list[str] | None = None) -> int:
         except SpeechProviderError as exc:
             status = exc.status
             characters = 0
+        except requests.RequestException:
+            status = None
+            characters = 0
+        except ConfigurationError as exc:
+            parser.error(str(exc))
         print(json.dumps({
             "scenario": name,
             "location": location,

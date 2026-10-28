@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from voiney_lab.language import Transcription
+from voiney_lab.voice_providers import SpeechProviderError
 
 
 def _wav(path) -> None:
@@ -40,6 +41,9 @@ def test_diagnostic_runs_three_single_attempt_scenarios_and_prints_no_text(
 
     def transcribe(pcm, settings, *, language, keyterms, retry_without_adaptation):
         calls.append((settings.google_v2.location, keyterms, retry_without_adaptation, pcm))
+        if len(calls) == 1:
+            raise SpeechProviderError(
+                "private provider reply", status=404, code="not_found")
         text = "private transcript" if keyterms else "another private transcript"
         return Transcription(text, "ko", response_status=200)
 
@@ -56,7 +60,7 @@ def test_diagnostic_runs_three_single_attempt_scenarios_and_prints_no_text(
     assert all(pcm == b"\0\0" * 16000 for _, _, _, pcm in calls)
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert rows == [
-        {"scenario": "inline_adaptation", "location": "us", "status": 200, "characters": 18},
+        {"scenario": "inline_adaptation", "location": "us", "status": 404, "characters": 0},
         {"scenario": "other_supported_location", "location": "eu", "status": 200, "characters": 18},
         {"scenario": "without_adaptation", "location": "us", "status": 200, "characters": 26},
     ]
