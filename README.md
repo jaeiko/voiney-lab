@@ -155,7 +155,8 @@ cp .env.example .env
 | 측정 | 결과 | 날짜 · 조건 · 근거 |
 |---|---|---|
 | 전체 pytest · 조건 A | **5695 passed · 7 skipped · 2 xfailed · 실패 0** | 2026-10-27, dev `689fb0d`, 외부 라이선스 PDF가 있는 원래 작업 폴더 실측. `after_merge_1027c.log` 기록 |
-| 전체 pytest · 조건 B | **5190 passed · 514 skipped · 2 xfailed · 실패 0** | 2026-10-27, dev `689fb0d`, Python 3.12, 라이선스 PDF 없는 CI. [기준 측정 기록](https://github.com/jaeiko/voiney-lab/pull/148) |
+| 전체 pytest · 조건 B | **각각 5323 passed · 514 skipped · 실패 0** | 2026-10-28, Python 3.12·3.14, PR #152 합성 병합본(base `cf84dd9`, head `f271da9`), 라이선스 PDF 없는 [CI 실측](https://github.com/jaeiko/voiney-lab/actions/runs/40637849035) |
+| 화면 시험 · CI | **Playwright 216 passed · 6 skipped / Vitest 204 passed(33파일)** | 같은 날짜·실행. 타입 검사·빌드도 통과. 가짜 서버를 사용하는 화면 시험이며 실제 기기·음성 검증이 아니에요 |
 | SIM · 개발용 | **519/540 · 이해 96.11% · 잘못 바뀐 상태 0건** | 2026-10-28, PR #148 · `42437af`, 공개 프로토콜 10종, 저장 번역, 규칙 경로 |
 | SIM · 분리된 시험용 | **276/332 · 이해 83.13% · 잘못 바뀐 상태 0건** | 같은 날·커밋·조건. 개발용과 겹치지 않는 고정 분할. [측정 기록](https://github.com/jaeiko/voiney-lab/pull/148) |
 
