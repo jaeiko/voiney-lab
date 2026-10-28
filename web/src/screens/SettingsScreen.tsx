@@ -8,6 +8,9 @@ import type { AuthSession } from "../api/types";
 import { LogoutDialog } from "../components/AppFrame";
 import { ErrorBox, LoadingBox, Note } from "../components/Pieces";
 import { settings as copy, frame, entrypoints } from "../copy/ko";
+import { useRun } from "../voice/runStore";
+import { AdvancedSettings } from "./settings/AdvancedSettings";
+import { advancedSettings } from "../copy/ko";
 import { oldRoutes } from "../lib/navigation";
 import { uploadedDay } from "../lib/protocolStatus";
 import { parseVoiceReference, referenceStale } from "../voice/micCheck";
@@ -167,7 +170,9 @@ function DeleteForm() {
   );
 }
 
-export function SettingsScreen({ session }: { session: AuthSession }) {
+export function SettingsScreen({ session, duringRun = false }: { session: AuthSession; duringRun?: boolean }) {
+  const run = useRun();
+  const active = duringRun || run.active || run.phase === "starting";
   const settings = useQuery({ queryKey: SETTINGS_KEY, queryFn: runApi.settings, retry: false });
   const numbers = useSetting("confirm_mode");
   const ambient = useSetting("ambient_mode");
@@ -180,19 +185,23 @@ export function SettingsScreen({ session }: { session: AuthSession }) {
   const filterOn = settings.data?.speaker_filter === "on";
   return (
     <div className="settings" data-testid="settings-screen">
-      <h1 className="screen-title">{copy.title}</h1>
+      {!duringRun ? <><h1 className="screen-title">{copy.title}</h1>
+      <p className="page-why">{advancedSettings.why}</p></> : null}
+      {active ? <p>{advancedSettings.calibrationLater}</p> : <>
       <Section id="voice-check" title={copy.voiceCheck.title} lead={copy.voiceCheck.lead}>
         <VoiceCheck onMeasured={() => void client.invalidateQueries({ queryKey: SETTINGS_KEY })} />
       </Section>
       <Section id="agent-voice" title={copy.agentVoice.title} lead={copy.agentVoice.lead}>
         <VoicePicker />
-      </Section>
+      </Section></>}
       {settings.isPending ? (
         <LoadingBox />
       ) : settings.isError ? (
         <ErrorBox message={copy.loadFailed} onRetry={() => void settings.refetch()} />
       ) : (
         <>
+          {!duringRun ? <p>{advancedSettings.nextRun}</p> : null}
+          <AdvancedSettings settings={settings.data} active={active} embedded={duringRun} />
           <Section id="numbers" title={copy.numbers.title}>
             <Segmented
               name={copy.numbers.title}
@@ -243,6 +252,7 @@ export function SettingsScreen({ session }: { session: AuthSession }) {
           </Section>
         </>
       )}
+      {!duringRun ? <>
       <Section id="more" title={entrypoints.more}>
         <p>{entrypoints.legacyWhy}</p>
         <a className="btn" href={oldRoutes.settings}>{entrypoints.legacySettings}</a>
@@ -264,7 +274,7 @@ export function SettingsScreen({ session }: { session: AuthSession }) {
         ) : (
           <p className="muted">{copy.account.devMode}</p>
         )}
-      </Section>
+      </Section></> : null}
     </div>
   );
 }

@@ -13,6 +13,7 @@ function setup(overrides: Parameters<typeof fakeFetch>[0] = {}) { return fakeFet
   '/api/workspace/experiments/rx3-0': { json: RECORDS[0] },
   '/api/workspace/experiments/rx3-0/timeline': { json: TIMELINE },
   '/api/workspace/experiments/rx3-0/reports': { json: { reports: [REPORT] } },
+  '/api/experiment-reports/report-rx3/prose': { json: { state: 'ready', label: '보고서 문장이 준비됐어요.' } },
   '/api/experiment-reports/report-rx3/notebook': { json: NOTEBOOK },
   ...overrides,
 }); }

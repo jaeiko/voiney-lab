@@ -16,6 +16,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { run as runCopy } from "../copy/ko";
 import { newestGeneration, type VoiceState } from "./runModel";
+import { inputLanguage } from "./devicePreferences";
 import { runStore } from "./runStore";
 
 declare let playbackEpoch: number;
@@ -354,6 +355,7 @@ export async function startRun(request: StartRequest): Promise<void> {
   const configuration_id = ++nextConfigurationId;
   const pending = {
     configuration_id, mode: "cascade", language: "ko", protocol_id: request.protocolId,
+    ...(inputLanguage() !== "ko" ? { input_language: inputLanguage() } : {}),
     ...(request.resume ? { experiment_session_id: request.resume.sessionId, experiment_session_version: request.resume.version } : {}),
     ...(!request.resume && request.changeSetId ? { run_change_set_id: request.changeSetId } : {}),
   };

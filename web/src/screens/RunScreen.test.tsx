@@ -16,6 +16,8 @@ const engine = vi.hoisted(() => ({
   resumeSound: vi.fn(),
   reconnectMicrophone: vi.fn(),
   serverNow: () => Date.now(),
+  recordVoice: vi.fn(async () => { throw new Error("not used while running"); }),
+  encodePcm: vi.fn(() => ""),
 }));
 vi.mock("../voice/engine", () => engine);
 
@@ -206,4 +208,34 @@ describe("RunScreen (lane RX4)", () => {
     expect(screen.getByTestId("run-step-text")).toHaveAttribute("data-lang", "source");
     expect(screen.getByTestId("run-next").querySelector(".run-next-label")).toHaveTextContent(/^다음 단계$/);
   });
+});
+
+it('keeps dropped-speech reasons in a folded bounded list and opens settings without leaving the run', async () => {
+ running();
+ renderWithClient(<RunScreen />);
+ act(() => runStore.event({ type: 'speech.dropped', configuration_id: 1, reason_ko: '너무 짧은 소리예요', notice: '잘 안 들렸어요' }, { accepted: { configuration_id: 1, protocol_id: 'p1', revision_id: 'r1' }, now: Date.now(), live: () => true }));
+ expect(await screen.findByText('안 들은 말 1개')).toBeInTheDocument();
+ expect(screen.getByText('안 들은 말 1개').closest('details')).not.toHaveAttribute('open');
+ await userEvent.click(screen.getByRole('button', { name: '설정 열기' }));
+ expect(await screen.findByRole('dialog')).toHaveTextContent('지금 하던 실험은 그대로예요');
+ expect(screen.getAllByText('저장한 설정은 다음 실험부터 적용돼요. 지금 하던 실험은 그대로예요.', { exact: true })).toHaveLength(1);
+ expect(screen.getByTestId('run-screen')).toBeInTheDocument();
+});
+it('bounds the reason history, ignores foreign configurations, hides developer controls for researchers and resets on a new run', async () => {
+ running();
+ const ctx = { accepted: { configuration_id: 1, protocol_id: 'p1', revision_id: 'r1' }, now: Date.now(), live: () => true };
+ act(() => {
+   for (let i = 0; i < 61; i++) runStore.event({ type: 'speech.dropped', configuration_id: 1, reason_ko: '받아 적지 못했어요.' }, ctx);
+   runStore.event({ type: 'speech.dropped', configuration_id: 2, reason_ko: '다른 실험' }, ctx);
+   runStore.event({ type: 'turn.done', configuration_id: 1, turn_id: 1, reasoning: 'never keep', timings_ms: { first_audio_ms: 21 } }, ctx);
+ });
+ const before = runStore.get().model.protocol;
+ renderWithClient(<RunScreen session={{ mode: 'accounts', signed_in: true, account: { account_id: 'me', name: '견본', organization_id: 'lab', admin: false } }} />);
+ expect(screen.getByText('안 들은 말 61개')).toBeInTheDocument();
+ expect(runStore.get().model.dropped).toHaveLength(50);
+ expect(screen.queryByTestId('run-diagnostics')).toBeNull();
+ expect(JSON.stringify(runStore.get().model.diagnostics)).not.toContain('never keep');
+ expect(runStore.get().model.protocol).toBe(before);
+ act(() => runStore.reset());
+ expect(runStore.get().model.droppedCount).toBe(0);
 });

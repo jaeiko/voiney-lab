@@ -357,7 +357,7 @@ export class StandIn {
         this.configurationId = message.configuration_id;
         // Each start moves the generation on (server.py's ListenerSession.start); session.ready carries the new number.
         this.generation += 1;
-        this.send({ type: 'session.ready', configuration_id: message.configuration_id, generation: this.generation, mode: 'cascade', language: 'ko', input_language: 'ko', protocol_id: this.protocol.id, revision_id: REVISION, research_capabilities: {}, experiment_session_id: SESSION, experiment_session_version: 3 });
+        this.send({ type: 'session.ready', configuration_id: message.configuration_id, generation: this.generation, mode: 'cascade', language: 'ko', input_language: message.input_language ?? 'ko', protocol_id: this.protocol.id, revision_id: REVISION, research_capabilities: {}, experiment_session_id: SESSION, experiment_session_version: 3 });
         this.pushState('attached');
         this.send({ type: 'session.started', state: 'IDLE', pipeline: 'cascade' });
         this.send({ type: 'session.greeting', configuration_id: message.configuration_id, turn_id: 1, generation: this.generation, greeting_id: 'g-1', text: GREETING });
