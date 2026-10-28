@@ -72,7 +72,13 @@ def test_adaptation_400_or_404_retries_once_without_adaptation(
     elevenlabs.assert_not_called()
 
 
-def test_voice_session_remembers_rejection_and_exposes_fallback_reason(v2_env):
+@pytest.mark.parametrize(
+    "status,provider_code",
+    [(400, "INVALID_ARGUMENT"), (404, "NOT_FOUND")],
+)
+def test_voice_session_remembers_rejection_and_exposes_fallback_reason(
+    v2_env, status, provider_code,
+):
     harness = DropHarness()
     session, clock = harness.listener()
     curated = CuratedProtocolSession(soil_fixture())
@@ -84,8 +90,8 @@ def test_voice_session_remembers_rejection_and_exposes_fallback_reason(v2_env):
         {"advance": 5.0}, {"bytes": utterance(0.1)}, {"sleep": 0.8},
     ], clock)
     refused = FakeResponse(
-        {"error": {"status": "NOT_FOUND", "message": "provider detail must stay private"}},
-        status=404,
+        {"error": {"status": provider_code, "message": "provider detail must stay private"}},
+        status=status,
     )
     metrics: list[dict] = []
     with patch.object(server, "ListenerSession", return_value=session), patch.object(
@@ -119,9 +125,8 @@ def test_voice_session_remembers_rejection_and_exposes_fallback_reason(v2_env):
         "dimensions": {
             "status": "recovered",
             "reason_code": "stt_adaptation_disabled",
-            "event_kind": "not_found",
+            "event_kind": provider_code.casefold(),
         },
     }]
     v1.assert_not_called()
     elevenlabs.assert_not_called()
-
