@@ -98,7 +98,8 @@ flowchart TD
     cards --> start["연구자가 핵심 값 확인 후 시작"]
     subgraph voice["단계별 음성 실험 · Cascade"]
         stt["받아쓰기 STT"] --> emergency["응급 관문"]
-        emergency --> rules["결정적인 앞단 규칙"]
+        emergency -->|"응급 감지"| fixed["정해진 중단·연락 안내"]
+        emergency -->|"그 외"| rules["결정적인 앞단 규칙"]
         rules -->|"규칙이 처리하지 않은 말 · 켰을 때"| router["LLM 라우터 · 답변 또는 제안만"]
         router --> checks["서버 검사 · 신원 · 버전 · 근거 · 확인 · 안전"]
         rules -->|"규칙이 처리한 요청"| checks
@@ -154,8 +155,8 @@ cp .env.example .env
 | 측정 | 결과 | 날짜 · 조건 · 근거 |
 |---|---|---|
 | 전체 pytest · 조건 A | **5695 passed · 7 skipped · 2 xfailed · 실패 0** | 2026-10-27, dev `689fb0d`, 외부 라이선스 PDF가 있는 원래 작업 폴더 실측. `after_merge_1027c.log` 기록 |
-| 전체 pytest · 조건 B | **5190 passed · 514 skipped · 2 xfailed · 실패 0** | 2026-10-27, dev `689fb0d`, Python 3.12, 라이선스 PDF 없는 CI. [QUAL1의 기준 측정 기록](https://github.com/jaeiko/voiney-lab/pull/148) |
-| SIM · 개발용 | **519/540 · 이해 96.11% · 잘못 바뀐 상태 0건** | 2026-10-28, QUAL1 `42437af`, 공개 프로토콜 10종, 저장 번역, 규칙 경로 |
+| 전체 pytest · 조건 B | **5190 passed · 514 skipped · 2 xfailed · 실패 0** | 2026-10-27, dev `689fb0d`, Python 3.12, 라이선스 PDF 없는 CI. [기준 측정 기록](https://github.com/jaeiko/voiney-lab/pull/148) |
+| SIM · 개발용 | **519/540 · 이해 96.11% · 잘못 바뀐 상태 0건** | 2026-10-28, PR #148 · `42437af`, 공개 프로토콜 10종, 저장 번역, 규칙 경로 |
 | SIM · 분리된 시험용 | **276/332 · 이해 83.13% · 잘못 바뀐 상태 0건** | 같은 날·커밋·조건. 개발용과 겹치지 않는 고정 분할. [측정 기록](https://github.com/jaeiko/voiney-lab/pull/148) |
 
 조건 A는 라이선스 PDF가 있는 환경, B는 없는 환경이에요. 작업 폴더마다 원문 보유 수가 달라 통과 수가 달라질 수 있어요([정의](AGENTS.md#verification)). SIM은 **정답 글자 STT·가짜 VAD/TTS**를 쓰는 오프라인 동작 시험이에요. 이해 점수는 기대한 동작·확인·상태 보존을 충족한 비율이며, 실제 받아쓰기 정확도나 답변의 과학적 정확도가 아니에요. 방법과 한계는 [합성 음성 시험대](docs/EVALUATION_SIM.md)에 있어요.
