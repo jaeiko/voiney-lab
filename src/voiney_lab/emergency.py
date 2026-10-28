@@ -49,6 +49,45 @@ _KOREAN_IMMEDIATE = (
     re.compile(r"^(?:사람이\s*)?(?:크게|심하게|심각하게)\s*다쳤(?:어|어요|습니다|다)?$"),
     re.compile(r"^(?:지금\s*)?(?:즉시|매우|너무)?\s*위험(?:한\s*상황)?(?:입니다|이에요|해요|합니다|하다|에\s*처해\s*있(?:어요|습니다)?)$"),
 )
+
+# Current incident statements, grouped by the hazard described by the speaker.
+# These recognise words only; they never infer a chemical's properties or
+# supply first aid. The response remains the existing fixed emergency text.
+_KO_INCIDENT_END = r"(?:어|어요|요|습니다|다|네|네요|는데|는데요)?"
+_KO_MATERIAL = r"(?:시약|화학물질|용액|액체|용매|산|염기|증기|가스)"
+_KO_BODY = r"(?:눈|피부|얼굴|손|팔)"
+_KOREAN_INCIDENTS = tuple(re.compile(r"^(?:지금\s*|갑자기\s*)?" + body + _KO_INCIDENT_END + r"$") for body in (
+    # Eyes/skin: both word orders and omitted particles after an exposure.
+    r"(?:[^.!?]{0,30})?(?:눈|피부|얼굴)(?:에|으로)\s*(?:[^.!?]{0,25})?(?:튀었|튀어|들어갔|묻었|닿았|들어가서\s*따가워)",
+    rf"(?:[^.!?]{{0,20}})?(?:{_KO_MATERIAL}[^.!?]{{0,20}}{_KO_BODY}(?:에|으로)|{_KO_BODY}(?:에|으로)[^.!?]{{0,20}}{_KO_MATERIAL})[^.!?]{{0,15}}(?:튀었|튀어|들어갔|묻었|닿았)",
+    # Inhalation, obstruction and acute dizziness.
+    r"(?:[^.!?]{0,30})?(?:숨(?:을|이)?\s*(?:못\s*쉬겠|못\s*쉬어|막혀|막혔)|숨\s*쉬기\s*(?:힘들|어려워)|어지러워|어지럽고\s*숨\s*쉬기\s*힘들)",
+    rf"(?:[^.!?]{{0,30}})?{_KO_MATERIAL}(?:을|를)?\s*(?:들이마셨|마셨|흡입했)",
+    # Fire/smoke/sparks are stated events, not a mention of fire equipment.
+    r"(?:[^.!?]{0,30})?(?:불(?:이)?\s*붙었|연기(?:가)?\s*(?:나|나고\s*있|났)|불꽃(?:이)?\s*(?:튀어|튀고\s*있))",
+    # A spill needs an explicit large extent; a routine small spill is still
+    # handled by the existing anomaly path.
+    rf"(?=[^.!?]*{_KO_MATERIAL})(?=[^.!?]*(?:많이|대량|잔뜩|전부|큰\s*(?:병|용기)))[^.!?]{{0,65}}(?:쏟았|쏟아졌|흘렀)",
+    # Cuts and significant/uncontrolled bleeding.
+    r"(?:[^.!?]{0,30})?(?:손|손가락|팔)(?:을|이|에)?\s*(?:베었|베였)",
+    r"(?:[^.!?]{0,20})?(?:피(?:가)?\s*멈추지\s*않아|피(?:가)?\s*많이\s*나|출혈(?:이)?\s*심해)",
+    # Collapse and consciousness.
+    r"(?:[^.!?]{0,30})?(?:쓰러졌|기절했|정신(?:을)?\s*잃었|의식(?:이)?\s*없|(?:사람|동료)(?:이|가)?\s*반응(?:이)?\s*없)",
+    # Leak/abnormal smell: ordinary smell or equipment names are insufficient.
+    r"(?:[^.!?]{0,20})?가스(?:가)?\s*(?:새고\s*있|새|누출됐)",
+    r"(?:[^.!?]{0,20})?(?:이상한|독한|타는)\s*냄새(?:가)?\s*(?:갑자기\s*)?나",
+    # Burns/electric shock/ingestion require a reported incident.
+    r"(?:[^.!?]{0,30})?(?:화상(?:을)?\s*입었|데었|데였)",
+    r"(?:[^.!?]{0,30})?(?:감전됐|감전당했|전기(?:가)?\s*통해서\s*손(?:이)?\s*떨려)",
+    rf"(?:[^.!?]{{0,30}})?{_KO_MATERIAL}(?:을|를)?\s*(?:잘못\s*|실수로\s*)?(?:삼켰|먹었|마셨)",
+    rf"(?:[^.!?]{{0,20}})?{_KO_MATERIAL}(?:이|가)?\s*입(?:에|으로)\s*들어갔",
+))
+
+_KO_INCIDENT_EXCLUSIONS = re.compile(
+    r"(?:만약|경우|과거|예전|어제|지난|작년|사례|훈련|가정|"
+    r"(?:튀|들어가|쏟|베|쓰러|감전|삼키|어지러|없으)[^\s.!?]{0,6}면|"
+    r"아니|않았|않고|없었|예방|절차|설명|알려|[?？])"
+)
 _ENGLISH_IMMEDIATE = (
     re.compile(r"^emergency$"),
     re.compile(r"^help$"),
@@ -75,10 +114,18 @@ def recognize_emergency(text: str) -> EmergencyMatch | None:
     if not normalized:
         return None
     if re.search(r"[가-힣]", normalized):
-        if _KOREAN_EXCLUSIONS.search(normalized):
-            return None
-        if any(pattern.fullmatch(normalized) for pattern in _KOREAN_IMMEDIATE):
+        if not _KOREAN_EXCLUSIONS.search(normalized) and any(
+            pattern.fullmatch(normalized) for pattern in _KOREAN_IMMEDIATE
+        ):
             return EmergencyMatch("ko", KOREAN_EMERGENCY_RESPONSE)
+        # A current incident followed by a help question remains an incident.
+        # Exclusions apply to its own clause, so "...튀었어. 알려줘" is not
+        # hidden by the later request. Questions/hypotheticals alone never match.
+        for clause in re.split(r"[.!。！,;]+\s*", normalized):
+            if _KO_INCIDENT_EXCLUSIONS.search(clause):
+                continue
+            if any(pattern.fullmatch(clause.strip()) for pattern in _KOREAN_INCIDENTS):
+                return EmergencyMatch("ko", KOREAN_EMERGENCY_RESPONSE)
         return None
     if _ENGLISH_EXCLUSIONS.search(normalized):
         return None
