@@ -93,7 +93,13 @@ class NextStepWordsTests(unittest.TestCase):
                 self.assertEqual(plan.action, CuratedProtocolAction.NEXT)
                 self.assertTrue(plan.state_changed)
                 self.assertEqual(session.current_index, at + 1)
-                self.assertIn("완료로 기록했어요", plan.speech_text or "")
+                if said == "다음":
+                    self.assertEqual(
+                        plan.speech_text,
+                        "3단계 완료. 4단계: 화면에서 확인해 주세요. 잘못이면 '취소'.",
+                    )
+                else:
+                    self.assertIn("완료로 기록했어요", plan.speech_text or "")
 
     def test_asking_permission_still_asks(self) -> None:
         for said in ASKS_PERMISSION:

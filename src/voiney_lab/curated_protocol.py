@@ -6171,7 +6171,10 @@ _PROTOCOL_SCOPE_PATTERNS = (
         re.I,
     )),
     ("total_steps", re.compile(r"(?:이\s*실험|프로토콜|지금)?(?:은|는)?\s*총\s*몇\s*단계|총\s*단계\s*수|(?:전체|모든)\s*단계\s*(?:의\s*)?(?:수|개수)|how\s+many\s+steps")),
-    ("current_position", re.compile(r"(?:현재|지금)\s*(?:몇\s*번째|몇)\s*단계|where\s+am\s+i")),
+    ("current_position", re.compile(
+        r"(?:현재|지금)\s*(?:(?:몇\s*번째|몇)\s*단계|단계(?:는|가)?\s*몇)|"
+        r"where\s+am\s+i"
+    )),
     ("remaining_steps", re.compile(r"몇\s*단계\s*남|남은\s*단계|steps?\s+(?:are\s+)?remaining")),
     ("purpose", re.compile(
         r"(?:실험|프로토콜).*(?:목표|목적|뭐\s*하는|무슨\s*실험|어떤\s*실험|"
@@ -6341,11 +6344,6 @@ _CURRENT_INFORMATION_PATTERNS = (
     re.compile(r"^(?:(?:이\s*)?실험에서\s*)?(?:지금|현재)\s*단계(?:는|가)?\s*(?:뭐야|무엇|어디야)$"),
     re.compile(
         r"^(?:지금|현재)\s*(?:뭐|무엇을?)\s*(?:해야|할)\s*(?:돼|되|하나요|합니까|해)$"
-    ),
-    re.compile(
-        r"^(?:(?:어|음|아|그럼|그러면|그래서)\s*[,~]?\s*)*"
-        r"(?:지금|현재)\s*(?:몇\s*단계(?:야|예요|에요|지|죠|니|인가|인가요)?|"
-        r"단계(?:는|가)?\s*몇(?:이야|이에요|예요|지|죠|이니|인가|인가요)?)$"
     ),
 )
 _OPERATIONAL_DEVIATION_PATTERNS = (
@@ -23504,13 +23502,24 @@ class CuratedProtocolSession:
                     )
                 if rounds_notice and language == "ko":
                     control_text = f"{rounds_notice}{control_text}"
-                if forward_said and intent.reported_completion and language == "ko":
+                if (
+                    forward_said
+                    and intent.reported_completion
+                    and language == "ko"
+                    and command_key == "다음"
+                ):
                     # Lane VOICE2: the direct "다음" response is one short
                     # progress line. The next-step summary is only a checked
                     # stored Korean reading; when none exists, the screen is
                     # named instead of translating or inventing one here.
                     self._forward_hint_said = True
                     control_text = self._short_forward_words(completed_label)
+                elif forward_said and intent.reported_completion and language == "ko":
+                    # Other existing move/completion phrases keep their
+                    # established acknowledgement and arrival wording.
+                    control_text = (
+                        f"{self._forward_record_words(completed_label)} {control_text}"
+                    )
                 plan = self._arrival_plan(
                     control_text, language=language, intent_kind=intent.intent_kind,
                     requested_transition=intent.requested_transition,

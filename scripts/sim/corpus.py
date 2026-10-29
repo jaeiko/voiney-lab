@@ -178,8 +178,8 @@ def generate_development_cases(protocol: Protocol) -> tuple[Case, ...]:
                 (action,),
             )
             for at, (text, action) in enumerate((
-                ('지금 몇 단계?', 'current'),
-                ('어, 지금 단계 몇이야?', 'current'),
+                ('지금 몇 단계?', 'protocol_query'),
+                ('어, 지금 단계 몇이야?', 'protocol_query'),
                 ('다음 뭐야?', 'next_information'),
                 ('그럼 다음에 뭐 해?', 'next_information'),
             ))

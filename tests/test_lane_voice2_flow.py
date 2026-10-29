@@ -72,8 +72,8 @@ def test_short_timer_word_combinations_are_read_only_at_the_runtime_boundary() -
 
 def test_short_step_state_questions_are_read_only_at_the_runtime_boundary() -> None:
     cases = (
-        ("지금 몇 단계?", CuratedProtocolAction.CURRENT),
-        ("어, 지금 단계 몇이야?", CuratedProtocolAction.CURRENT),
+        ("지금 몇 단계?", CuratedProtocolAction.PROTOCOL_QUERY),
+        ("어, 지금 단계 몇이야?", CuratedProtocolAction.PROTOCOL_QUERY),
         ("다음 뭐야?", CuratedProtocolAction.NEXT_INFORMATION),
         ("그럼 다음에 뭐 해?", CuratedProtocolAction.NEXT_INFORMATION),
     )
