@@ -341,6 +341,30 @@ def test_live_vad_drop_is_not_an_asr_measurement_and_stt_failure_is_counted():
     assert row['stt_counts']['reference_chars']>0
 
 
+def test_live_stt_failure_keeps_only_provider_status_and_code():
+    from dataclasses import replace
+
+    from voiney_lab.voice_providers import SpeechProviderError
+
+    protocol=load_corpus()[0]
+    case=replace(
+        next(case for case in generate_cases(protocol) if case.family=='current'),
+        text='현재 단계 알려 줘',
+    )
+
+    def refused(*args,**kwargs):
+        raise SpeechProviderError(
+            'private provider reply must not be exported',status=404,code='not_found')
+
+    result=asyncio.run(run_case(protocol,case,transcriber=refused))
+    assert result['stt_failures']==[{'status':404,'code':'not_found'}]
+    assert 'private provider reply' not in json.dumps(result,ensure_ascii=False)
+    row=score_case(case,result,mode='live')
+    assert row['stt_failures']==[{'status':404,'code':'not_found'}]
+    overall=aggregate([row])['overall']
+    assert overall['stt_failures']==[{'status':404,'code':'not_found','count':1}]
+
+
 @pytest.mark.parametrize('family,text',[
     ('current','지금 단계 읽어 줘'),
     ('repeat','현재 단계 다시 읽어 줘'),

@@ -5,6 +5,7 @@ import asyncio
 import copy
 import json
 import os
+import re
 import socket
 import time
 from contextlib import ExitStack
@@ -210,6 +211,17 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         done = next((e for e in reversed(events) if e['type'] == 'turn.done'), {})
         decision = next((e for e in reversed(events) if e['type'] == 'turn.route_decision'), {})
         drops += [str(e.get('reason', 'unknown')) for e in events if e['type'] == 'speech.dropped']
+        stt_failures=[]
+        for event in events:
+            if event.get('type')!='speech.dropped' or event.get('reason')!='stt_failed':
+                continue
+            status=event.get('status')
+            if not isinstance(status,int) or isinstance(status,bool) or not 100<=status<=599:
+                status=None
+            code=event.get('code')
+            if not isinstance(code,str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,39}',code):
+                code='provider_error'
+            stt_failures.append({'status':status,'code':code})
         if not committed and not drops:
             drops = ['no_vad_endpoint']
         timings = done.get('timings_ms', {})
@@ -225,7 +237,8 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             'router_handled':decision.get('router',{}).get('handled_by'), 'changed_fields': sorted(k for k in before if before[k] != after[k]),
             'step_before': before['step'][0], 'step_after': after['step'][0],
             'transcript': ' '.join(hypotheses), 'spoken': ' '.join(capture.spoken),
-            'drop_reasons': sorted(set(drops)), 'stt_calls': stt_calls, 'stt_responses':len(hypotheses),
+            'drop_reasons': sorted(set(drops)), 'stt_failures':stt_failures,
+            'stt_calls': stt_calls, 'stt_responses':len(hypotheses),
             'terminal': bool(done or drops), 'endpoint_count': len(committed),
             'cut_off': any(e.result.forced for e in committed) or len(committed)>1,
             'interrupted': any(e['type'] in {'turn.cancelled', 'audio.cancelled'} for e in events),
