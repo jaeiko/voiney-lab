@@ -23,7 +23,7 @@ function protocol(over: Partial<ProtocolState> = {}): ProtocolState {
 function ended(over: Partial<ProtocolState> = {}, model = {}) {
   runStore.reset({
     experimentId: "s1",
-    model: { ...EMPTY_RUN, protocol: protocol(over), stateRevision: 4, reportId: "ER-1", helpTurns: [4], ended: { status: "stopped", report: null }, ...model },
+    model: { ...EMPTY_RUN, protocol: protocol(over), stateRevision: 4, reportId: "ER-1", helpTurns: [4], droppedCount: 3, ended: { status: "stopped", report: null }, ...model },
   });
   return runStore.get();
 }
@@ -51,14 +51,14 @@ afterEach(() => {
 });
 
 describe("EndScreen", () => {
-  it("says what was done -- the protocol, the steps, the time -- and three numbers from the run", async () => {
+  it("puts the run, every record, unheard words and the notebook on one end screen", async () => {
     renderWithClient(<EndScreen snapshot={ended()} />);
     expect(screen.getByTestId("run-ended")).toHaveTextContent("실험을 멈췄어요");
     expect(screen.getByTestId("end-sub")).toHaveTextContent("In-gel digestion · 9단계 중 5단계까지 · 23분 걸림");
     expect(screen.getByTestId("end-notebook")).toHaveAttribute("href", "#/records/s1");
-    await waitFor(() => expect(screen.getByTestId("end-counts").querySelector('[data-count="voice"] .end-count-number')).toHaveTextContent("2"));
-    expect(screen.getByTestId("end-counts").querySelector('[data-count="changes"] .end-count-number')).toHaveTextContent("2");
-    expect(screen.getByTestId("end-counts").querySelector('[data-count="help"] .end-count-number')).toHaveTextContent("1");
+    await waitFor(() => expect(screen.getByTestId("end-counts").querySelector('[data-count="records"] .end-count-number')).toHaveTextContent("4"));
+    expect(screen.getByTestId("end-counts").querySelector('[data-count="missed"] .end-count-number')).toHaveTextContent("3");
+    expect(screen.queryByTestId("run-pause")).toBeNull();
   });
 
   it("a completed run names all its steps; a run with no clock has no time line", () => {

@@ -263,18 +263,22 @@ export async function walk(page: Page, info: TestInfo) {
   await expect(page.getByTestId('run-listening')).not.toHaveAttribute('data-word', 'reconnecting');
   await expect(page.locator('#connection-band')).toBeHidden({ timeout: 10_000 });
 
-  // [종료] from the paused band (decision 1: 일시정지 → 다시 시작 → 일시정지 → 종료·저장): asked once, then the end.
+  // A server-confirmed spoken end while paused: the microphone closes, every execution control leaves, and later words do nothing.
   await page.getByTestId('run-pause').click();
   await expect(page.getByTestId('run-paused')).toBeVisible();
-  await page.getByTestId('run-paused-stop').click();
-  await page.getByTestId('run-stop-confirm').click();
+  server.voice('종료');
+  server.voice('네');
   await expect(page.getByTestId('run-ended')).toContainText('실험을 멈췄어요');
-  expect(server.received).toContain('session.stop');
-  // The end screen (decision 3): what was done, three numbers from the run, one question, chips, a line, [보내기].
+  await expect.poll(() => page.evaluate(() => micStream)).toBeNull();
+  await expect(page.getByTestId('run-pause')).toHaveCount(0);
+  await expect(page.getByTestId('run-stop')).toHaveCount(0);
+  await expect(page.getByTestId('run-listening')).toHaveCount(0);
+  expect(server.wrongVoiceMutations).toBe(0);
+  // The one end screen: what was done, record and unheard counts, notebook, then feedback.
   await expect(page.getByTestId('end-sub')).toContainText('In-gel digestion');
-  await expect(page.getByTestId('end-counts').locator('[data-count="voice"] .end-count-number')).toHaveText('1');
-  await expect(page.getByTestId('end-counts').locator('[data-count="changes"] .end-count-number')).toHaveText('0');
-  await expect(page.getByTestId('end-counts').locator('[data-count="help"] .end-count-number')).toHaveText('0');
+  await expect(page.getByTestId('end-counts').locator('[data-count="records"] .end-count-number')).toHaveText('3');
+  await expect(page.getByTestId('end-counts').locator('[data-count="missed"] .end-count-number')).toHaveText('1');
+  await expect(page.getByTestId('end-notebook')).toBeVisible();
   await expect(page.getByTestId('end-send')).toBeDisabled();
   await noOverflow(page, 'the end');
   await shot(page, info, '18-run-ended');
@@ -312,4 +316,3 @@ export async function settingsWalk(page: Page, info: TestInfo) {
   await noOverflow(page, 'the settings');
   await shot(page, info, '20-settings');
 }
-
