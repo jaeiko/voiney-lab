@@ -8,8 +8,10 @@ information carries them.
 
 from __future__ import annotations
 
+import io
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests.lane_cf_support import RecordedSession, Session
 from voiney_lab import experiment_reports as er
@@ -29,6 +31,31 @@ DISCLOSED_BASIS = {
     },
 }
 WORDS = "지금 기준: usingdynamicheadspacecollections.pdf · 2026년 10월 7일 올림"
+
+
+class _CaptureOffice:
+    """Capture the exact Word document handed to the local PDF converter."""
+
+    def __init__(self) -> None:
+        self.document: bytes | None = None
+
+    def __call__(self, command, **_kwargs):
+        if "--version" in command:
+            return mock.Mock(returncode=0, stdout=b"LibreOffice test\n")
+        source = Path(command[-1])
+        self.document = source.read_bytes()
+        out = Path(command[command.index("--outdir") + 1])
+        out.mkdir(parents=True, exist_ok=True)
+        (out / (source.stem + ".pdf")).write_bytes(b"%PDF-1.7\n% fake\n")
+        return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+
+
+def _word_text(data: bytes) -> str:
+    from docx import Document
+
+    document = Document(io.BytesIO(data))
+    cells = [cell.text for table in document.tables for row in table.rows for cell in row.cells]
+    return "\n".join([*(paragraph.text for paragraph in document.paragraphs), *cells])
 
 
 class BasisWordsTests(unittest.TestCase):
@@ -106,6 +133,53 @@ class BasisReportTests(RecordedSession, unittest.TestCase):
         facts = er.build_report_facts(self.report(), fixture=self.session.fixture)
         self.assertIn(("원문 공개 범위", "예 — 공개·시판 원문"), facts.notebook.header_rows)
         self.assertIn(("출처 메모", "시판 제품 설명서"), facts.notebook.header_rows)
+
+    def test_person_source_note_numbers_survive_audit_word_and_pdf_without_admitting_others(self) -> None:
+        basis = {
+            **DISCLOSED_BASIS,
+            "source_disclosure": {
+                **DISCLOSED_BASIS["source_disclosure"],
+                "note": "시판 제품 설명서 문서번호 918273645",
+            },
+        }
+        self.open_with(None)
+        self.session.set_source_basis(basis)
+        self.record("프로토콜 시작해줘")
+        report = self.report()
+        facts = er.build_report_facts(report, fixture=self.session.fixture)
+        assert facts.notebook is not None
+        source_steps = er._source_steps_from_fixture(self.session.fixture)
+        self.assertEqual(
+            er.audit_notebook_number_provenance(
+                facts.notebook, source_steps=source_steps, events=report["events"],
+            ),
+            (),
+        )
+        from dataclasses import replace
+
+        tampered = replace(facts.notebook, interpretation_words="기록에 없는 번호 918273646")
+        self.assertIn(
+            "notebook.interpretation_words: 918273646",
+            er.audit_notebook_number_provenance(
+                tampered, source_steps=source_steps, events=report["events"],
+            ),
+        )
+
+        store = self.listener.experiment_report_store
+        report_id = self.listener.experiment_report_id
+        word = store.export_docx(
+            report_id, fixture=self.session.fixture, start_check=None, previous=None,
+        )
+        for words in ("실험 정보", "원문 공개 범위", "예 — 공개·시판 원문", "출처 메모",
+                      "시판 제품 설명서 문서번호 918273645"):
+            self.assertIn(words, _word_text(word))
+        office = _CaptureOffice()
+        self.assertTrue(store.export_pdf(
+            report_id, fixture=self.session.fixture, start_check=None, previous=None,
+            converter="/usr/bin/soffice", run=office,
+        ).startswith(b"%PDF"))
+        assert office.document is not None
+        self.assertIn("시판 제품 설명서 문서번호 918273645", _word_text(office.document))
 
 
 class BasisScreenTests(unittest.TestCase):

@@ -107,14 +107,13 @@ class CheckTests(_Case):
         self.assertEqual(narrative.ai_result, GOOD["result_summary"])
         self.assertEqual(narrative.ai_rejected, ())
         text = er.render_markdown(narrative)
-        section = text.split("## 3. 관찰과 결과")[1].split("## 4.")[0]
-        self.assertIn("> AI 정리 — 6단계 · 1번 샘플: 1번 샘플 생존율 82%, 2번 샘플 41%로 처리군이 대조군보다 낮았다.", section)
-        self.assertIn("> AI 정리 — 5단계 · 3번 샘플: 3번 샘플(대조군)의 세포 밀도가 예상보다 낮았다.", section)
-        self.assertIn("> 결과 (실험자가 말함): “처리군 생존율이 대조군보다 낮았어.”", section)
-        self.assertIn("> 결과 (AI 정리): 약물 X 0.5 µM과 5 µM 처리군의 생존율이 대조군보다 낮았고, 3단계는 40°C에서 넣었다.", section)
+        section = text.split("## 관찰·특이사항")[1].split("## 결과")[0]
+        self.assertNotIn("AI 정리", section)
+        self.assertIn("처리군 생존율이 대조군보다 낮았어.", text.split("## 결과")[1].split("## 해석")[0])
+        self.assertNotIn(GOOD["result_summary"], text)
         self.assertTrue(text.rstrip().splitlines()[-1].startswith(
             "> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다. "
-            "AI 정리 3문장(fake-model)은 ‘AI 정리’로 표시했고 모든 숫자·단위가 기록이나 원문에 있는지 서버가 검사했다. 작성 "),
+            "모델이 쓴 문장은 포함하지 않았다. 작성 "),
             text[-300:])
 
     def test_a_sentence_with_a_value_not_in_the_record_or_source_is_dropped(self) -> None:
@@ -142,10 +141,9 @@ class CheckTests(_Case):
         text = er.render_markdown(narrative)
         self.assertNotIn("0.82", text)
         self.assertNotIn("77%", text)
-        self.assertIn("> AI 정리 — 6단계 · 2번 샘플: 2번 샘플 생존율 41%였다.", text)
+        self.assertNotIn("2번 샘플 생존율 41%였다.", text)
         self.assertNotIn("결과 (AI 정리)", text)
-        self.assertIn("AI 정리 1문장(fake-model)은 ‘AI 정리’로 표시했고", text)
-        self.assertIn("검사에서 버린 문장 6개", text)
+        self.assertIn("모델이 쓴 문장은 포함하지 않았다.", text)
 
     def test_an_unconfirmed_value_may_not_be_stated(self) -> None:
         # The run's values were confirmed but one: a note built on it is dropped.
@@ -194,8 +192,8 @@ class CheckTests(_Case):
                 self.assertEqual(narrative.ai_notes, ())
                 self.assertEqual(narrative.ai_result, "")
                 text = er.render_markdown(narrative)
-                self.assertNotIn("AI 정리", text.split("## 8. 부록")[0])
-                self.assertIn("AI 가 쓴 문장은 없다", text)
+                self.assertNotIn("AI 정리", text)
+                self.assertIn("모델이 쓴 문장은 포함하지 않았다", text)
                 self.assertIn("| 6단계 · Read-out | 1번 샘플 | 1번 샘플 생존율 82%", text)
 
     def test_the_writer_off_by_setting_makes_no_call(self) -> None:
@@ -329,7 +327,8 @@ class DeviationRunTests(unittest.TestCase):
             self.assertEqual(narrative.ai_result, "4단계에서 튜브를 쏟은 것 외에 원문대로 진행했다.")
             text = record.store.export_markdown(record.report_id, narrative, fixture=protocol_double(),
                                                 start_check=START_CHECK, previous=None).decode()
-            self.assertIn("> AI 정리 — 2단계: 2단계는 원문의 37°C 대신 40°C에서 씻었다.", text)
+            self.assertNotIn("2단계는 원문의 37°C 대신 40°C에서 씻었다.", text)
+            self.assertIn("40도에서 씻었어", text)
 
 
 if __name__ == "__main__":

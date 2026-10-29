@@ -123,7 +123,7 @@ class ExportRouteTests(unittest.TestCase):
                          f'attachment; filename="{self.record.report_id}.pdf"')
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(response.content, b"%PDF-1.7 fake")
-        export.assert_called_once_with(self.record.report_id)
+        export.assert_called_once_with(self.record.report_id, image_resolver=mock.ANY)
 
     def test_a_server_without_libreoffice_says_so(self) -> None:
         refusal = er.ReportPdfError("LibreOffice is not installed on this server.", code="report_pdf_unavailable")
@@ -157,7 +157,8 @@ class LibreOfficePdfTests(unittest.TestCase):
             self.assertIn(words, text)
         whole = "".join(page.get_text() for page in document)
         self.assertIn("튜브를 쏟았어", whole)
-        self.assertIn("1. 시료와 조건", whole)
+        self.assertIn("실험 정보", whole)
+        self.assertIn("관찰·특이사항", whole)
         fonts = {font[3] for page in document for font in page.get_fonts()}
         self.assertTrue(any("Nanum" in name for name in fonts), fonts)
 

@@ -4903,6 +4903,13 @@ _NOTE_CONTENT_FIRST = re.compile(
 _NOTE_BARE = re.compile(
     rf"^(?:{_NOTE_PLACE}\s*{_NOTE_VERB_PLACED}|{_NOTE_VERB}){_NOTE_POLITE}\s*[.!。]?$"
 )
+# At the bench, researchers also use a heading as the whole command
+# ("특이사항, ...", "메모 ...").  The heading is not part of the recorded
+# words.  Keep this narrower than the noun-first command above so ordinary
+# sentences that merely mention a memo are not captured.
+_NOTE_BENCH_PREFIX = re.compile(
+    r"^(?P<noun>특이사항|메모)\s*(?:[,：:]\s*|\s+)(?P<content>\S.*)$"
+)
 #: A quotative ending of content said before the command ("…라고 적어 줘").
 _NOTE_QUOTATIVE = re.compile(r"(?:\s*(?:이)?라고|(?<=다)고)$")
 #: "pH 7.2로 기록해 줘": the "(으)로" after a value is the command's, not the note's.
@@ -4928,13 +4935,28 @@ _MEASURE = re.compile(
     rf"(?:\s*(?:{_MEASURE_UNIT}))?"
     rf"|(?<![\w.]){_MEASURE_NUMBER}\s*(?:{_MEASURE_UNIT})"
 )
+# A bare measurement is a note only when its short form anchors both a
+# concrete bench identifier and a named measured quantity.  This admits
+# "2번 셀 질량 12.3 mg" without turning every number heard near the
+# microphone into a record.
+_NOTE_LOCATION_ID = (
+    r"(?:\d+\s*번|[A-Ha-h]\s*(?:[1-9]|1[0-2])|[A-Za-z]+[-_]\d+)"
+)
+_NOTE_LOCATION_ENTITY = r"(?:well|웰|튜브|tube|셀|cell|시료|샘플|sample)"
+_NOTE_IDENTIFIED_MEASUREMENT = re.compile(
+    rf"^(?=.*(?:{_NOTE_LOCATION_ID})\s*(?:{_NOTE_LOCATION_ENTITY})|"
+    rf"(?=.*(?:{_NOTE_LOCATION_ENTITY})\s*(?:{_NOTE_LOCATION_ID})))"
+    rf"(?=.*(?:{_MEASURE_NAME})\s*(?:은|는|이|가|값은|값이|:)?\s*"
+    rf"(?:{_MEASURE_NUMBER}|{_KOREAN_DECIMAL})).+$",
+    re.I,
+)
 _DEVIATION_WORDS = re.compile(
     r"(?:원문|프로토콜)(?:과|이랑|하고|이란|보다)?\s*(?:다르게|달리|다른\s*(?:방법|조건))"
     r"|대신|더\s*(?:넣|많이|오래|길게|했|돌렸|추가|기다렸)|덜\s*(?:넣|했|돌렸|기다렸)"
     r"|적게\s*넣|많이\s*넣|바꿔서|바꿨|변경했|빼고|생략|건너뛰|안\s*넣었|못\s*넣었"
 )
 _OBSERVATION_WORDS = re.compile(
-    r"색|투명|맑|탁해|탁하|흐려|흐릿|뿌옇|침전|녹았|녹아|안\s*녹|덩어리|보여|보인|보이|"
+    r"색|투명|맑|탁해|탁하|탁함|흐려|흐릿|뿌옇|침전|녹았|녹아|안\s*녹|덩어리|보여|보인|보이|"
     r"변했|바뀌었|거품|냄새|층이|분리됐|굳었|굳어|응고|탈색|염색|밴드|형광|끓|증발|"
     r"줄었|늘었|부풀|갈라|노랗|파랗|빨갛|하얗|노란|파란|빨간|하얀|점성|끈적|결정이|가루|입자"
 )
@@ -4999,6 +5021,12 @@ def note_request(transcript: str) -> tuple[str | None, str | None] | None:
             return None
         content = _note_content(match.group("content") or "")
         return (content or None), noun
+    match = _NOTE_BENCH_PREFIX.fullmatch(said)
+    if match is not None:
+        content = _note_content(match.group("content"))
+        return (content or None), match.group("noun")
+    if _NOTE_IDENTIFIED_MEASUREMENT.fullmatch(said):
+        return said, None
     match = _NOTE_COMMAND_FIRST.fullmatch(said)
     if match is None:
         match = _NOTE_CONTENT_FIRST.fullmatch(said)

@@ -11,6 +11,7 @@ export async function mockRecords(page: Page, admin = false) {
     if (path === '/api/auth/session') return route.fulfill({ json: { mode: 'dev', signed_in: true, account: { account_id: 'me', admin, name: '견본 사용자', organization_id: 'lab-example' } } });
     if (path === '/api/workspace/session') return route.fulfill({ json: { principal_id: 'me' } });
     if (path === '/api/protocols') return route.fulfill({ json: { protocols: [] } });
+    if (path === '/api/notebook-template') return route.fulfill({ json: { version: 0, sections: [] } });
     if (path === '/api/workspace/experiments') return route.fulfill({ json: { experiments: RECORDS } });
     const record = /^\/api\/workspace\/experiments\/(rx3-[0-2])(?:\/(.*))?$/.exec(path);
     if (record) {
@@ -21,6 +22,8 @@ export async function mockRecords(page: Page, admin = false) {
       if (record[2].startsWith('evidence/')) return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="96"><rect width="160" height="96" fill="#efefec"/><text x="16" y="52">Synthetic sample</text></svg>' });
     }
     if (/^\/api\/experiment-reports\/report-rx3-[0-2]\/prose$/.test(path)) return route.fulfill({ json: { state: 'ready', label: '보고서 문장이 준비됐어요.' } });
+    if (/^\/api\/experiment-reports\/report-rx3-[0-2]\/sharing$/.test(path)) return route.fulfill({ json: { shared: false, changed_at: null } });
+    if (/^\/api\/experiment-reports\/report-rx3-[0-2]\/comparisons$/.test(path)) return route.fulfill({ json: { records: [], permission: { judgment: 'none' } } });
     const notebook = /^\/api\/experiment-reports\/report-(rx3-[0-2])\/notebook$/.exec(path);
     if (notebook) {
       const row = RECORDS.find(r => r.session_id === notebook[1])!;

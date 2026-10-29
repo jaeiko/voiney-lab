@@ -44,7 +44,7 @@ class SampleTests(unittest.TestCase):
         for path in written:
             if path.suffix == ".docx":
                 paragraphs = [p.text for p in Document(io.BytesIO(path.read_bytes())).paragraphs]
-                self.assertIn("1. 시료와 조건", paragraphs, path.name)
+                self.assertIn("실험 정보", paragraphs, path.name)
 
     @unittest.skipUnless(find_office_converter(), "LibreOffice is not installed here")
     def test_the_pdfs_print_here(self) -> None:
@@ -55,7 +55,7 @@ class SampleTests(unittest.TestCase):
             if path.suffix == ".pdf":
                 first = fitz.open(path)[0].get_text()
                 self.assertIn("실험 노트", first, path.name)
-                self.assertIn("1. 시료와 조건", first, path.name)
+                self.assertIn("실험 정보", first, path.name)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,9 @@ function setup(overrides: Parameters<typeof fakeFetch>[0] = {}) { return fakeFet
   '/api/workspace/experiments/rx3-0/reports': { json: { reports: [REPORT] } },
   '/api/experiment-reports/report-rx3/prose': { json: { state: 'ready', label: '보고서 문장이 준비됐어요.' } },
   '/api/experiment-reports/report-rx3/notebook': { json: NOTEBOOK },
+  '/api/experiment-reports/report-rx3/sharing': { json: { report_id: 'report-rx3', shared: false, changed_at: null } },
+  '/api/experiment-reports/report-rx3/comparisons': { json: { records: [], permission: { judgment: 'none' } } },
+  '/api/notebook-template': { json: { version: 0, sections: [] } },
   ...overrides,
 }); }
 it('lists three fields with exact completion counts, dates and saved rating; searches and filters', async () => {
@@ -47,6 +50,29 @@ it('renders the server notebook tables as text with unconfirmed labels and uncha
   setup(); renderWithClient(<NotebookScreen sessionId='rx3-0' reportId='report-rx3' session={SESSION_DEV as AuthSession} />);
   expect(await screen.findByText('원문 60 s → 실제 90 s [미확인]')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Word로 내려받기' })).toHaveAttribute('href', '/api/experiment-reports/report-rx3.docx');
+});
+it('shows the recorded public-source disclosure in the experiment information section', async () => {
+  setup({
+    '/api/experiment-reports/report-rx3/notebook': { json: {
+      ...NOTEBOOK,
+      notebook: {
+        ...NOTEBOOK.notebook,
+        header_rows: [
+          ...NOTEBOOK.notebook.header_rows,
+          ['원문 공개 범위', '예 — 공개·시판 원문'],
+          ['출처 메모', '시판 제품 설명서 문서번호 918273645'],
+        ],
+      },
+    } },
+  });
+  renderWithClient(<NotebookScreen sessionId='rx3-0' reportId='report-rx3' session={SESSION_DEV as AuthSession} />);
+  const information = await screen.findByRole('heading', { name: '실험 정보' });
+  const section = information.closest('section');
+  expect(section).not.toBeNull();
+  expect(within(section!).getByText('원문 공개 범위')).toBeInTheDocument();
+  expect(within(section!).getByText('예 — 공개·시판 원문')).toBeInTheDocument();
+  expect(within(section!).getByText('출처 메모')).toBeInTheDocument();
+  expect(within(section!).getByText('시판 제품 설명서 문서번호 918273645')).toBeInTheDocument();
 });
 it.each([[], null])('shows empty or failed record state with retry', async rows => {
   fakeFetch({ '/api/workspace/experiments': rows ? { json: { experiments: rows } } : { status: 503 }, '/api/workspace/session': { json: {} } });
@@ -117,4 +143,85 @@ it('keeps a document attachment distinct from a photo', async () => {
   renderWithClient(<RecordDetailScreen sessionId='rx3-0' />);
   expect(await screen.findByRole('link', { name: '첨부 파일 내려받기' }, { timeout: 10000 })).toHaveAttribute('href', '/api/workspace/experiments/rx3-0/evidence/document-1');
   expect(screen.queryByRole('img', { name: '견본 문서' })).not.toBeInTheDocument();
+});
+
+it('shows the grounded notebook skeleton, deterministic visuals, Methods fields and opt-in comparison', async () => {
+  const rich = {
+    ...NOTEBOOK,
+    report: { ...NOTEBOOK.report, session_id: 'rx3-0', owner_principal_id: 'me' },
+    notebook: {
+      ...NOTEBOOK.notebook,
+      method_rows: [{ label: '1', source_text: 'Mix for 60 s.', actual_values: '60 s → 90 s', started_at: '10:00', ended_at: '10:02', timer: '실제 90초' }],
+      timeline: [{ at: '10:00', step_label: '1', kind: 'start', text: '실험 시작' }, { at: '10:01', step_label: '1', kind: 'observation', text: 'A1 well 탁함' }],
+      value_bars: [
+        { label: '1단계 · 양', kind: '양', source: '1000 µL', actual: '1 mL', source_number: '1000', source_unit: 'µL', actual_number: '1', actual_unit: 'mL', unit: 'µL' },
+        { label: '2단계 · 양', kind: '양', source: '0 mL', actual: '1 mL', source_number: '0', source_unit: 'mL', actual_number: '1', actual_unit: 'mL', unit: 'mL' },
+      ],
+      images: [
+        { kind: 'photo', step_label: '1', caption: '배양 사진', url: '/api/workspace/experiments/rx3-0/evidence/photo-note', media_type: 'image/png', asset_id: 'photo-note' },
+        { kind: 'source_figure', step_label: '1', caption: 'Figure 1. 원문 plate', url: '/api/protocols/p/revisions/r/figures/source-figure-1-1', media_type: 'image/png', asset_id: 'source-figure-1-1', source_page: 1 },
+      ],
+      plate_positions: [{ label: 'A1 well', step_label: '1', words: 'A1 well 탁함' }],
+      sample_rows: [],
+      domain: { code: 'biology', label: '바이오', selected_by: 'source_analysis', fields: [{ label: '세포주', value: 'A549 cells', origin: 'source', source_keys: ['p-1'], formula: '' }, { label: '계대 수', value: '', origin: 'blank', source_keys: [], formula: '' }] },
+      inventory: [{ kind: '재료', name: 'MTT reagent', vendor: 'Sigma-Aldrich', catalog_number: 'M5655', lot_number: 'LOT-24', stage: 'after', source_keys: ['inventory-1'] }],
+      interpretation_words: '',
+      next_change: '', next_lines: ['5단계부터 이어서 한다 (원문의 다음 단계)'],
+      section_template: [
+        { id: 'experiment_info', name: '실험 정보' }, { id: 'purpose', name: '목적' },
+        { id: 'methods', name: '방법' }, { id: 'observations', name: '관찰·특이사항' },
+        { id: 'results', name: '결과' }, { id: 'interpretation_next', name: '해석·다음 할 일' },
+        { id: 'domain', name: '분야별 기록' }, { id: 'appendix', name: '부록' },
+      ],
+    },
+  };
+  const { calls } = setup({
+    '/api/experiment-reports/report-rx3/notebook': { json: rich },
+    '/api/experiment-reports/report-rx3/sharing': { json: { report_id: 'report-rx3', shared: false, changed_at: null } },
+    '/api/experiment-reports/report-rx3/comparisons': { json: { records: [
+      { record_scope: 'mine', label: '내 기록', value_rows: [], method_rows: [], timeline: [], notes: [] },
+      { record_scope: 'shared', label: '공유 기록 1', value_rows: [], method_rows: [], timeline: [], notes: [{ step_label: '1', at: '10:03', kind: '메모', text: 'A1 well 침전 있음' }] },
+    ], permission: { scope: 'same_organization_same_protocol', other_records: 'opt_in_read_only', withdrawal: 'latest_append_only_event', judgment: 'none' } } },
+  });
+  renderWithClient(<NotebookScreen sessionId='rx3-0' reportId='report-rx3' session={SESSION_DEV as AuthSession} />);
+  expect(await screen.findByRole('heading', { name: '방법' })).toBeInTheDocument();
+  expect(screen.getByText('Mix for 60 s.')).toBeInTheDocument();
+  expect(screen.getByText('A549 cells')).toBeInTheDocument();
+  expect(screen.getByText('LOT-24')).toBeInTheDocument();
+  expect(screen.getByRole('img', { name: '1단계 · 배양 사진' })).toHaveAttribute('src', '/api/workspace/experiments/rx3-0/evidence/photo-note');
+  expect(screen.getByRole('img', { name: '1단계 · Figure 1. 원문 plate' })).toBeInTheDocument();
+  const [valueBar, zeroValueBar] = screen.getAllByTestId('notebook-value-bar');
+  expect(valueBar).toBeInTheDocument();
+  const scales = valueBar.querySelectorAll('i');
+  expect(scales[0]).toHaveStyle({ width: '100%' });
+  expect(scales[1]).toHaveStyle({ width: '100%' });
+  expect(zeroValueBar.querySelectorAll('i')[0]).toHaveStyle({ width: '0%' });
+  expect(screen.queryByText('5단계부터 이어서 한다 (원문의 다음 단계)')).not.toBeInTheDocument();
+  expect(await screen.findByText((_, node) => node?.tagName === 'P' && Boolean(node.textContent?.includes('A1 well 침전 있음')))).toBeInTheDocument();
+  expect(screen.getByText('작은 연구실에서는 누구 기록인지 알아볼 수 있어요. 말한 특이사항은 그대로 보여요.')).toBeInTheDocument();
+  await userEvent.click(await screen.findByRole('button', { name: '이 기록 비교 공유 켜기' }));
+  const share = calls.find(call => call.path.endsWith('/sharing') && call.init?.method === 'POST');
+  expect(JSON.parse(share!.init!.body as string)).toEqual({ shared: true });
+});
+
+it('lets only a lab admin rename and reorder the fixed notebook sections', async () => {
+  const sections = [
+    { id: 'experiment_info', name: '실험 정보' }, { id: 'purpose', name: '목적' },
+    { id: 'methods', name: '방법' }, { id: 'observations', name: '관찰·특이사항' },
+    { id: 'results', name: '결과' }, { id: 'interpretation_next', name: '해석·다음 할 일' },
+    { id: 'domain', name: '분야별 기록' }, { id: 'appendix', name: '부록' },
+  ];
+  const { calls } = setup({
+    '/api/notebook-template': { json: { version: 0, sections } },
+    '/api/experiment-reports/report-rx3/notebook': { json: { ...NOTEBOOK, report: { ...NOTEBOOK.report, owner_principal_id: 'other' } } },
+  });
+  renderWithClient(<NotebookScreen sessionId='rx3-0' reportId='report-rx3' session={{ ...SESSION_DEV, account: { ...SESSION_DEV.account, admin: true } } as AuthSession} />);
+  const names = await screen.findAllByLabelText('노트 절 이름');
+  await userEvent.clear(names[0]); await userEvent.type(names[0], '기본 정보');
+  await userEvent.click(screen.getByRole('button', { name: '목적 위로' }));
+  await userEvent.click(screen.getByRole('button', { name: '연구실 노트 양식 저장' }));
+  const write = calls.find(call => call.path === '/api/notebook-template' && call.init?.method === 'PUT');
+  expect(JSON.parse(write!.init!.body as string).sections.slice(0, 2)).toEqual([
+    { id: 'purpose', name: '목적' }, { id: 'experiment_info', name: '기본 정보' },
+  ]);
 });

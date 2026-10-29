@@ -8,6 +8,7 @@ import pytest
 
 from tests.test_lane_on_auth_api import Device, _Socket, _configure, _invite
 from voiney_lab import accounts as acc
+from voiney_lab import experiment_reports as er
 from voiney_lab import server as srv
 from voiney_lab.experiment_reports import ExperimentReportStore
 from voiney_lab.workspace_store import initialize_workspace_store
@@ -124,8 +125,39 @@ def test_schema_one_upgrades_without_rewriting_events(tmp_path):
         "owned": 1, "admin_only": 0, "unscoped": 0}
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("SELECT * FROM experiment_report_events").fetchall() == before
-        assert connection.execute("SELECT schema_version FROM experiment_report_metadata").fetchone()[0] == 2
+        assert connection.execute("SELECT schema_version FROM experiment_report_metadata").fetchone()[0] == 3
     assert store.get_report(report["report_id"])["owner_principal_id"] == "account-owner"
+
+
+def test_schema_two_adds_append_only_notebook_templates_without_rewriting_events(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "schema-two.sqlite"
+    store = ExperimentReportStore(path)
+    report = store.open_report(
+        session_id="schema-two-session", protocol_id="schema-two-protocol",
+        protocol_title="Legacy", protocol_revision="schema-two-revision",
+        protocol_sha256="d" * 64, readiness_status="ready", development_only=False,
+        organization_id="lab-a", owner_principal_id="owner",
+    )
+    store.append_event(
+        report["report_id"], event_key="kept-schema-two", event_type="observation",
+        user_wording="A1 well 12.3 mg",
+    )
+    with sqlite3.connect(path) as connection:
+        before = connection.execute("SELECT * FROM experiment_report_events").fetchall()
+        connection.execute("DROP TABLE experiment_notebook_templates")
+        connection.execute("UPDATE experiment_report_metadata SET schema_version=2")
+
+    reopened = ExperimentReportStore(path)
+    assert reopened.notebook_template("lab-a")["sections"] == [
+        {"id": item.id, "name": item.name} for item in er.DEFAULT_NOTEBOOK_TEMPLATE
+    ]
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT * FROM experiment_report_events").fetchall() == before
+        assert connection.execute(
+            "SELECT schema_version FROM experiment_report_metadata"
+        ).fetchone()[0] == 3
 
 
 def test_reopening_report_cannot_change_owner(tmp_path):

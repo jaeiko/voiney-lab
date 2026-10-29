@@ -173,6 +173,12 @@ test('upload → pages → evidence card → start → Korean step / timer / rec
       result_words: '', result: '', next_change: '', source_words: '시험용 가짜 자료',
     },
   } }));
+  await page.route(`**/api/experiment-reports/${server.report}/sharing`, route => route.fulfill({ json: {
+    report_id: server.report, shared: false, changed_at: null,
+  } }));
+  await page.route(`**/api/experiment-reports/${server.report}/comparisons`, route => route.fulfill({ json: {
+    anchor_report_id: server.report, records: [], permission: { judgment: 'none' },
+  } }));
   // The current end link leads through the record detail before the notebook.
   await page.route(`**/api/workspace/experiments/${SESSION}/reports`, route => route.fulfill({ json: { reports: [report] } }));
   await page.getByRole('link', { name: '실험 노트 보기', exact: true }).click();

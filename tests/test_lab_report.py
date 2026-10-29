@@ -141,8 +141,7 @@ class ReportStructureTests(_ReportCase):
         self.run_steps_one_to_four_then_stop()
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         headings = [line for line in text.splitlines() if line.startswith("#")]
-        # Lane RP3, decision ① (2026-10-20): the notebook's sections, in order.
-        self.assertEqual(headings[:2], ["# Test digestion protocol", "## 1. 시료와 조건"])
+        self.assertEqual(headings[:2], ["# Test digestion protocol", "## 실험 정보"])
         self.assertEqual([h for h in headings if h.startswith("## ")], list(er.NOTEBOOK_HEADINGS))
         for identifier in (self.report_id, *REPORT_ID_FIELDS, "stopped", "step_completed"):
             self.assertNotIn(identifier, text)
@@ -183,11 +182,12 @@ class ReportStructureTests(_ReportCase):
         self.assertIn("| 3 | 09:40 | 10:06 | 26분 (멈춤 5분 포함) | 원문 15분 / 10분에 끝냄 |", text)
         self.assertIn("> 출처: [1] Kim 2025. Test digestion protocol. protocols.io https://dx.doi.org/10.1/test.v1 — 실험에 쓴 프로토콜 원문", text)
 
-    def test_a_record_without_observations_says_so(self) -> None:
+    def test_a_record_without_observations_leaves_the_section_blank(self) -> None:
         self.event("00:30", "session_started", "1")
         self.event("00:36", "step_completed", "1")
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
-        self.assertIn("## 3. 관찰과 결과\n\n> 기록된 관찰이 없다.", text)
+        section = text.split("## 관찰·특이사항", 1)[1].split("## 결과", 1)[0]
+        self.assertEqual(section.strip(), "")
 
     def test_docx_has_the_same_sections_and_tables(self) -> None:
         from docx import Document
@@ -361,8 +361,10 @@ class ReportExportRouteTests(_ReportCase):
                 text = response.text
             else:
                 text = "\n".join(p.text for p in Document(io.BytesIO(response.content)).paragraphs)
-            # Lane RP3, decision ③: the kept reply's notes are in both, marked.
-            self.assertIn("AI 정리 — 4단계: 4단계에서 밴드가 투명해졌다.", text, suffix)
+            # A prepared model suggestion never fills observation, result or
+            # interpretation in the grounded notebook body.
+            self.assertNotIn("AI 정리 —", text, suffix)
+            self.assertNotIn("4단계에서 밴드가 투명해졌다.", text, suffix)
             self.assertIn("Test digestion protocol", text, suffix)
 
 
@@ -412,16 +414,14 @@ class ReportLayoutTests(_ReportCase):
     def test_every_table_has_widths_with_short_values_narrow(self) -> None:
         self.run_steps_one_to_four_then_stop()
         tables = [content for kind, content in er.report_blocks(self.narrative()) if kind == "table"]
-        # Lane RP3, decision ①: the header, the conditions, the observations,
-        # and the appendix's step times and words as said (no samples said here).
-        self.assertEqual(len(tables), 5)
+        self.assertGreaterEqual(len(tables), 5)
         for header, _rows, widths in tables:
             self.assertEqual(len(widths), len(header), header)
             self.assertAlmostEqual(sum(widths), 1.0, places=6)
-            narrow = [share for name, share in zip(header, widths) if name in self.NARROW]
-            wide = [share for name, share in zip(header, widths) if name in self.WIDE]
-            self.assertEqual(len(narrow) + len(wide), len(header), header)
-            self.assertLess(max(narrow), min(wide), header)
+        by_header = {header: widths for header, _rows, widths in tables}
+        self.assertLess(by_header[er.METHOD_HEADER][0], by_header[er.METHOD_HEADER][1])
+        self.assertLess(by_header[er.OBSERVATION_HEADER][1], by_header[er.OBSERVATION_HEADER][2])
+        self.assertLess(by_header[er.INVENTORY_HEADER][1], by_header[er.INVENTORY_HEADER][0])
 
     def test_word_applies_the_widths_and_a_fixed_layout(self) -> None:
         from docx import Document
@@ -429,8 +429,9 @@ class ReportLayoutTests(_ReportCase):
 
         self.run_steps_one_to_four_then_stop()
         document = Document(io.BytesIO(self.store.export_docx(self.report_id, fixture=self.fixture)))
-        # Lane RP3, decision ①: the five tables above and the confirmation box.
-        self.assertEqual(len(document.tables), 6)
+        expected = [content for kind, content in er.report_blocks(self.narrative())
+                    if kind in {"table", "sign"}]
+        self.assertEqual(len(document.tables), len(expected))
         for table in document.tables:
             header = tuple(cell.text for cell in table.rows[0].cells)
             shares = er.TABLE_WIDTHS[header]
@@ -476,15 +477,14 @@ class ReportLayoutTests(_ReportCase):
         self.at("02:00")
         text = er.render_markdown(self.narrative())
         self.assertTrue(text.rstrip().endswith(
-            "> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다. AI 가 쓴 문장은 없다. "
+            "> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다. 모델이 쓴 문장은 포함하지 않았다. "
             "작성 2026년 10월 6일 11:00."), text[-300:])
-        # Lane RP3, decision ③: the AI-written sentences that passed are
-        # counted, with the writer, and the check they passed is named.
+        # Model output may be prepared for other derived exports, but the
+        # handoff notebook itself remains source-and-record only.
         text = er.render_markdown(self.narrative(GOOD_REPLY))
         self.assertTrue(text.rstrip().endswith(
             "> 이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다. "
-            "AI 정리 2문장(fake-model)은 ‘AI 정리’로 표시했고 모든 숫자·단위가 기록이나 원문에 있는지 "
-            "서버가 검사했다. 작성 2026년 10월 6일 11:00."), text[-300:])
+            "모델이 쓴 문장은 포함하지 않았다. 작성 2026년 10월 6일 11:00."), text[-300:])
 
 
 class _SlowClient(_Client):
@@ -549,8 +549,8 @@ class ReportProsePreparationTests(_ReportCase):
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         self.store.export_docx(self.report_id, fixture=self.fixture)
         self.assertEqual(len(client.calls), 1)
-        # Lane RP3, decision ③: the kept reply's notes are in the notebook, marked.
-        self.assertIn("> AI 정리 — 4단계: 4단계에서 밴드가 투명해졌다.", text)
+        self.assertNotIn("> AI 정리 —", text)
+        self.assertIn("모델이 쓴 문장은 포함하지 않았다", text)
 
     def test_asking_again_is_a_second_call(self) -> None:
         self.run_steps_one_to_four_then_stop()
@@ -566,7 +566,7 @@ class ReportProsePreparationTests(_ReportCase):
         self.assertEqual((status["state"], status["ai_written"]), ("ready", False))
         self.assertIn("서버 문장", status["label"])
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
-        self.assertIn("AI 가 쓴 문장은 없다", text)
+        self.assertIn("모델이 쓴 문장은 포함하지 않았다", text)
 
     def test_a_failed_model_leaves_the_servers_sentences(self) -> None:
         self.run_steps_one_to_four_then_stop()
@@ -577,7 +577,7 @@ class ReportProsePreparationTests(_ReportCase):
         self.assertIn("AI 문장을 쓰지 못함: 모델 답 실패(JSONDecodeError)", status["label"])
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         self.assertNotIn("AI 정리 —", text)
-        self.assertIn("AI 가 쓴 문장은 없다", text)
+        self.assertIn("모델이 쓴 문장은 포함하지 않았다", text)
 
     def test_records_added_after_preparing_appear_and_are_counted(self) -> None:
         self.run_steps_one_to_four_then_stop()

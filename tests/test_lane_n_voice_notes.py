@@ -42,6 +42,9 @@ class NoteReadingTests(unittest.TestCase):
 
     def test_the_command_and_the_words_said_before_or_after_it(self) -> None:
         cases = {
+            "특이사항, 3번 well 탁함": "3번 well 탁함",
+            "메모 A1 well 침전 있음": "A1 well 침전 있음",
+            "2번 셀 질량 12.3 mg": "2번 셀 질량 12.3 mg",
             "실험노트에 적어 줘, pH 7.2": "pH 7.2",
             "노트에 적어 줘 젤이 투명해졌어": "젤이 투명해졌어",
             "기록해 줘: OD600 0.45": "OD600 0.45",
@@ -69,6 +72,14 @@ class NoteReadingTests(unittest.TestCase):
         for said in (
             "실험 기록 보여줘", "기록 보여줘", "기록해야 돼?", "적어야 할까?",
             "적어도 10분 기다려야 해?", "용액 조금 남겨 줘", "메모장 어디 있어?",
+        ):
+            with self.subTest(said=said):
+                self.assertIsNone(note_request(said))
+
+    def test_a_bare_measurement_needs_a_sample_or_location_identifier(self) -> None:
+        for said in (
+            "질량 12.3 mg", "0.5 mL 넣었어", "pH 7.2 나왔네",
+            "셀 질량은 얼마야?", "2번 셀 질량을 재야 할까?",
         ):
             with self.subTest(said=said):
                 self.assertIsNone(note_request(said))
@@ -331,6 +342,44 @@ class ServedNoteTests(VoiceNotesHarness, unittest.TestCase):
         self.assertRegex(markdown, r"\| 2단계[^|]* \| — \| 튜브 라벨 A-170 \| \d\d:\d\d \|")
         self.assertRegex(markdown, r"\| \d\d:\d\d \| 2 \| 측정 \| pH 7\.2 \|")
         self.assertRegex(markdown, r"\| \d\d:\d\d \| 2 \| 메모 \| 튜브 라벨 A-170 \|")
+
+    def test_bench_shortcuts_keep_identifiers_and_values_without_moving_the_step(self) -> None:
+        socket = self.turns(
+            "프로토콜 시작해줘", "1단계 완료했어",
+            "특이사항, 3번 well 탁함",
+            "메모 A1 well 침전 있음",
+            "2번 셀 질량 12.3 mg",
+            snapshot=lambda listener: (
+                listener.curated_protocol_session.current_index,
+                listener.curated_protocol_session.state()["revision"],
+            ),
+        )
+        self.assertEqual(self.snapshot[0], 1)
+        replies = shown(socket)
+        self.assertEqual(replies[3], "2단계에 기록했어요.")
+        self.assertEqual(replies[4], "2단계에 기록했어요.")
+        self.assertIn("12.3 mg", replies[5])
+        notes = [event for event in self.report()["events"] if event["event_type"] == "observation"]
+        self.assertEqual(
+            [(event["step_label"], event["category"], event["user_wording"]) for event in notes],
+            [
+                ("2", "observation", "3번 well 탁함"),
+                ("2", "observation", "A1 well 침전 있음"),
+                ("2", "measurement", "2번 셀 질량 12.3 mg"),
+            ],
+        )
+        recorded = [
+            event["observation"] for event in self.timeline()["timeline"]
+            if event["event_type"] == "observation_recorded"
+        ]
+        self.assertEqual(
+            [(item["category"], item["content"]) for item in recorded],
+            [
+                ("appearance", "3번 well 탁함"),
+                ("appearance", "A1 well 침전 있음"),
+                ("measurement", "2번 셀 질량 12.3 mg"),
+            ],
+        )
 
     def test_a_correction_is_appended_and_the_record_shows_the_latest_words(self) -> None:
         socket = self.turns(

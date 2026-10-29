@@ -6796,6 +6796,274 @@ def get_experiment_report_notebook(report_id:str)->Response:
         raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
 
 
+def _notebook_input(value:Any,field:str,maximum:int)->str:
+    if not isinstance(value,str):
+        raise HTTPException(status_code=422,detail=f"{field} is invalid")
+    cleaned=" ".join(value.split())
+    if len(cleaned)>maximum:
+        raise HTTPException(status_code=422,detail=f"{field} is invalid")
+    return cleaned
+
+
+def _notebook_event_key(
+    report_id:str,event_type:str,payload:Mapping[str,Any],*,sequence:int,
+)->str:
+    encoded=json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"))
+    return "note1-"+hashlib.sha256(
+        f"{report_id}\x1f{event_type}\x1f{sequence}\x1f{encoded}".encode("utf-8")
+    ).hexdigest()[:32]
+
+
+def _notebook_template_scope()->tuple[Any,ExperimentReportStore]:
+    principal,workspace=_commercial_workspace()
+    workspace.close()
+    settings=ExperimentReportSettings.from_environment()
+    if not settings.enabled or settings.database_path is None:
+        raise HTTPException(status_code=404,detail="experiment report unavailable")
+    return principal,ExperimentReportStore(settings.database_path)
+
+
+@app.get("/api/notebook-template")
+def get_notebook_template()->Response:
+    principal,store=_notebook_template_scope()
+    template=store.notebook_template(principal.organization_id)
+    return JSONResponse(content=jsonable_encoder(template),headers={"Cache-Control":"private, no-store"})
+
+
+@app.put("/api/notebook-template")
+async def put_notebook_template(request:Request)->Response:
+    if not _account_is_admin():
+        raise HTTPException(status_code=403,detail="administrator required")
+    principal,store=_notebook_template_scope()
+    body=await _json_object(request)
+    sections=body.get("sections")
+    if not isinstance(sections,list) or not all(isinstance(item,dict) for item in sections):
+        raise HTTPException(status_code=422,detail="notebook template is invalid")
+    canonical=[{"id":str(item.get("id") or ""),"name":" ".join(str(item.get("name") or "").split())}
+               for item in sections]
+    try:
+        current=store.notebook_template(principal.organization_id)
+        if current["sections"]==canonical:
+            saved=current
+        else:
+            encoded=json.dumps(canonical,ensure_ascii=False,separators=(",",":"))
+            event_key="template-"+hashlib.sha256(
+                f"{current['version']}\x1f{encoded}".encode("utf-8")
+            ).hexdigest()[:32]
+            saved=store.save_notebook_template(
+                organization_id=principal.organization_id,
+                actor_principal_id=principal.principal_id,
+                sections=canonical,event_key=event_key,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422,detail="notebook template is invalid") from exc
+    return JSONResponse(content=jsonable_encoder(saved),headers={"Cache-Control":"private, no-store"})
+
+
+@app.post("/api/experiment-reports/{report_id}/notebook/domain")
+async def select_experiment_notebook_domain(report_id:str,request:Request)->Response:
+    """Append the owner's explicit notebook field profile; workflow is unchanged."""
+
+    body=await _json_object(request)
+    domain=str(body.get("domain") or "")
+    if domain not in {"general","biology","chemistry","battery_materials"}:
+        raise HTTPException(status_code=422,detail="notebook domain is invalid")
+    store=_report_prose_store(report_id,write=True)
+    payload={"domain":domain}
+    try:
+        report=store.get_report(report_id)
+        domain_events=[event for event in report["events"]
+                       if event["event_type"]=="notebook_domain_selected"]
+        latest=(domain_events[-1].get("payload") or {}).get("domain") if domain_events else None
+        if latest!=domain:
+            report=store.append_event(
+                report_id,event_key=_notebook_event_key(
+                    report_id,"notebook_domain_selected",payload,
+                    sequence=len(domain_events)+1,
+                ),
+                event_type="notebook_domain_selected",source_tier="operator",payload=payload)
+        narrative=store._narrative(report_id,None,None)
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(status_code=200,content=jsonable_encoder({
+        "report_id":report_id,"domain":narrative.facts.notebook.domain,
+        "event_inserted":bool(report.get("event_inserted")),
+    }),headers={"Cache-Control":"private, no-store"})
+
+
+@app.post("/api/experiment-reports/{report_id}/notebook/inventory")
+async def record_experiment_notebook_inventory(report_id:str,request:Request)->Response:
+    """Append optional vendor/catalog/Lot facts for a source-listed item."""
+
+    body=await _json_object(request)
+    item_name=_notebook_input(body.get("item_name"),"item_name",400)
+    stage=str(body.get("stage") or "")
+    if stage not in {"before","after"}:
+        raise HTTPException(status_code=422,detail="inventory stage is invalid")
+    values={field:_notebook_input(body.get(field,""),field,200)
+            for field in ("vendor","catalog_number","lot_number")}
+    if not any(values.values()):
+        raise HTTPException(status_code=422,detail="an inventory value is required")
+    store=_report_prose_store(report_id,write=True)
+    try:
+        narrative=store._narrative(report_id,None,None)
+        facts=narrative.facts
+        assert facts is not None
+        item=next((entry for entry in facts.items
+                   if item_name in {entry.listed or entry.name,entry.name}),None)
+        projected=next((entry for entry in facts.notebook.inventory
+                        if entry.name==item_name),None)
+        if item is None and projected is None:
+            raise HTTPException(status_code=422,detail="inventory item is not in the source")
+        payload={
+            "item_kind":item.kind if item is not None else projected.kind,
+            "item_name":((item.listed or item.name) if item is not None else projected.name),
+            **values,"stage":stage,
+        }
+        report=store.get_report(report_id)
+        inventory_events=[event for event in report["events"]
+                          if event["event_type"]=="notebook_inventory_recorded"]
+        unchanged=(projected is not None and projected.stage==stage and all(
+            not value or getattr(projected,field_name)==value
+            for field_name,value in values.items()
+        ))
+        if not unchanged:
+            report=store.append_event(
+                report_id,event_key=_notebook_event_key(
+                    report_id,"notebook_inventory_recorded",payload,
+                    sequence=len(inventory_events)+1,
+                ),
+                event_type="notebook_inventory_recorded",source_tier="operator",payload=payload)
+        notebook=store._narrative(report_id,None,None).facts.notebook
+    except HTTPException:
+        raise
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(status_code=201,content=jsonable_encoder({
+        "report_id":report_id,"inventory":notebook.inventory,
+        "event_inserted":bool(report.get("event_inserted")),
+    }),headers={"Cache-Control":"private, no-store"})
+
+
+def _notebook_sharing_response(report:Mapping[str,Any],*,inserted:bool=False)->dict[str,Any]:
+    sharing=ExperimentReportStore.notebook_sharing(report)
+    return {
+        "report_id":report["report_id"],"shared":sharing["shared"],
+        "changed_at":sharing["changed_at"],"event_inserted":inserted,
+    }
+
+
+@app.get("/api/experiment-reports/{report_id}/sharing")
+def get_experiment_notebook_sharing(report_id:str)->Response:
+    """The owner's current record-level comparison consent."""
+
+    store=_report_prose_store(report_id,write=True)
+    try:
+        report=store.get_report(report_id)
+        content=_notebook_sharing_response(report)
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(content=jsonable_encoder(content),headers={"Cache-Control":"private, no-store"})
+
+
+@app.post("/api/experiment-reports/{report_id}/sharing")
+async def change_experiment_notebook_sharing(report_id:str,request:Request)->Response:
+    """Append the owner's opt-in or withdrawal; never changes workflow state."""
+
+    body=await _json_object(request)
+    if not isinstance(body.get("shared"),bool):
+        raise HTTPException(status_code=422,detail="sharing choice is invalid")
+    requested=bool(body["shared"])
+    store=_report_prose_store(report_id,write=True)
+    try:
+        report=store.get_report(report_id)
+        current=store.notebook_sharing(report)
+        inserted=False
+        if current["shared"]!=requested:
+            payload={"shared":requested}
+            event_key="note-share-"+hashlib.sha256(
+                f"{report_id}\x1f{current['changes']+1}\x1f{int(requested)}".encode("utf-8")
+            ).hexdigest()[:32]
+            report=store.append_event(
+                report_id,event_key=event_key,event_type="notebook_share_changed",
+                source_tier="operator",payload=payload,
+            )
+            inserted=bool(report.get("event_inserted"))
+        content=_notebook_sharing_response(report,inserted=inserted)
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(content=jsonable_encoder(content),headers={"Cache-Control":"private, no-store"})
+
+
+def _comparison_record(
+    store:ExperimentReportStore,report:Mapping[str,Any],*,mine:bool,shared_number:int,
+)->dict[str,Any]:
+    """A fact-only comparison projection; no owner identity or model prose."""
+
+    narrative=store._narrative(str(report["report_id"]),None,None)
+    book=narrative.facts.notebook
+    started=str(report.get("started_at") or "")
+    when=started.replace("T"," ")[:16]
+    label=("내 기록" if mine else f"공유 기록 {shared_number}")+(f" · {when}" if when else "")
+    result={
+        "record_scope":"mine" if mine else "shared",
+        "label":label,"started_at":started,"ended_at":report.get("ended_at"),
+        "protocol_revision":report.get("protocol_revision"),
+        "value_rows":[{
+            "step_label":row.label,"kind":row.kind,"source":row.source,
+            "actual":row.actual,"unit":row.unit,
+            "source_unit":row.source_unit,"actual_unit":row.actual_unit,
+        } for row in book.value_bars],
+        "method_rows":[{
+            "step_label":row.label,"source_text":row.source_text,
+            "actual_values":row.actual_values,"started_at":row.started_at,
+            "ended_at":row.ended_at,"timer":row.timer,
+        } for row in book.method_rows],
+        "timeline":[{
+            "at":row.at,"step_label":row.step_label,"kind":row.kind,"text":row.text,
+        } for row in book.timeline],
+        "notes":[{
+            "step_label":row.label,"at":row.at,"kind":row.kind,"text":row.shown,
+        } for row in book.observations],
+    }
+    if mine:
+        result["report_id"]=report["report_id"]
+    return result
+
+
+@app.get("/api/experiment-reports/{report_id}/comparisons")
+def compare_experiment_notebooks(report_id:str)->Response:
+    """Owner-only anchor; other records are opt-in, fact-only and read-only."""
+
+    principal,_workspace=_commercial_workspace()
+    _workspace.close()
+    store=_report_prose_store(report_id,write=True)
+    try:
+        reports=store.notebook_comparison_reports(
+            report_id,requester_principal_id=principal.principal_id,
+        )
+        records=[]
+        shared_number=0
+        for report in reports:
+            mine=report.get("owner_principal_id")==principal.principal_id
+            if not mine:
+                shared_number+=1
+            records.append(_comparison_record(
+                store,report,mine=mine,shared_number=shared_number,
+            ))
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(content=jsonable_encoder({
+        "anchor_report_id":report_id,"records":records,
+        "permission":{
+            "scope":"same_organization_same_protocol",
+            "other_records":"opt_in_read_only",
+            "withdrawal":"latest_append_only_event",
+            "judgment":"none",
+        },
+    }),headers={"Cache-Control":"private, no-store"})
+
+
 @app.get("/api/experiment-reports/{report_id}/review")
 def get_experiment_report_review(report_id:str):
     """The report's values and which the researcher confirmed (lane N, decision 3)."""
@@ -7019,6 +7287,23 @@ def post_protocol_review_version_pi_confirmation(
         raise _catalog_http_error(exc) from exc
 
 
+def _report_photo_resolver(report:Mapping[str,Any])->Callable[[Any],tuple[bytes,str]|None]:
+    """Resolve only this report's authenticated workspace image evidence."""
+
+    session_id=str(report.get("session_id") or "")
+
+    def resolve(image:Any)->tuple[bytes,str]|None:
+        if getattr(image,"kind","")!="photo" or not getattr(image,"asset_id",""):
+            return None
+        response=download_workspace_experiment_evidence(session_id,str(image.asset_id))
+        media_type=str(response.media_type or "")
+        if not media_type.startswith("image/"):
+            return None
+        return bytes(response.body),media_type
+
+    return resolve
+
+
 @app.get("/api/experiment-reports/{report_id}.{format_name}")
 def export_experiment_report(report_id:str,format_name:str):
     """Export one configured report without exposing its database location."""
@@ -7029,6 +7314,7 @@ def export_experiment_report(report_id:str,format_name:str):
         if not settings.enabled or settings.database_path is None:
             raise HTTPException(status_code=404,detail="experiment report unavailable")
         store=ExperimentReportStore(settings.database_path)
+        photo_resolver=_report_photo_resolver(store.get_report(report_id))
         if format_name=="json":
             content=store.export_json(report_id)
             media_type="application/json"
@@ -7043,14 +7329,14 @@ def export_experiment_report(report_id:str,format_name:str):
             media_type="text/csv; charset=utf-8"
         elif format_name=="docx":
             _prepared_report_prose(store,report_id)
-            content=store.export_docx(report_id)
+            content=store.export_docx(report_id,image_resolver=photo_resolver)
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         elif format_name=="pdf":
             # Lane RP2, decision 2: the Word report printed by the server's
             # LibreOffice; without it (or when it fails) the format is refused by name.
             _prepared_report_prose(store,report_id)
             try:
-                content=store.export_pdf(report_id)
+                content=store.export_pdf(report_id,image_resolver=photo_resolver)
             except ReportPdfError as exc:
                 raise HTTPException(status_code=503,detail=exc.code) from exc
             media_type="application/pdf"

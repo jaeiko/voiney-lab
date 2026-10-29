@@ -130,7 +130,7 @@ class StartQuestionTests(_Voice):
         self.assertEqual(plan.notebook_record, {"kind": "purpose", "text": "오늘은 세척만 해 볼게", "samples": []})
         self.assertEqual(plan.speech_text, "목적을 기록했어요.")
         self.assertIn("# 세척만 해 볼게\n", self.markdown())
-        self.assertIn("> 시료는 말하지 않음. 말한 그대로: “오늘은 세척만 해 볼게”", self.markdown())
+        self.assertIn("## 목적\n\n오늘은 세척만 해 볼게", self.markdown())
 
     def test_skip_words_skip_the_question_without_moving(self) -> None:
         for words in ("넘어가", "없어요", "그냥 넘어가", "아니"):
@@ -272,8 +272,8 @@ class EndQuestionTests(_Voice):
         self.assertEqual((recorded[0][3]["result"], recorded[0][3]["next_change"]),
                          ("밴드가 깨끗하게 나왔어.", "세척을 한 번 더 할게"))
         text = self.markdown()
-        self.assertIn("> 결과 (실험자가 말함): “밴드가 깨끗하게 나왔어.”", text)
-        self.assertIn("- 세척을 한 번 더 할게 (실험자가 말함)", text)
+        self.assertIn("## 결과\n\n밴드가 깨끗하게 나왔어.", text)
+        self.assertIn("| 다음 할 일 | 세척을 한 번 더 할게 |", text)
 
     def test_skip_and_a_command_after_the_end(self) -> None:
         self.start()
@@ -321,8 +321,8 @@ class FixTests(_Voice):
         plan = self.say("결과 고쳐: 밴드가 조금 흐릿했어. 다음에는 세척 시간을 늘릴게")
         self.assertEqual(plan.speech_text, "결과를 고쳤어요.")
         text = self.markdown()
-        self.assertIn("> 결과 (실험자가 말함): “밴드가 조금 흐릿했어.”", text)
-        self.assertIn("- 세척 시간을 늘릴게 (실험자가 말함)", text)
+        self.assertIn("## 결과\n\n밴드가 조금 흐릿했어.", text)
+        self.assertIn("| 다음 할 일 | 세척 시간을 늘릴게 |", text)
         self.assertRegex(text, r"밴드가 깨끗하게 나왔어 → \d\d:\d\d 정정: 밴드가 조금 흐릿했어")
 
 

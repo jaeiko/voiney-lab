@@ -204,34 +204,40 @@
 ## F12. 실험 중 기록
 
 - **무엇**: 말한 관찰·측정·편차·메모와 이상 사항("시약을 엎질렀어", "침전이 생겼어")은 그 사람의 말 그대로 지우지 않는 장부에 남고, 서버가 되읽어 준다. 이상 사항의 되읽기 뒤에는 출처가 붙은 문제 도움이 따른다([F11](#f11-질문과-설명)). "안 보임"처럼 부정이 든 말은 통째로 남는다. "방금 기록 고쳐 줘, X가 아니라 Y"는 한 번 묻고 고침을 덧붙인다(원래 것은 남는다). 소수점이 분명하지 않은 값은 다시 묻는다.
+  **빠른 기록**: "특이사항, 3번 well 탁함", "메모 …", "기록해 줘 …"는 지금 단계의 기록으로, "2번 셀 질량 12.3 mg"처럼 위치·식별자와 숫자·단위가 함께 있는 짧은 측정 말도 지금 단계의 측정으로 남긴다. `well`·튜브·셀·시료 번호와 숫자·단위는 말한 표기를 그대로 보존하고 짧게 되읽는다. 이 길은 단계·타이머·확인 상태를 바꾸지 않는다.
   **실험 노트 질문**(한국어, 상태를 바꾸지 않음, "넘어가"로 건너뜀): 시작 뒤 "오늘 실험 목적이나 시료를 한 줄로 말씀해 주세요.", 관찰 대상이 있는 단계를 설명 없이 마치면 "관찰한 것 있으면 말씀해 주세요.", 끝나면 "결과 한 줄과 다음에 바꿀 점이 있으면 말씀해 주세요." "목적 고쳐: …"로 고친다. 명령이나 질문은 답이 아니라 명령으로 처리된다. 짧은 명령 낱말("자세히", "더 자세히", "다시", "한 번 더", "천천히", "취소", "원문", "그림", "타이머", "요약" …)은 어떤 노트 질문의 답도 아니고 기록되지 않는다(질문은 열린 채로 남는다). "알겠어", "고마워", "확인", "몰라"는 "넘어가"처럼 질문을 건너뛴다.
   기록 탭에서 손으로 관찰을 적고 사진·문서(최대 32 MiB, 해석하지 않음)를 붙일 수 있다.
   오늘 바꾼 값은 실험 기록에 사건으로 남는다: 시작이 적용한 값은 `session_started` 사건의 `run_changes`, 말로 바꾼 값과 되돌린 값은 `run_value_changed`·`run_value_reverted`(어느 분석·검토본·단계·값 항목인지 함께). 작업공간 타임라인에도 같은 사건이 남아 연결이 끊긴 실험을 이을 때 그 값으로 돌아온다.
   화면에서 메모·사진을 저장한 뒤에도 열린 음성 연결의 일시정지·재개·종료는 서버의 최신 버전으로 처리한다. 연결과 현재 단계가 같은지 거래 안에서 확인하며, 다른 탭이 넘겨받았거나 단계가 바뀌면 거절한다. HTTP가 직접 보내는 버전 검사는 그대로 적용한다.
 - **어디**: `curated_protocol.py` (앞단 규칙 `note_record`, `anomaly_report`, `record_fix`; `PURPOSE_QUESTION_KO`, `OBSERVATION_QUESTION_KO`, `RESULT_QUESTION_KO`, `open_notebook_question`); `tools.py` `record_value_keeping_negation`; `server.py` `_record_experiment_report_plan`, `_notebook_end_question`; 장부 `experiment_reports.py` `ExperimentReportStore.append_event`; 작업공간 `workspace_store.py`(`experiment_session_events`, `experiment_observations`, `experiment_evidence`).
 - **설정**: `VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED`, `VOINEY_LAB_EXPERIMENT_REPORT_DB`, `VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION`(true, 관찰 질문만 끔).
-- **시험**: `tests/test_lane_n_voice_notes.py`, `tests/test_lane_n_ledger_verbatim.py`, `tests/test_lane_ts_record_negation.py`, `tests/test_lane_rp3_voice_questions.py`, `tests/test_lane_say_short_words.py`.
+- **시험**: `tests/test_lane_n_voice_notes.py`, `tests/test_lane_n_ledger_verbatim.py`, `tests/test_lane_ts_record_negation.py`, `tests/test_lane_rp3_voice_questions.py`, `tests/test_lane_say_short_words.py`, `tests/test_lane_cf_explicit_notes.py`.
 - **한계**: 보고서 보내기는 말로 하지 않는다("보고서 전송은 지원하지 않아요…"). 작업공간 장부는 SQL 트리거로 덮어쓰기·지우기를 막지만, 실험 기록 장부는 코드 경로로만 덧붙이기를 지킨다(트리거 없음).
 
 ## F13. 실험 노트와 보고서
 
-- **무엇**: 실험이 끝나면 장부에서 보고서를 만든다. Word·Markdown 보고서는 연구자의 **실험 노트** 모양이다: 제목은 말한 목적, 1 시료와 조건 … 원문 값과 실제 쓴 값, 단계·시료별 관찰, 결과와 다음에 바꿀 점, 원문과 다른 점, 같은 프로토콜의 지난 실험과 비교, 확인, 부록. 숫자는 모두 기록에서 서버가 만든다.
-  실험을 시작할 때 고정한 프로토콜 기준의 `원문 공개 범위`와 선택적인 `출처 메모`를 노트 머리에 넣는다. 예전 프로토콜은 공개 여부를 추측하지 않고 `확인 기록 없음`으로 표시한다.
-  오늘 바꾼 값은 "2. 실제로 한 조건"에 "시간 15 min → 20분 (오늘 바꾼 값)"으로, "4. 원문과 다르게 한 점·문제"에 "3단계 시간: 원문 15 min → 20분 (오늘 바꾼 값)"으로 나온다. 실제로 한 값을 따로 기록했으면 그 기록이 앞서고, 바꾼 시간의 타이머를 일찍 끝냈으면 "20분(오늘 바꾼 값) · 12분에 끝냄"이다.
+- **무엇**: 실험이 끝나면 덧붙이기 장부와 실행한 프로토콜 판에서 **실험 노트 초안**을 결정적으로 다시 만든다. Word·PDF·Markdown과 새 노트 화면은 같은 공통 뼈대를 쓴다: **실험 정보, 목적, 방법, 관찰·특이사항, 결과, 해석·다음 할 일, 분야별 기록, 부록**. 실험 정보에는 날짜·시각·실험자·프로토콜 판·원문 출처가, 방법에는 원문 단계와 원문→실제 값·실제 시각·타이머 사건이 들어간다. 목적·결과는 사람이 말하거나 입력한 것만 쓰며, 말하지 않은 목적·결과와 해석은 빈칸이다. 관찰·특이사항은 단계·시각과 말한 그대로를 쓴다. 노트 본문에는 준비된 모델 문장도 넣지 않는다.
+  실험을 시작할 때 고정한 프로토콜 기준의 `원문 공개 범위`와 선택적인 `출처 메모`를 실험 정보에 넣는다. 예전 프로토콜은 공개 여부를 추측하지 않고 `확인 기록 없음`으로 표시한다.
+  오늘 바꾼 값과 실제로 기록한 값은 방법의 원문→실제 표와 원문과 다르게 한 점에 함께 나온다. 실제 기록이 있으면 그 기록이 앞서고, 타이머를 일찍 끝냈으면 원문 시간과 실제 끝낸 시간이 나란히 나온다. 모든 표시 숫자를 프로토콜 원문 목록·실행 장부·그 둘로 다시 계산 가능한 시각·수율에서 재현하는 `audit_notebook_number_provenance` 검사가 있다.
+  **분야별 기록**은 원문 단계 문장으로 바이오·화학 합성·배터리·소재 중 하나를 고르고 사람이 화면에서 바꿀 수 있다. 바이오는 세포주·계대 수·플레이트 배치/well 위치, 화학은 반응식·시약(몰·질량·당량)·수득량/수율·TLC Rf·정제 조건, 배터리·소재는 셀/시료 번호·전극 로딩·전해액 양·조립 환경·크림핑/소성·사이클 조건을 둔다. 원문이나 기록에 없으면 빈칸이다. 수율은 사람이 남긴 실제 수득량과 이론 수득량이 환산 가능한 같은 차원으로 모두 있을 때만 계산하고 `실제 ÷ 이론 × 100` 식을 함께 보인다.
+  **그림**은 장부와 원문에서만 만든다. 단계 타임라인, 같은 단위의 원문→실제 막대, 해당 단계에 붙인 사진, 원문 PDF 기하에서 자른 해당 단계 그림, 기록된 well 위치의 플레이트 위치, 배터리·소재의 셀/시료 번호별 표를 보여 준다. 사진과 원문 조각은 기존 증거·원문 권한을 거치고 Word·PDF에도 들어간다. 생성 모델 그림이나 기록에 없는 값의 도식은 만들지 않는다.
+  **Methods 조건표**는 원문 시약·장비 이름을 두고 구매처·카탈로그 번호·Lot 번호와 입력 시점을 선택적으로 덧붙인다. 원문 목록에 이미 있는 구매처·카탈로그 값은 원문으로 표시하고, 기록 소유자는 실험 전·후 화면 입력이나 현재 단계의 말 기록으로 빈 값을 채운다. 목록에 없는 품목은 받지 않는다.
+  **연구실 양식**은 같은 연구실 관리자가 위 여덟 절의 이름과 순서만 정한다. 새 판은 덧붙이기만 하며, 절을 빼거나 사실·근거 규칙을 바꾸지 못한다.
   대답하지 않은 실험 노트 질문은 일시정지·재개 뒤에도 유지하고 재개할 때 다시 묻는다. 그 질문이 열린 동안의 "넘어가"는 질문만 건너뛴다.
-  보고서 모델은 끝난 뒤 한 번 불러 관찰 문장과 결과 한 단락만 쓰게 하고, 기록·원문에 없는 값·숫자·추측·안전 지시·인용을 검사해 통과한 것만 "AI 정리"로 넣는다(모델이 없으면 서버 문장만). 실험자가 아직 확인하지 않은 값은 "[미확인]"으로 표시하고 화면에서 하나씩 확인하거나 고친다.
+  기존 보고서 문장 준비는 별도 파생 출력용으로 남아 있지만 위 실험 노트 본문에는 넣지 않는다. 실험자가 아직 확인하지 않은 값은 "[미확인]"으로 표시하고 화면에서 하나씩 확인하거나 고친다.
   관찰 질문에 대한 답은 질문이 가리킨 완료 단계에 저장한다. 같은 값 확인을 다시 보내도 확인 사건은 하나만 남기며, 동시에 온 PI 확인은 각각 남긴다. 조사 뒤 보고서 갱신에도 현재 연결의 설정 식별자를 붙인다.
-  "4. 원문과 다르게 한 점·문제"에는 문제 도움마다 한 줄이 붙는다: "도움 · 7단계 (10:31) — 물음 “왜 안 되지?”: 원문 p.5·p.4 · 지난 기록 1건"(`problem_help_line`). 부록 기록 표에는 물은 말이 "문제 질문"으로 남는다.
+  방법의 "원문과 다르게 한 점·문제"에는 문제 도움마다 한 줄이 붙는다: "도움 · 7단계 (10:31) — 물음 “왜 안 되지?”: 원문 p.5·p.4 · 지난 기록 1건"(`problem_help_line`). 부록 기록 표에는 물은 말이 "문제 질문"으로 남는다.
   내보내기: 화면에서 Word(.docx)·Markdown·JSON·CSV. 서버에는 PDF(LibreOffice 필요)·랩미팅 1쪽 요약(Word·PDF)·결과 표(xlsx)도 있다. 회의용 파일 이름도 `.meeting.docx`·`.meeting.pdf`로 실제 형식에 맞춘다. 관리자는 노트에 "확인함"(이름·시각·한 줄)을 남길 수 있다.
   노트의 검토본 표에서 사람이 비운 항목은 "(비움 · 원문에 없음)"(타이머는 "(타이머 없음)")으로 적는다. 다만 프로그램에 하는 말처럼 보여 확인 카드에서 [빼 주세요]로 뺀 항목(원문 글이 `program_address_shape` 에 걸림)은 "프로그램에 하는 말이라 뺌"이다 — 원문에는 있기 때문이다(`PROGRAM_ADDRESS_CLEARED`).
   기록의 소유 계정과 연구실은 서버가 정한다. HTTP·음성 소켓 조회와 내보내기는 본인 또는 같은 연구실 관리자만 가능하다. 값 확인·정정·평점·보고서 재생성은 본인만 가능하며, 관리자가 남의 기록에 쓸 수 있는 것은 PI 확인뿐이다. 다른 연구실 기록과 권한 없는 기록은 없는 것처럼 응답한다. 옛 기록의 소유자는 작업공간 세션으로 채우며, 소유자를 모르면 해당 연구실 관리자만 읽는다.
+  **같은 프로토콜 기록 비교**는 본인 기록 하나를 기준으로 소유자만 연다. 공유 켜기 앞에서 `작은 연구실에서는 누구 기록인지 알아볼 수 있어요. 말한 특이사항은 그대로 보여요.`라고 알린다. 같은 연구실·같은 프로토콜의 끝난 기록 중 내 기록과 상대 소유자가 현재 공유에 동의한 기록만 최대 20개 읽는다. 동의·철회는 보고서 장부의 `notebook_share_changed` 사건으로 덧붙이고 최신 사건이 우선한다. 상대 기록은 소유자와 보고서 식별자를 뺀 읽기 전용 투영으로 원문→실제 값·실제 시각·타이머·특이사항만 주며, 목적·결과·해석·추천·우열 판정도 주지 않는다. 철회하면 다음 조회부터 빠진다. 관리자 권한만으로 다른 사람의 비교 기준을 열거나 공유를 켤 수 없다.
   지난 실행 비교·시작 전 확인 답·하루의 실행 순번은 같은 소유 계정·연구실·프로토콜 안에서만 구한다. 소유자가 불명인 옛 기록에는 다른 사람의 시작 전 답을 넣지 않으며 순번을 비워 둔다.
   `GET /api/workspace/experiments/{session_id}/reports`는 그 실험의 보고서 요약 목록(`session_id`, `reports`)을 준다. 본인 또는 같은 연구실 관리자만 읽으며, 보고서가 아직 없거나 기록 기능을 껐으면 빈 목록이다. 보고서를 생성하거나 실험 상태를 바꾸지 않는다.
-- **어디**: `experiment_reports.py` (`build_lab_notebook`, `LabNotebook`, `NOTEBOOK_SUBTITLE`, `ReportWriterBrain`, `check_ai_notes`, `export_docx`, `export_markdown`, `export_pdf`, `export_meeting_docx`, `export_xlsx`); `report_projection.py`; `server.py` `export_experiment_report`, `/api/experiment-reports/{id}/prose`, `/review/{item_id}`, `/pi-confirmations`.
+- **어디**: `experiment_reports.py` (`build_lab_notebook`, `LabNotebook`, `audit_notebook_number_provenance`, `notebook_sharing`, `notebook_comparison_reports`, `export_docx`, `export_markdown`, `export_pdf`, `ReportWriterBrain`, `export_meeting_docx`, `export_xlsx`); `report_projection.py`; `source_figures.py`; `server.py` `export_experiment_report`, `/api/experiment-reports/{id}/notebook`, `/notebook/domain`, `/notebook/inventory`, `/sharing`, `/comparisons`, `/api/notebook-template`, `/prose`, `/review/{item_id}`, `/pi-confirmations`.
 - **설정**: `VOINEY_LAB_REPORT_PROVIDER`·`_MODEL`·`_REASONING`, `VOINEY_LAB_REPORT_WRITER_ENABLED`(true), `VOINEY_LAB_REPORT_WRITER_TIMEOUT_SECONDS`(25), `VOINEY_LAB_REPORT_TIMEZONE`(Asia/Seoul), `VOINEY_LAB_OFFICE_CONVERTER`.
-- **시험**: `tests/test_lane_cf_basis.py`(기준 원문·출처 확인), `tests/test_lane_rp3_notebook.py`, `tests/test_lane_rp3_ai_notes.py`, `tests/test_lane_rp2_report_pdf.py`, `tests/test_lab_report.py`, `tests/test_lane_n_report_review.py`, `tests/test_lane_own_reports.py`, `tests/test_lane_own_history.py`, `tests/test_lane_safe_records.py`, `tests/test_lane_ko2_program_address_note.py`.
-- **화면**: 기록 탭에서 한 실험을 열면 위 목록 경로로 보고서들을 읽어 Word·Markdown·JSON·CSV 링크를 보여 준다. 새로고침 뒤에도 다시 받을 수 있으며, 없거나 읽기에 실패하면 안내와 **기록 새로고침**을 쓴다. 이름의 순번은 서버 값만 표시한다.
-- **한계**: PDF·랩미팅·xlsx·"확인함"은 서버 API에만 있다. 권한 표는 `.agent/security_rules.md` 6절.
+- **시험**: `tests/test_lane_note1_notebook.py`, `tests/test_lane_sec1_public_source.py`, `tests/test_lane_cf_basis.py`(기준 원문·출처 확인), `tests/test_lane_rx3_records.py`, `tests/e2e/note1-notebooks.spec.ts`, `tests/test_lane_rp3_notebook.py`, `tests/test_lane_rp3_ai_notes.py`, `tests/test_lane_rp2_report_pdf.py`, `tests/test_lab_report.py`, `tests/test_lane_n_report_review.py`, `tests/test_lane_own_reports.py`, `tests/test_lane_own_history.py`, `tests/test_lane_safe_records.py`, `tests/test_lane_ko2_program_address_note.py`.
+- **화면**: 기록 탭에서 한 실험을 열면 위 목록 경로로 보고서들을 읽어 Word·PDF·Markdown·JSON·CSV·모임 요약·결과 표 링크를 보여 준다. 노트는 원문 공개 범위·출처 메모가 포함된 실험 정보, 공통 절·분야별 절·그림·Methods 표를 같은 순서로 그린다. 소유자는 분야·Methods 값·공유 동의를 바꾸고 사실 비교를 읽으며, 관리자는 연구실 절 이름·순서를 정한다. 새로고침 뒤에도 다시 받을 수 있으며, 없거나 읽기에 실패하면 안내와 **기록 새로고침**을 쓴다. 이름의 순번은 서버 값만 표시한다.
+- **한계**: PDF는 서버에 LibreOffice가 있어야 한다. 원문 그림은 기하로 고르므로 관계없는 조각이 섞일 수 있고, 노트는 연구자가 고쳐 옮길 초안이지 기관 양식이나 규제 적합성을 보장하는 기록 시스템이 아니다. 권한 표는 `.agent/security_rules.md` 6절.
 
 ## F14. 연결 끊김
 
