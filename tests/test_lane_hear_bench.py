@@ -18,6 +18,7 @@ import logging
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,6 +34,34 @@ def load_bench():
 
 
 class ListeningBenchTests(unittest.TestCase):
+    def test_bench_completion_wait_does_not_use_a_wall_clock_deadline(self) -> None:
+        bench = load_bench()
+
+        async def run():
+            clock = bench.AudioClock()
+            session = bench.make_session(clock)
+            socket = bench.BenchSocket(bench.Script(), session, clock)
+            await socket.send_text('{"type":"speech.start","turn_id":5}')
+
+            async def terminal_signal():
+                await asyncio.sleep(.01)
+                await socket.send_text(
+                    '{"type":"speech.dropped","turn_id":5,"reason":"stt_empty"}')
+
+            worker = asyncio.create_task(terminal_signal())
+            try:
+                with patch.object(
+                    bench.asyncio,
+                    "timeout",
+                    side_effect=AssertionError("wall-clock completion deadline"),
+                ):
+                    message = await socket.receive()
+                self.assertEqual(message['type'], 'websocket.disconnect')
+            finally:
+                await worker
+
+        asyncio.run(run())
+
     def test_bench_accepts_cancelled_playback_clear_as_a_terminal_signal(self) -> None:
         bench = load_bench()
 
