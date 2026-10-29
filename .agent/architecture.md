@@ -87,7 +87,14 @@ generation is cancelled and its audio cleared (barge-in).
    `VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS`), at 15 s, or — in a
    calibrated session in a room that keeps the VAD on — when the level stays
    under the wearer's line (`EndpointResult.endpoint` = `silence`/`level`/
-   `forced`). With the filter on (lane HEAR, decision 2: the experimenter's
+   `forced`). When no wearer reference or calibration owns the level, a
+   turn-local relative gate observes one second of VAD verdicts; if WebRTC
+   calls at least 60% voiced, only frames at least 6 dB above the lower fifth
+   of those voiced levels may keep the endpoint open after one frame actually
+   reaches that rise; a steady wearer voice cannot arm the gate against
+   itself. It does not alter PCM,
+   the 1000 ms silence, or the 15 s safety bound. With the filter on (lane
+   HEAR, decision 2: the experimenter's
    `speaker_filter`, a `voice_reference` measured through
    `POST /api/voice/calibration` under `VOICE_REFERENCE_MAX_AGE_DAYS` old, on
    the microphone the page names in `client.audio_ready` — `stored_voice_filter`),
