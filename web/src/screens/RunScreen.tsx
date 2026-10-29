@@ -6,7 +6,7 @@ import { EmptyBox, LoadingBox, Note } from "../components/Pieces";
 import { run as copy } from "../copy/ko";
 import { routes } from "../lib/navigation";
 import { chooseCandidate, loadVoiceScripts, reconnectMicrophone, resumeSound, serverNow, stopRun, togglePause } from "../voice/engine";
-import { FILTER_NOTICE_SHOWN_MS, isPaused, listeningWord, MISHEARD_SHOWN_MS, nextStepWords, sourceFigures, stepWords, timerView, type ListeningWord, type ProtocolState, type ScreenFields, type TimerView } from "../voice/runModel";
+import { FILTER_NOTICE_SHOWN_MS, isPaused, listeningWord, MISHEARD_SHOWN_MS, nextStepWords, sourceFigures, stepLabelWords, stepWords, timerView, type ListeningWord, type ProtocolState, type ScreenFields, type TimerView } from "../voice/runModel";
 import { useRun } from "../voice/runStore";
 import { useDisplayMode } from "../voice/displayPreferences";
 import { CaptionBar } from "./run/CaptionBar";
@@ -127,18 +127,22 @@ function StepPanel({ protocol, screen, children }: { protocol: ProtocolState | n
   const body = words.korean ?? words.source ?? "";
   const length = body.length > 120 ? "long" : body.length > 60 ? "medium" : "short";
   const label = protocol.current_step_label?.trim() ? protocol.current_step_label.trim() : null;
+  const nextLabel = typeof screen?.next_step_label === "string" && screen.next_step_label.trim() ? screen.next_step_label.trim() : null;
   const nextSentence = typeof screen?.next_step_sentence === "string" ? screen.next_step_sentence : null;
-  const next = nextSentence ? nextStepWords(nextSentence, screen?.next_step_translation_missing === true) : null;
+  const next = nextSentence ? nextStepWords(nextSentence, screen?.next_step_translation_missing === true, nextLabel) : null;
+  const translationStatus = typeof screen?.translation_status === "string" ? screen.translation_status : (words.missing && screen?.translation_pending === true ? "pending" : words.missing ? "missing" : "available");
+  const nextTranslationStatus = typeof screen?.next_step_translation_status === "string" ? screen.next_step_translation_status : (next?.missing && screen?.translation_pending === true ? "pending" : next?.missing ? "missing" : "available");
+  const translationNotice = (status: string) => status === "rejected" ? copy.translationRejected : status === "pending" ? copy.translationPending : copy.translationMissing;
   // The Korean is being made now; a translation_update will draw it (lane KO2).
-  const busy = screen?.translation_pending === true && (words.missing || next?.missing === true);
+  const busy = (words.missing && translationStatus === "pending") || (next?.missing === true && nextTranslationStatus === "pending");
   const changes = (protocol.current_step_run_changes ?? []).filter((item) => item?.words_ko);
   return (
     <section className="run-step" aria-labelledby="run-step-label" aria-busy={busy || undefined} data-testid="run-step">
-      <p className="run-step-label" id="run-step-label">{label ? copy.step(label, protocol.total_steps) : copy.stepUnnumbered(protocol.total_steps)}</p>
+      <p className="run-step-label" id="run-step-label">{label ? `${stepLabelWords(label)} · 전체 ${protocol.total_steps}단계` : copy.stepUnnumbered(protocol.total_steps)}</p>
       {words.missing ? (
         <p className="run-step-pending" data-testid="run-step-pending">
           <Languages aria-hidden="true" />
-          <span>{copy.translationPending}</span>
+          <span>{translationNotice(translationStatus)}</span>
         </p>
       ) : null}
       <p className="run-step-text" data-length={length} data-lang={words.korean ? "ko" : "source"} lang={words.korean ? undefined : "en"} data-testid="run-step-text">
@@ -158,9 +162,10 @@ function StepPanel({ protocol, screen, children }: { protocol: ProtocolState | n
         </details>
       ) : null}
       {next && (next.korean || next.source) ? (
-        // The server writes the next step's Korean with its one label ("5단계: …"); the line's own name sits above it.
+        // The explicit server label sits in the heading; legacy sentence prefixes stay out of the body.
         <p className="run-next" data-lang={next.korean ? "ko" : "source"} data-testid="run-next">
-          <span className="run-next-label">{next.missing ? copy.nextPending : copy.nextLabel}</span>
+          <span className="run-next-label">{copy.nextLabel}{nextLabel ? ` · ${stepLabelWords(nextLabel)}` : ""}</span>
+          {next.missing ? <span className="run-next-status">{` · ${translationNotice(nextTranslationStatus)}`}</span> : null}
           <span className="run-next-text" lang={next.korean ? undefined : "en"} data-testid="run-next-text">
             {next.korean ?? next.source}
           </span>
@@ -196,7 +201,7 @@ function RunCard({ card }: { card: NonNullable<ReturnType<typeof useRun>["model"
           ))}
         </div>
       ) : null}
-      {card.kind === "confirm" || card.kind === "clarify" ? <p className="muted">{copy.card.sayHint}</p> : null}
+      {card.kind === "confirm" ? <p className="muted">{copy.card.confirmSayHint}</p> : card.kind === "clarify" ? <p className="muted">{copy.card.sayHint}</p> : null}
     </div>
   );
 }
@@ -321,9 +326,9 @@ export function RunScreen({ session }: { session?: AuthSession } = {}) {
             <p className="run-far-mic-notice" role="status" data-testid="run-mic-notice">{snapshot.micNotice.text}</p>
           ) : null}
           <section className="run-far-step" aria-labelledby="run-far-step-label">
-            <p className="run-far-label" id="run-far-step-label">{copy.far.step}{protocol?.current_step_label ? ` · ${protocol.current_step_label}단계` : ""}</p>
+            <p className="run-far-label" id="run-far-step-label">{copy.far.step}{protocol?.current_step_label ? ` · ${stepLabelWords(protocol.current_step_label)}` : ""}</p>
             <p className="run-far-step-text" data-testid="run-far-step">
-              {words?.korean ?? copy.translationPending}
+              {words?.korean ?? (model.screen?.translation_status === "rejected" ? copy.translationRejected : model.screen?.translation_status === "missing" ? copy.translationMissing : copy.translationPending)}
             </p>
           </section>
           {timer.kind !== "none" ? <div className="run-far-timer" data-testid="run-far-timer"><TimerChip timer={timer} /></div> : null}

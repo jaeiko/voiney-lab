@@ -94,7 +94,7 @@ describe("RunScreen", () => {
 
   it("far view never enlarges an untranslated source sentence", () => {
     act(() => setDisplayMode("far"));
-    running({ primary_summary: null, display_summary: "Transfer the sample.", translation_missing: true });
+    running({ primary_summary: null, display_summary: "Transfer the sample.", translation_missing: true }, { screen: { translation_status: "pending" } });
 
     renderWithClient(<RunScreen />);
 
@@ -239,13 +239,13 @@ describe("RunScreen (lane RX4)", () => {
 
   it("shows the server's Korean large and folds the source; the next step keeps its one label under its line's name", () => {
     // As the merged server sends them (lane KO2): the Korean without its own "4단계: ", the next sentence with "5단계: ".
-    running({ primary_summary: "젤 조각을 37 °C에서 10분 동안 둡니다.", translation_missing: false }, { screen: { next_step_sentence: "5단계: 상층액을 버립니다.", next_step_translation_missing: false } });
+    running({ primary_summary: "젤 조각을 37 °C에서 10분 동안 둡니다.", translation_missing: false }, { screen: { next_step_label: "5", next_step_sentence: "5단계: 상층액을 버립니다.", next_step_translation_missing: false, next_step_translation_status: "available" } });
     renderWithClient(<RunScreen />);
     expect(screen.getByTestId("run-step-text")).toHaveTextContent(/^젤 조각을 37 °C에서 10분 동안 둡니다\.$/);
     expect(screen.getByTestId("run-step-text")).toHaveAttribute("data-lang", "ko");
     expect(screen.getByTestId("run-source-text")).toHaveTextContent("4. Incubate the gel pieces at 37 °C for 10 min.");
-    expect(screen.getByTestId("run-next").querySelector(".run-next-label")).toHaveTextContent(/^다음 단계$/);
-    expect(screen.getByTestId("run-next-text")).toHaveTextContent(/^5단계: 상층액을 버립니다\.$/);
+    expect(screen.getByTestId("run-next").querySelector(".run-next-label")).toHaveTextContent(/^다음 단계 · 5단계$/);
+    expect(screen.getByTestId("run-next-text")).toHaveTextContent(/^상층액을 버립니다\.$/);
     expect(screen.getByTestId("run-step")).not.toHaveAttribute("aria-busy");
     expect(screen.queryByTestId("run-step-pending")).toBeNull();
   });
@@ -254,7 +254,7 @@ describe("RunScreen (lane RX4)", () => {
     const source = "Transfer analytical portion into a digestion vessel liner (avoid placing material on liner walls).";
     running(
       { current_step_label: "", primary_summary: null, display_summary: source, translation_missing: true },
-      { screen: { next_step_sentence: "Optional - Add 1 mL water.", next_step_translation_missing: true, translation_pending: true } },
+      { screen: { translation_status: "pending", next_step_sentence: "Optional - Add 1 mL water.", next_step_translation_missing: true, next_step_translation_status: "pending", translation_pending: true } },
     );
     renderWithClient(<RunScreen />);
     expect(screen.getByTestId("run-step-pending")).toHaveTextContent("번역 준비 중");
@@ -266,6 +266,34 @@ describe("RunScreen (lane RX4)", () => {
     expect(screen.getByTestId("run-next")).toHaveTextContent("다음 단계 · 번역 준비 중");
     // The Korean is being made now: the step says so to assistive technology until the translation_update.
     expect(screen.getByTestId("run-step")).toHaveAttribute("aria-busy", "true");
+  });
+
+  it("shows a rejected translation as source with the checked failure words, never as preparing", () => {
+    running(
+      { primary_summary: null, display_summary: "Add 100 uL buffer at 20 C.", translation_missing: true },
+      { screen: { translation_status: "rejected", translation_pending: false } },
+    );
+    renderWithClient(<RunScreen />);
+    expect(screen.getByTestId("run-step-pending")).toHaveTextContent("번역 검사를 통과하지 못해 원문을 보여 드려요");
+    expect(screen.getByTestId("run-step-pending")).not.toHaveTextContent("번역 준비 중");
+    expect(screen.getByTestId("run-step")).not.toHaveAttribute("aria-busy");
+  });
+
+  it("renders English-style source labels once in Korean and removes both next-step prefixes", () => {
+    running(
+      { current_step_label: "Step 1", total_steps: 3 },
+      { screen: { next_step_label: "Step 2", next_step_sentence: "Step 2단계: 2단계: 완충액을 넣어요.", next_step_translation_status: "available" } },
+    );
+    renderWithClient(<RunScreen />);
+    expect(screen.getByText("1단계 · 전체 3단계")).toBeInTheDocument();
+    expect(screen.getByTestId("run-next").querySelector(".run-next-label")).toHaveTextContent(/^다음 단계 · 2단계$/);
+    expect(screen.getByTestId("run-next-text")).toHaveTextContent(/^완충액을 넣어요\.$/);
+  });
+
+  it("a completion card names the words that can answer it", () => {
+    running({}, { card: { turnId: 7, kind: "confirm", text: "4단계 완료하셨나요?", candidates: [], values: [], stepId: "step-4" } });
+    renderWithClient(<RunScreen />);
+    expect(screen.getByTestId("run-card")).toHaveTextContent("완료했으면 ‘네’라고 말해 주세요. 아직이면 ‘아니요’라고 말해 주세요.");
   });
 
   it("without the server's word that the Korean is missing, no 번역 준비 중 is shown", () => {

@@ -1273,20 +1273,45 @@ def with_stored_translations(
     """
 
     records = tuple(records)
+    checked = stored_checks(fixture, records, glossary, glossaries=glossaries)
     best = _newest_passing(fixture, records, glossary, glossaries)
     reviewed = {key: rank[2] for (kind, key), rank in best.items() if kind == "reviewed"}
     machine = {key: rank[2] for (kind, key), rank in best.items() if kind == "machine"}
     versions = {key: rank[0] for (kind, key), rank in best.items() if kind == "machine"}
+    newest_failures: dict[str, tuple[int, int, str]] = {}
+    for order, (record, result) in enumerate(checked):
+        if result == "passed":
+            continue
+        rank = (record.style_version, order, result)
+        held = newest_failures.get(record.fact_key)
+        if held is None or rank[:2] > held[:2]:
+            newest_failures[record.fact_key] = rank
     if glossaries:
         glossary = newest_glossary(glossaries)
     names = tuple(
         (entry.source, entry.korean) for entry in glossary
         if entry.source.strip() and _HANGUL.search(entry.korean)
     ) or getattr(fixture, "translation_glossary", None)
+    failures = dict(getattr(fixture, "translation_failures", None) or {})
+    failures.update({key: rank[2] for key, rank in newest_failures.items()})
+    available = {
+        *(getattr(fixture, "localizations", None) or {}),
+        *(getattr(fixture, "machine_localizations", None) or {}),
+        *reviewed,
+        *machine,
+    }
+    for key in available:
+        failures.pop(key, None)
     if not reviewed and not machine:
-        if names == getattr(fixture, "translation_glossary", None):
+        if (
+            names == getattr(fixture, "translation_glossary", None)
+            and failures == (getattr(fixture, "translation_failures", None) or {})
+        ):
             return fixture
-        return replace(fixture, translation_glossary=names)
+        return replace(
+            fixture, translation_glossary=names,
+            translation_failures=failures or None,
+        )
     sidecar = dict(getattr(fixture, "localizations", None) or {})
     for key, text in reviewed.items():
         sidecar.setdefault(key, text)
@@ -1306,6 +1331,7 @@ def with_stored_translations(
             key: version for key, version in merged_versions.items()
             if key in merged and key not in sidecar
         } or None,
+        translation_failures=failures or None,
     )
 
 

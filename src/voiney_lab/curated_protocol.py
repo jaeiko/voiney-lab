@@ -335,6 +335,10 @@ class CuratedProtocolFixture:
     #: 1 and 6; ``protocol_translation.STYLE_VERSION``, 0 before versions
     #: were kept). Presentation only; a key it lacks is of no known version.
     translation_versions: dict[str, int] | None = None
+    #: "<step_id>/<fact_id>" -> today's mechanical-check refusal reason for
+    #: a stored translation that has no passing reading to show. Presentation
+    #: only: the source remains authoritative and workflow state is untouched.
+    translation_failures: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not self.revision_id:

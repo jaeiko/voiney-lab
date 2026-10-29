@@ -57,6 +57,7 @@ export interface ProtocolState {
 }
 
 export interface ScreenFields {
+  next_step_label?: string | null;
   next_step_sentence?: string | null;
   open_question?: { kind?: string; text?: string } | null;
   confirm_question?: { kind?: string } | null;
@@ -66,8 +67,12 @@ export interface ScreenFields {
   source_figures?: unknown[] | null;
   /** Lane KO2, decision 3: next_step_sentence is the source for want of Korean. */
   next_step_translation_missing?: boolean;
+  /** Server-owned presentation state for the next sentence: available, pending, rejected, or missing. */
+  next_step_translation_status?: string | null;
   /** Lane KO2: the revision's Korean, or the screen's sentences read in place, are being made now (a translation_update follows). */
   translation_pending?: boolean;
+  /** Server-owned presentation state for the current sentence: available, pending, rejected, or missing. */
+  translation_status?: string | null;
   [key: string]: unknown;
 }
 
@@ -231,9 +236,29 @@ export function stepWords(protocol: ProtocolState): StepWords {
   return { korean, source: korean !== null && korean === source ? null : source, missing: protocol.translation_missing === true };
 }
 
-/** The next step's sentence for the screen, as the server wrote it: its Korean with its one step label ("5단계: …"), or the source when it says the Korean is missing. */
-export function nextStepWords(sentence: string, missing: boolean): StepWords {
-  const words = oneLine(sentence);
+/** A source label such as "Step 1" rendered once in the Korean run screen. */
+export function stepLabelWords(label: string): string {
+  const words = oneLine(label);
+  const numbered = /^(?:step\s*)?(\d+)(?:\s*단계)?$/i.exec(words);
+  if (numbered) return `${numbered[1]}단계`;
+  return words.endsWith("단계") ? words : `${words}단계`;
+}
+
+function withoutNextStepPrefix(sentence: string, label?: string | null): string {
+  let words = oneLine(sentence);
+  const numbered = /^(?:step\s*)?(\d+)(?:\s*단계)?$/i.exec(oneLine(label ?? ""));
+  if (!numbered) return words;
+  const number = numbered[1];
+  const prefix = new RegExp(`^(?:step\\s*)?${number}(?:\\s*단계)?\\s*[:：.)]\\s*`, "i");
+  // A legacy sentence could carry both the source label and a Korean reading
+  // label ("Step 2단계: 2단계: …"). The explicit next_step_label owns both.
+  for (let count = 0; count < 2; count += 1) words = words.replace(prefix, "");
+  return words;
+}
+
+/** The next step body; its explicit server label is rendered by the heading, not repeated here. */
+export function nextStepWords(sentence: string, missing: boolean, label?: string | null): StepWords {
+  const words = withoutNextStepPrefix(sentence, label);
   if (!words) return { korean: null, source: null, missing: false };
   return missing ? { korean: null, source: words, missing: true } : { korean: words, source: null, missing: false };
 }
