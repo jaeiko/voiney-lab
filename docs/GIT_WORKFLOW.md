@@ -14,7 +14,7 @@ Voiney Lab 팀(김재준, 최수진, 강이수)과 코딩 에이전트가 함께
 | `docs/<이름>-<내용>` | 문서만 | 코드를 바꾸지 않는다 |
 
 - 브랜치 하나에는 작업 하나만 담는다.
-- CI(`.github/workflows/ci.yml`)는 `main`·`dev`·`feature/**`·`fix/**`·`refactor/**` 로의 push 와 `dev`·`main` 으로의 PR 에서 돈다. `docs/**` 브랜치는 push 로는 돌지 않고 PR 을 열면 돈다.
+- CI(`.github/workflows/ci.yml`)는 `main`·`dev` 로의 push 와 `dev`·`main` 으로의 PR 에서 돈다. 기능·수정·정리·문서 브랜치는 push 만으로 돌지 않고 PR 을 열면 한 번 돈다. staging 배포는 성공한 `dev` push CI 뒤에만 돈다.
 - 합친 브랜치는 바로 삭제한다. 삭제는 사람이 한다.
 
 ## 작업 흐름
