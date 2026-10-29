@@ -21,6 +21,7 @@ def test_shared_stt_context_prioritizes_korean_commands_and_stored_glossary():
     curated = CuratedProtocolSession(
         with_stored_translations(soil_fixture(), (), GLOSSARY)
     )
+    curated.active = True
     listener = server.ListenerSession(curated_protocol_session=curated)
 
     ordinary = server.cascade_transcription_context(
@@ -31,6 +32,8 @@ def test_shared_stt_context_prioritizes_korean_commands_and_stored_glossary():
     assert ordinary.keyterms == barge_in.keyterms
     assert ordinary.keyterms[:len(COMMANDS)] == COMMANDS
     for term in ("진탕기", "히팅 블록", "시약수", "냉장고"):
+        assert term in ordinary.keyterms
+    for term in ("1단계", "네", "다음 단계", "멈춰", "재개"):
         assert term in ordinary.keyterms
     assert "shaker table" in ordinary.keyterms
 

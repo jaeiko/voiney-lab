@@ -8795,6 +8795,10 @@ STT_KOREAN_COMMAND_KEYTERMS:tuple[str,...]=(
     "다음","타이머","일시정지","다시 시작","종료",
     "특이사항","메모","기록해 줘","화면 크게",
 )
+STT_EXISTING_WORKFLOW_KEYTERMS:tuple[str,...]=(
+    "아니","네","현재 단계","이번 단계","완료","완료했어",
+    "시작","다음 단계","다시 알려줘",*STT_CONTROL_KEYTERMS,
+)
 STT_KEYTERM_LIMIT=100
 STT_KEYTERM_MAX_CHARS=50
 _STT_HANGUL=re.compile(r"[가-힣]")
@@ -8807,7 +8811,7 @@ def _stored_korean_stt_keyterms(curated:Any)->tuple[str,...]:
     if isinstance(fixture,CuratedProtocolFixture):
         values=(
             name for name,_entity
-            in ProtocolVocabulary.from_fixture(fixture).korean_names
+            in curated._protocol_vocabulary().korean_names
         )
     else:
         raw=[]
@@ -8834,9 +8838,22 @@ def _cascade_stt_keyterms(curated:Any)->tuple[str,...]:
         source=curated.stt_keyterms(include_control_terms=True)
     except TypeError:
         source=curated.stt_keyterms()
+    step_tokens=()
+    fixture=getattr(curated,"fixture",None)
+    index=getattr(curated,"current_index",None)
+    if (getattr(curated,"active",False)
+            and isinstance(index,int)
+            and 0<=index<len(getattr(fixture,"steps",()))):
+        label=fixture.steps[index].source_label
+        step_tokens=(
+            f"{label}단계",f"{label} 단계",
+            f"현재 {label}단계",f"이번 {label}단계",
+        )
     ordered=(
         *STT_KOREAN_COMMAND_KEYTERMS,
         *_stored_korean_stt_keyterms(curated),
+        *step_tokens,
+        *STT_EXISTING_WORKFLOW_KEYTERMS,
         *source,
     )
     return tuple(dict.fromkeys(

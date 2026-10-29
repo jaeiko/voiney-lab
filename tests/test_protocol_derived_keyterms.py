@@ -25,6 +25,7 @@ from voiney_lab.language import Transcription, classify_input_event
 from voiney_lab.runtime_routing import route_curated_runtime_turn
 from voiney_lab.server import (
     ListenerSession,
+    STT_KOREAN_COMMAND_KEYTERMS,
     _stt_multipart,
     cascade_transcription_context,
 )
@@ -100,12 +101,13 @@ class InGelKeytermTests(unittest.TestCase):
                         # not sent (no candidate list remains).
                         self.assertNotIn("Evotip", terms)
 
-    def test_the_boundary_sends_the_same_set(self) -> None:
+    def test_the_boundary_adds_priority_commands_without_losing_controls(self) -> None:
         session = _session_at(self.fixture, 1)
-        self.assertEqual(
-            set(_boundary_keyterms(session)),
-            set(session.stt_keyterms(include_control_terms=True)),
-        )
+        terms = _boundary_keyterms(session)
+        self.assertEqual(terms[:len(STT_KOREAN_COMMAND_KEYTERMS)], STT_KOREAN_COMMAND_KEYTERMS)
+        for token in (*_step_tokens("2"), *CONTROL_TERMS):
+            self.assertIn(token, terms)
+        self.assertIn("Solution A", terms)
 
     def test_every_in_gel_term_is_spelled_as_the_in_gel_data_spells_it(self) -> None:
         protocol = self.fixture.draft.protocol
@@ -203,7 +205,10 @@ class OtherProtocolKeytermTests(unittest.TestCase):
         )
         session = _session_at(fixture, 1)
         terms = _boundary_keyterms(session)
-        self.assertEqual(terms, session.stt_keyterms(include_control_terms=True))
+        self.assertEqual(
+            terms[:len(STT_KOREAN_COMMAND_KEYTERMS)],
+            STT_KOREAN_COMMAND_KEYTERMS,
+        )
         self.assertEqual(len(terms), 100)
         self.assertTrue(all(1 <= len(term) <= 50 for term in terms))
         for token in (*_step_tokens("2"), *CONTROL_TERMS):

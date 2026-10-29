@@ -504,7 +504,8 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   content-free reason `stt_adaptation_disabled`. No other STT failure retries or
   changes provider. The shared ordinary/barge-in transcription context orders at
   most 100 hints as fixed Korean commands, checked Korean names from the revision's
-  stored translation glossary, then source technical terms; it invents no term.
+  stored translation glossary, existing step/control phrases, then source technical
+  terms; it invents no term and reads the session-prepared vocabulary on the turn path.
   OCR: `clova`,
   `google`. Background roles (`analysis`, `translation`, `report`) retry
   429/5xx and carry the Gemini safety setting; voice-turn roles do neither.
