@@ -730,7 +730,7 @@ class EndpointDetector:
             before.append((
                 frame,
                 raw_voiced and (
-                    self._adaptive_noise_threshold_db is None
+                    not self._adaptive_noise_armed
                     or level >= self._adaptive_noise_threshold_db
                 ),
             ))

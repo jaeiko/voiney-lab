@@ -79,6 +79,17 @@ class AdaptiveNoiseEndpointTests(unittest.TestCase):
             "a steady wearer voice was cut off before the configured bound",
         )
 
+    def test_an_unarmed_relative_gate_keeps_prepended_wearer_frames(self) -> None:
+        session = self.session()
+        events = self.feed(session, [WEARER_AT_ONE_METRE] * 60)
+        self.assertTrue(any(event.kind == "speech.start" for event in events))
+        before = session.detector.voiced_frames
+
+        kept = session.detector.prepend_utterance([WEARER_AT_ONE_METRE] * 10)
+
+        self.assertEqual(kept, 10)
+        self.assertEqual(session.detector.voiced_frames, before + 10)
+
 
 if __name__ == "__main__":
     unittest.main()
