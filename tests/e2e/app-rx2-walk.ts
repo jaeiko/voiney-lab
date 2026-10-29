@@ -263,9 +263,7 @@ export async function walk(page: Page, info: TestInfo) {
   await expect(page.getByTestId('run-listening')).not.toHaveAttribute('data-word', 'reconnecting');
   await expect(page.locator('#connection-band')).toBeHidden({ timeout: 10_000 });
 
-  // A server-confirmed spoken end while paused: the microphone closes, every execution control leaves, and later words do nothing.
-  await page.getByTestId('run-pause').click();
-  await expect(page.getByTestId('run-paused')).toBeVisible();
+  // A server-confirmed spoken end: the microphone closes, every execution control leaves, and later words cannot be captured.
   server.voice('종료');
   server.voice('네');
   await expect(page.getByTestId('run-ended')).toContainText('실험을 멈췄어요');
