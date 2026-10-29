@@ -28,6 +28,47 @@ def test_split_is_stable_balanced_and_keeps_repeated_words_together() -> None:
     assert split.development
 
 
+def test_voice1_regressions_are_development_only_without_changing_holdout() -> None:
+    from argparse import Namespace
+
+    from scripts.sim.corpus import generate_development_cases
+    from scripts.sim.split import partition_cases, select_cases
+
+    protocols = load_corpus()
+    expected = {
+        case.code
+        for protocol in protocols
+        for case in generate_development_cases(protocol)
+    }
+    common = dict(
+        split_seed=1027,
+        holdout_fraction=.3,
+        emergency_matrix=False,
+        protocol=None,
+        family=None,
+        limit=None,
+    )
+    development, metadata = select_cases(
+        protocols, Namespace(split='development', **common)
+    )
+    holdout, _ = select_cases(protocols, Namespace(split='holdout', **common))
+    assert expected <= {case.code for _, case in development}
+    assert expected.isdisjoint(case.code for _, case in holdout)
+    assert metadata['development_regression_cases'] == len(expected)
+    _, holdout_metadata = select_cases(
+        protocols, Namespace(split='holdout', **common)
+    )
+    base = partition_cases(
+        tuple(
+            (protocol, case)
+            for protocol in protocols
+            for case in generate_cases(protocol)
+        )
+    )
+    assert holdout_metadata['development_cases'] == len(base.development)
+    assert 'development_regression_cases' not in holdout_metadata
+
+
 def test_split_rejects_small_holdout_or_duplicate_identity() -> None:
     from scripts.sim.split import partition_cases
 
