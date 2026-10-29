@@ -70,6 +70,28 @@ describe("UploadScreen", () => {
     expect(calls.some((call) => call.path === "/api/protocols/p-new/analysis" && call.init?.method === "POST")).toBe(true);
   });
 
+  it("pastes a Methods paragraph into the same upload and analysis path", async () => {
+    const user = userEvent.setup();
+    const { calls } = fakeFetch({
+      "/api/protocols?filename=pasted-methods.txt": { json: UPLOAD_ANSWER },
+      "/api/protocols": { json: { protocols: [] } },
+    });
+    renderWithClient(<UploadScreen session={session} />);
+    await answerSource(user, "CC BY paper DOI 10.0000/example");
+    await user.type(
+      screen.getByLabelText("Methods 문단"),
+      "Cells were washed with 500 µL PBS, then incubated at 37 °C for 10 min.",
+    );
+    await user.click(screen.getByRole("button", { name: "Methods 문단 올리기" }));
+    expect(await screen.findByTestId("pages-ask")).toBeInTheDocument();
+    const sent = calls.find((call) => call.path === "/api/protocols?filename=pasted-methods.txt");
+    expect(sent?.init?.method).toBe("POST");
+    expect((sent?.init?.headers as Record<string, string>)["Content-Type"]).toBe("text/plain");
+    expect(await (sent?.init?.body as Blob).text()).toBe(
+      "Cells were washed with 500 µL PBS, then incubated at 37 °C for 10 min.",
+    );
+  });
+
   it("쪽 고르기 shows the pages' small pictures and analyses the picked pages only", async () => {
     const user = userEvent.setup();
     const { calls } = fakeFetch({

@@ -5138,6 +5138,7 @@ async def _register_protocol_pdf(
                         "source_kind":(
                             "local_pdf" if converted is None
                             else "local_docx" if converted.converter.startswith("libreoffice")
+                            else "pasted_methods" if converted.media_type=="text/plain"
                             else "local_photo"),
                         "status":"stored",
                     },

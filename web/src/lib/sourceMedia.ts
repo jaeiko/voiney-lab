@@ -10,9 +10,10 @@ export const SOURCE_MEDIA_TYPES: Record<string, string> = {
   png: "image/png",
   heic: "image/heic",
   heif: "image/heic",
+  txt: "text/plain",
 };
 
-export const ACCEPTED_EXTENSIONS = ".pdf,.docx,.jpg,.jpeg,.png,.heic,.heif";
+export const ACCEPTED_EXTENSIONS = ".pdf,.docx,.jpg,.jpeg,.png,.heic,.heif,.txt";
 
 export function sourceMediaType(file: Pick<File, "name" | "type">): string | null {
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "";

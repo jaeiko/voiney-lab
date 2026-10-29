@@ -78,6 +78,14 @@ PDF_RENDER_ADDRESS_SPACE_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_WORKER_OUTPUT_BYTES = 96 * 1024 * 1024
 _WORKER_MODULE = "voiney_lab.pdf_text_engine"
 
+#: Page layout for pasted Methods. These are presentation constants, not
+#: protocol values; the source characters themselves are copied unchanged.
+TEXT_PAGE_WIDTH = 612.0
+TEXT_PAGE_HEIGHT = 792.0
+TEXT_PAGE_MARGIN = 72.0
+TEXT_FONT_SIZE = 11.0
+TEXT_LINE_HEIGHT = 15.0
+
 _METADATA_KEYS = {
     "title": "title",
     "author": "author",
@@ -540,6 +548,98 @@ def render_clips_png_in_process(
         document.close()
 
 
+def write_text_document_in_process(text: str, destination: str | Path) -> None:
+    """Write pasted Methods as a deterministic born-digital evidence PDF.
+
+    Helvetica covers Latin scientific symbols such as ``µ`` and ``×``;
+    MuPDF's bundled CJK font covers Korean and remaining ordinary Methods
+    characters. Runs are placed left to right and pages top to bottom.
+    """
+
+    import pymupdf
+
+    latin = pymupdf.Font(fontname="helv")
+    cjk = pymupdf.Font(fontname="cjk")
+    fonts = (("MethodsLatin", latin), ("MethodsCJK", cjk))
+
+    def font_for(character: str):
+        code = ord(character)
+        for name, font in fonts:
+            if character.isspace() or font.has_glyph(code):
+                return name, font
+        raise PdfEngineDocumentError("unsupported_text")
+
+    max_width = TEXT_PAGE_WIDTH - 2 * TEXT_PAGE_MARGIN
+    lines: list[list[tuple[str, str, float]]] = []
+    line: list[tuple[str, str, float]] = []
+    line_width = 0.0
+
+    def finish_line() -> None:
+        nonlocal line, line_width
+        lines.append(line)
+        line = []
+        line_width = 0.0
+
+    for character in text:
+        if character == "\n":
+            finish_line()
+            continue
+        font_name, font = font_for(character)
+        width = float(font.text_length(character, fontsize=TEXT_FONT_SIZE))
+        if line and line_width + width > max_width:
+            finish_line()
+        if line and line[-1][0] == font_name:
+            previous_name, previous_text, previous_width = line[-1]
+            line[-1] = (
+                previous_name,
+                previous_text + character,
+                previous_width + width,
+            )
+        else:
+            line.append((font_name, character, width))
+        line_width += width
+    finish_line()
+
+    lines_per_page = int(
+        (TEXT_PAGE_HEIGHT - 2 * TEXT_PAGE_MARGIN) // TEXT_LINE_HEIGHT
+    )
+    document = pymupdf.open()
+    try:
+        for first in range(0, len(lines), lines_per_page):
+            page = document.new_page(width=TEXT_PAGE_WIDTH, height=TEXT_PAGE_HEIGHT)
+            for font_name, font in fonts:
+                page.insert_font(fontname=font_name, fontbuffer=font.buffer)
+            for offset, runs in enumerate(lines[first : first + lines_per_page]):
+                x = TEXT_PAGE_MARGIN
+                y = TEXT_PAGE_MARGIN + TEXT_FONT_SIZE + offset * TEXT_LINE_HEIGHT
+                for font_name, words, width in runs:
+                    page.insert_text(
+                        pymupdf.Point(x, y),
+                        words,
+                        fontname=font_name,
+                        fontsize=TEXT_FONT_SIZE,
+                    )
+                    x += width
+        document.set_metadata(
+            {
+                "title": "",
+                "creator": "Voiney Lab methods text converter v1",
+                "producer": "Voiney Lab methods text converter v1",
+                "creationDate": "D:20000101000000Z",
+                "modDate": "D:20000101000000Z",
+            }
+        )
+        document.save(
+            Path(destination),
+            garbage=4,
+            clean=True,
+            deflate=True,
+            no_new_id=True,
+        )
+    finally:
+        document.close()
+
+
 def _document_payload(document: EngineDocument) -> dict[str, object]:
     return {
         "status": "ok",
@@ -636,6 +736,12 @@ def main() -> int:
                 "status": "ok",
                 "pngs_base64": [base64.b64encode(png).decode("ascii") for png in pngs],
             }
+        elif operation == "write_text":
+            text = request.get("text")
+            if not isinstance(text, str):
+                raise PdfEngineDocumentError("unsupported_text")
+            write_text_document_in_process(text, request["path"])
+            reply = {"status": "ok"}
         else:
             raise ValueError("unknown operation")
     except PdfEngineDocumentError as error:
@@ -780,6 +886,19 @@ def read_document(path: str | Path) -> EngineDocument:
         metadata=dict(metadata),
         pages=tuple(parsed),
         warnings=tuple(warnings),
+    )
+
+
+def write_text_document(text: str, destination: str | Path) -> None:
+    """Write one validated text source in a bounded fresh child process."""
+
+    _run_worker(
+        {
+            "operation": "write_text",
+            "text": text,
+            "path": str(destination),
+            "address_space_bytes": PDF_WORKER_ADDRESS_SPACE_BYTES,
+        }
     )
 
 

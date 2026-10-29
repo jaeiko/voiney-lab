@@ -55,6 +55,7 @@ export function UploadScreen({ session }: { session: AuthSession }) {
   const [phase, setPhase] = useState<Phase>({ kind: "pick" });
   const [error, setError] = useState<string | null>(null);
   const [link, setLink] = useState("");
+  const [methodsText, setMethodsText] = useState("");
   const [dragging, setDragging] = useState(false);
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   const [sourceNote, setSourceNote] = useState("");
@@ -131,6 +132,33 @@ export function UploadScreen({ session }: { session: AuthSession }) {
         public_source_status: sourceStatus,
         source_note: sourceNote.trim(),
       });
+      accept(answer);
+    } catch (failure) {
+      setPhase({ kind: "pick" });
+      setError(uploadErrorWords(failure));
+    }
+  }
+
+  async function sendMethods(event: FormEvent) {
+    event.preventDefault();
+    const text = methodsText.trim();
+    if (!text) return;
+    if (!sourceStatus) {
+      setError(words.sourceRequired);
+      return;
+    }
+    setError(null);
+    setPhase({ kind: "uploading", name: words.methodsName });
+    try {
+      const answer = await postFile<UploadResponse>(
+        "/api/protocols?filename=pasted-methods.txt",
+        new Blob([text], { type: "text/plain;charset=utf-8" }),
+        "text/plain",
+        {
+          "X-Voiney-Source-Status": sourceStatus,
+          "X-Voiney-Source-Note": encodeURIComponent(sourceNote.trim()),
+        },
+      );
       accept(answer);
     } catch (failure) {
       setPhase({ kind: "pick" });
@@ -231,6 +259,23 @@ export function UploadScreen({ session }: { session: AuthSession }) {
           </button>
           <p className="muted">{words.formats}</p>
         </section>
+        <form className="link-form methods-form" onSubmit={(event) => void sendMethods(event)} noValidate>
+          <p className="muted">{words.methodsLead}</p>
+          <label className="field">
+            {words.methodsLabel}
+            <textarea
+              value={methodsText}
+              maxLength={100000}
+              rows={7}
+              onChange={(event) => setMethodsText(event.target.value)}
+              data-testid="methods-input"
+            />
+          </label>
+          <button type="submit" className="btn" disabled={!methodsText.trim()}>
+            <FileUp aria-hidden="true" />
+            {words.methodsButton}
+          </button>
+        </form>
         {error ? <Note testId="upload-error">{error}</Note> : null}
         <form className="link-form" onSubmit={(event) => void sendLink(event)} noValidate>
           <p className="muted">{signedIn ? words.linkLead : words.linkSignIn}</p>
