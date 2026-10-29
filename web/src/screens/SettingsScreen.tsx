@@ -14,6 +14,7 @@ import { advancedSettings } from "../copy/ko";
 import { oldRoutes } from "../lib/navigation";
 import { uploadedDay } from "../lib/protocolStatus";
 import { parseVoiceReference, referenceStale } from "../voice/micCheck";
+import { setDisplayMode, useDisplayMode } from "../voice/displayPreferences";
 import { SETTINGS_KEY, VoicePicker } from "./settings/VoicePicker";
 import { VoiceCheck } from "./settings/VoiceCheck";
 
@@ -172,6 +173,7 @@ function DeleteForm() {
 
 export function SettingsScreen({ session, duringRun = false }: { session: AuthSession; duringRun?: boolean }) {
   const run = useRun();
+  const displayMode = useDisplayMode();
   const active = duringRun || run.active || run.phase === "starting";
   const settings = useQuery({ queryKey: SETTINGS_KEY, queryFn: runApi.settings, retry: false });
   const numbers = useSetting("confirm_mode");
@@ -187,6 +189,18 @@ export function SettingsScreen({ session, duringRun = false }: { session: AuthSe
     <div className="settings" data-testid="settings-screen">
       {!duringRun ? <><h1 className="screen-title">{copy.title}</h1>
       <p className="page-why">{advancedSettings.why}</p></> : null}
+      <Section id="display" title={copy.display.title} lead={copy.display.lead}>
+        <Segmented
+          name={copy.display.title}
+          value={displayMode}
+          options={[
+            { value: "normal", label: copy.display.normal },
+            { value: "far", label: copy.display.far },
+          ]}
+          onChange={(value) => setDisplayMode(value === "far" ? "far" : "normal")}
+        />
+        <p className="muted">{copy.display.voice}</p>
+      </Section>
       {active ? <p>{advancedSettings.calibrationLater}</p> : <>
       <Section id="voice-check" title={copy.voiceCheck.title} lead={copy.voiceCheck.lead}>
         <VoiceCheck onMeasured={() => void client.invalidateQueries({ queryKey: SETTINGS_KEY })} />

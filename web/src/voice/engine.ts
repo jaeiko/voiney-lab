@@ -17,6 +17,7 @@
 import { run as runCopy } from "../copy/ko";
 import { newestGeneration, type VoiceState } from "./runModel";
 import { inputLanguage } from "./devicePreferences";
+import { displayModeEvent, setDisplayMode } from "./displayPreferences";
 import { runStore } from "./runStore";
 
 declare let playbackEpoch: number;
@@ -156,6 +157,10 @@ export function installVoiceHost(): void {
       const node = g.$(id);
       if (node) node.textContent = value;
       if (id === "mic-recovery-text") runStore.set({ micProblem: value ? String(value) : null });
+      const changedMic = id === "mic-device-status" ? String(value).match(/^마이크가 바뀌었어요 · (.+) 사용 중$/) : null;
+      if (changedMic) {
+        runStore.set({ micNotice: { text: runCopy.micChanged(changedMic[1]), at: Date.now() } });
+      }
     },
     setDisabled: (node: any, value: boolean) => {
       if (node) node.disabled = value;
@@ -291,6 +296,14 @@ async function onMessage(e: MessageEvent, generation: number, current: WebSocket
   if (m.type === "playback.stop") { const accepted = acceptedSessionConfiguration; if (accepted && m.configuration_id === accepted.configuration_id) clearPlayback(); return; }
   if (m.type === "speech.ignored") { removeProvisionalTurn(m.turn_id, generation, Number.isInteger(m.generation) ? m.generation : null); if (sessionActive && m.during_playback !== true) renderState("LISTENING"); }
   if (m.type === "transcript" && !cascadeTurnInterrupted(m) && currentCascadeMessage(m)) { g.provisionalTurns.delete(turnBrowserKey(m.turn_id, generation)); }
+  if (m.type === "screen.display_mode" && !cascadeTurnInterrupted(m)) {
+    const next = displayModeEvent(m, {
+      configurationId: acceptedSessionConfiguration?.configuration_id ?? null,
+      turnId: activeTurn,
+      generation: activeCascadeGeneration,
+    });
+    if (next) setDisplayMode(next);
+  }
   if (m.type === "turn.state") applyTurnState(m, generation);
   if (m.type === "audio.segment.start") { if (cascadeTurnInterrupted(m)) return; if (activeTurn === null) { activeTurn = m.turn_id; activeCascadeGeneration = Number.isInteger(m.generation) ? m.generation : null; } if (!currentCascadeMessage(m) || m.segment_index < nextSegment) return; clearFillerPlayback(m.turn_id, m.generation); receiving = m; receivedFrames = []; }
   if (m.type === "audio.segment.end" && !cascadeTurnInterrupted(m) && receiving && currentCascadeMessage(m) && m.segment_index === receiving.segment_index && (!Number.isInteger(m.generation) || m.generation === receiving.generation)) { queued.set(m.segment_index, join(receivedFrames)); receiving = null; receivedFrames = []; pump(generation); }
@@ -456,4 +469,3 @@ export async function recordVoice(seconds: number): Promise<{ pcm: Int16Array; m
 export function encodePcm(pcm: Int16Array): string {
   return pcmBase64(pcm);
 }
-

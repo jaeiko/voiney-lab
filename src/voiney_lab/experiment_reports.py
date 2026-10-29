@@ -2371,6 +2371,8 @@ def build_report_facts(
     # Lane CF, decision 3: reverts; decision 5: the file the run followed.
     reverts: list[ReportRevert] = []
     basis_words = ""
+    source_disclosure_words = ""
+    source_note = ""
     # Lane CB, decision 5.
     branch_answers: list[ReportBranchAnswer] = []
     repetitions: list[ReportRepetition] = []
@@ -2496,10 +2498,24 @@ def build_report_facts(
                 in_repeat=(pair[0], pair[-1]) if pair else None,
                 at=at.strftime("%H:%M") if at else "", key=str(event.get("event_key") or ""),
             ))
-        elif kind == "protocol_basis_recorded" and not basis_words:
-            filename = " ".join(str(payload.get("filename") or "").split())
-            words = " ".join(str(payload.get("words") or "").split())
-            basis_words = words.removeprefix("지금 기준:").strip() or filename
+        elif kind == "protocol_basis_recorded":
+            if not basis_words:
+                filename = " ".join(str(payload.get("filename") or "").split())
+                words = " ".join(str(payload.get("words") or "").split())
+                basis_words = words.removeprefix("지금 기준:").strip() or filename
+            disclosure = payload.get("source_disclosure")
+            if not source_disclosure_words and isinstance(disclosure, Mapping):
+                if disclosure.get("recorded") is False:
+                    source_disclosure_words = "확인 기록 없음"
+                elif disclosure.get("recorded") is True:
+                    source_disclosure_words = {
+                        "yes": "예 — 공개·시판 원문",
+                        "no": "아니요 — 공개·시판 아님",
+                        "unknown": "모름 — 확인 필요",
+                    }.get(str(disclosure.get("status") or ""), "")
+                    source_note = " ".join(
+                        str(disclosure.get("note") or "").split()
+                    )
         elif kind == "branch_answered":
             record = step_record(payload)
             branch_answers.append(ReportBranchAnswer(
@@ -2788,6 +2804,11 @@ def build_report_facts(
     ) + (
         # Lane CF, decision 5: "{파일 이름} · {올린 날짜}".
         (("기준 파일", basis_words),) if basis_words else ()
+    ) + (
+        (("원문 공개 범위", source_disclosure_words),)
+        if source_disclosure_words else ()
+    ) + (
+        (("출처 메모", source_note),) if source_note else ()
     ) + (
         (("안전 주의 확인", (
             f"시작 전 화면에서 원문 안전 주의 {safety_notices_acknowledged}건을 보고 시작함"
@@ -4487,6 +4508,10 @@ def build_lab_notebook(
         header.append(("출처", " ".join(part for part in (reference.title, reference.url) if part)))
     if run.get("기준 파일"):
         header.append(("기준 파일", run["기준 파일"]))
+    if run.get("원문 공개 범위"):
+        header.append(("원문 공개 범위", run["원문 공개 범위"]))
+    if run.get("출처 메모"):
+        header.append(("출처 메모", run["출처 메모"]))
     if run.get("프로토콜 상태"):
         header.append(("프로토콜 상태", run["프로토콜 상태"]))
     header.append(("진행", progress))

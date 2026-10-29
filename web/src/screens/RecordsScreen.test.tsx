@@ -51,6 +51,29 @@ it('renders the server notebook tables as text with unconfirmed labels and uncha
   expect(await screen.findByText('원문 60 s → 실제 90 s [미확인]')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Word로 내려받기' })).toHaveAttribute('href', '/api/experiment-reports/report-rx3.docx');
 });
+it('shows the recorded public-source disclosure in the experiment information section', async () => {
+  setup({
+    '/api/experiment-reports/report-rx3/notebook': { json: {
+      ...NOTEBOOK,
+      notebook: {
+        ...NOTEBOOK.notebook,
+        header_rows: [
+          ...NOTEBOOK.notebook.header_rows,
+          ['원문 공개 범위', '예 — 공개·시판 원문'],
+          ['출처 메모', '시판 제품 설명서 문서번호 918273645'],
+        ],
+      },
+    } },
+  });
+  renderWithClient(<NotebookScreen sessionId='rx3-0' reportId='report-rx3' session={SESSION_DEV as AuthSession} />);
+  const information = await screen.findByRole('heading', { name: '실험 정보' });
+  const section = information.closest('section');
+  expect(section).not.toBeNull();
+  expect(within(section!).getByText('원문 공개 범위')).toBeInTheDocument();
+  expect(within(section!).getByText('예 — 공개·시판 원문')).toBeInTheDocument();
+  expect(within(section!).getByText('출처 메모')).toBeInTheDocument();
+  expect(within(section!).getByText('시판 제품 설명서 문서번호 918273645')).toBeInTheDocument();
+});
 it.each([[], null])('shows empty or failed record state with retry', async rows => {
   fakeFetch({ '/api/workspace/experiments': rows ? { json: { experiments: rows } } : { status: 503 }, '/api/workspace/session': { json: {} } });
   renderWithClient(<RecordsScreen session={SESSION_DEV as AuthSession} />);

@@ -283,6 +283,58 @@ def test_noise_tail_does_not_dilute_speech_snr():
     assert any(values[len(source):])
 
 
+def test_hood_noise_profiles_are_deterministic_and_distinct():
+    from scripts.sim.audio import NOISES, noise
+    expected = {
+        'cleanbench_bsc_fan',
+        'fume_hood_exhaust',
+        'glovebox_circulation_pump',
+        'fan_centrifuge',
+        'fan_adjacent_speech',
+    }
+    assert expected <= set(NOISES)
+    samples = {kind: noise(kind, 800, seed=1024) for kind in expected}
+    assert all(values == noise(kind, 800, seed=1024) for kind, values in samples.items())
+    assert len({tuple(round(value, 6) for value in values[:100]) for values in samples.values()}) == len(expected)
+
+
+def test_microphone_distance_attenuates_voice_and_reports_effective_snr():
+    import math
+    from scripts.sim.audio import distance_gain, effective_snr_db, mix, oracle_audio
+    from voiney_lab.audio import pcm16_to_samples
+
+    assert distance_gain(30) == pytest.approx(1)
+    assert distance_gain(100) == pytest.approx(.3)
+    assert effective_snr_db(10, 100) == pytest.approx(10 + 20 * math.log10(.3))
+
+    source = pcm16_to_samples(oracle_audio())
+    heard, output_gain = mix(oracle_audio(), 'cleanbench_bsc_fan', 10, signal_gain=.3)
+    values = pcm16_to_samples(heard)
+    speech_power = sum((value * .3 * output_gain) ** 2 for value in source)
+    noise_power = sum((mixed - clean * .3 * output_gain) ** 2 for mixed, clean in zip(values, source))
+    assert 10 * math.log10(speech_power / noise_power) == pytest.approx(effective_snr_db(10, 100), abs=.05)
+
+
+def test_live_plan_has_distance_and_chirp3_denoise_axes_without_requests(monkeypatch, capsys):
+    from scripts.sim import live
+    from voiney_lab import voice_providers as vp
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('dry run crossed provider boundary')
+
+    monkeypatch.setattr(vp.SttProviderSettings, 'from_environment', forbidden)
+    monkeypatch.setattr(vp, 'synthesize', forbidden)
+    assert live.main([
+        '--limit', '1', '--voices', 'ko-KR-Chirp3-HD-Charon', '--speeds', '1',
+        '--conditions', 'cleanbench_bsc_fan:10', '--distances', '30,100', '--denoise', 'on,off',
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['cases'] == 4
+    assert result['matrix']['distance_cm'] == [30, 100]
+    assert result['matrix']['denoise'] == ['on', 'off']
+    assert result['external_requests_this_dry_run'] == 0
+
+
 def test_english_copy_finds_short_instructions_but_allows_term_names():
     from scripts.sim.metrics import english_copy
     assert english_copy('Mix well.','Mix well.')
@@ -339,6 +391,30 @@ def test_live_vad_drop_is_not_an_asr_measurement_and_stt_failure_is_counted():
     row=score_case(c,result,mode='live')
     assert row['stt']['failed_requests']==1
     assert row['stt_counts']['reference_chars']>0
+
+
+def test_live_stt_failure_keeps_only_provider_status_and_code():
+    from dataclasses import replace
+
+    from voiney_lab.voice_providers import SpeechProviderError
+
+    protocol=load_corpus()[0]
+    case=replace(
+        next(case for case in generate_cases(protocol) if case.family=='current'),
+        text='현재 단계 알려 줘',
+    )
+
+    def refused(*args,**kwargs):
+        raise SpeechProviderError(
+            'private provider reply must not be exported',status=404,code='not_found')
+
+    result=asyncio.run(run_case(protocol,case,transcriber=refused))
+    assert result['stt_failures']==[{'status':404,'code':'not_found'}]
+    assert 'private provider reply' not in json.dumps(result,ensure_ascii=False)
+    row=score_case(case,result,mode='live')
+    assert row['stt_failures']==[{'status':404,'code':'not_found'}]
+    overall=aggregate([row])['overall']
+    assert overall['stt_failures']==[{'status':404,'code':'not_found','count':1}]
 
 
 @pytest.mark.parametrize('family,text',[

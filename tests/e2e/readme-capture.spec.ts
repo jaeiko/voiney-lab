@@ -127,6 +127,8 @@ test('upload → pages → evidence card → start → Korean step / timer / rec
   await page.goto('/app/#/upload');
   await expect(page.getByRole('heading', { name: '프로토콜 올리기' })).toBeVisible();
   await capture(page, device, '01-upload');
+  await page.getByRole('radio', { name: '예' }).check();
+  await page.getByLabel('출처 메모').fill('공개된 합성 시험 자료');
   await page.getByTestId('file-input').setInputFiles({ name: chemistry ? 'soil-example.pdf' : 'protein-example.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 synthetic capture; not a source document') });
   await page.getByTestId('pages-pick').click();
   await page.locator('.page-thumb').nth(0).click();

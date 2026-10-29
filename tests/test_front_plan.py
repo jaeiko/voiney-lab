@@ -217,6 +217,25 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
                 self.assertFalse(front.state_changed)
                 self.assertEqual(session.current_index, 3)
 
+    def test_bench_note_and_display_mode_commands_do_not_overlap_or_move_workflow(self) -> None:
+        note, note_session = self.assert_front(
+            ("특이사항, 화면이 뿌옇다",), "note_record", step_index=3,
+        )
+        self.assertFalse(note.state_changed)
+        self.assertIsNone(note.display_mode)
+        self.assertEqual(note_session.current_index, 3)
+        self.assertEqual(note_session.workflow_status, "active")
+        self.assertEqual(note.note_record["content"], "화면이 뿌옇다")
+
+        display, display_session = self.assert_front(
+            ("화면 크게",), "display_mode", step_index=3,
+        )
+        self.assertFalse(display.state_changed)
+        self.assertEqual(display.display_mode, "far")
+        self.assertIsNone(display.note_record)
+        self.assertEqual(display_session.current_index, 3)
+        self.assertEqual(display_session.workflow_status, "active")
+
     def test_before_the_start_only_front_words_are_taken(self) -> None:
         # Decision 2 (2026-10-03): an explicit start of an experiment that
         # never started is a front rule.
@@ -292,6 +311,8 @@ class MiniprepFrontRuleTests(_Twins, unittest.TestCase):
             "mixed_move",
             # lane HEAR2, decision 3 (2026-10-26): the timer's voice commands
             "timer_control",
+            # lane HOOD1: device display only; no workflow checkpoint changes
+            "display_mode",
         })
 
 
