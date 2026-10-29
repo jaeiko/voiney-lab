@@ -495,8 +495,11 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   explicit ADC JSON outside git: service account, AWS WIF or developer user;
   in-memory OAuth token). The ADC loader does no project discovery or ambient
   fallback; AWS IMDS/Google STS/impersonation and recognition share one deadline,
-  with fixed endpoint allowlists and no redirect. A Google V2 inline-adaptation
-  400/404 gets one same-provider/model request with adaptation removed; success
+  with fixed endpoint allowlists and no redirect. Google V2 inline adaptation is
+  off by default (`VOINEY_LAB_GOOGLE_STT_V2_ADAPTATION_ENABLED=false`) after the
+  same Korean WAV returned 404 in both `us` and `eu` on 2026-10-29; the default
+  region remains `us`. When explicitly enabled, an inline-adaptation 400/404 gets
+  one same-provider/model request with adaptation removed; success
   disables adaptation for the rest of that voice session and records the
   content-free reason `stt_adaptation_disabled`. No other STT failure retries or
   changes provider. OCR: `clova`,
@@ -746,7 +749,8 @@ Everything fails closed and visibly, and none of it mutates workflow state:
 | Condition | Result |
 |---|---|
 | A model role, STT or TTS provider not set | `RoleNotConfiguredError` / `ConfigurationError` naming the missing setting; no fallback provider |
-| Google V2 inline adaptation returns HTTP 400/404 | Retry once with only adaptation removed; on success record `stt_adaptation_disabled` and omit hints for that voice session; never choose another provider |
+| Google V2 inline adaptation is off (default) | Omit hints from the first request; keep the configured provider, model and `us` default region |
+| Enabled Google V2 inline adaptation returns HTTP 400/404 | Retry once with only adaptation removed; on success record `stt_adaptation_disabled` and omit hints for that voice session; never choose another provider |
 | Router enabled without its provider/model | Router off, reason in `ready.research_capabilities.llm_router`; turns take the rules |
 | `VOINEY_LAB_ROUTER_FIRST` without the router | `/ws` refuses the configuration |
 | Outside-PDF, web or drawing switched on without its key or role | `/ws` refuses at connect |

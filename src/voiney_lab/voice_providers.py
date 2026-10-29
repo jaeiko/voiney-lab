@@ -542,7 +542,7 @@ def transcribe_google_cloud_v2(
     }
     # Chirp 3: 1,000 phrases; V2: 100 characters each, 100,000 total.
     phrases = _bounded_keyterms(keyterms, max_chars=100, max_words=100, limit=1000)
-    if phrases:
+    if phrases and v2.adaptation_enabled:
         config["adaptation"] = {"phraseSets": [{"inlinePhraseSet": {
             "phrases": [{"value": phrase} for phrase in phrases]}}]}
     url = (f"https://{v2.location}-speech.googleapis.com/v2/projects/{v2.project}"

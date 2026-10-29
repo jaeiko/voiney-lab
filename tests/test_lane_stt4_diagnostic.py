@@ -40,7 +40,13 @@ def test_diagnostic_runs_three_single_attempt_scenarios_and_prints_no_text(
     calls = []
 
     def transcribe(pcm, settings, *, language, keyterms, retry_without_adaptation):
-        calls.append((settings.google_v2.location, keyterms, retry_without_adaptation, pcm))
+        calls.append((
+            settings.google_v2.location,
+            getattr(settings.google_v2, "adaptation_enabled", None),
+            keyterms,
+            retry_without_adaptation,
+            pcm,
+        ))
         if len(calls) == 1:
             raise SpeechProviderError(
                 "private provider reply", status=404, code="not_found")
@@ -54,10 +60,15 @@ def test_diagnostic_runs_three_single_attempt_scenarios_and_prints_no_text(
             "--execute", "--wav", str(audio), "--max-calls", "10",
         ]) == 0
 
-    assert [(location, bool(terms), retry) for location, terms, retry, _ in calls] == [
-        ("us", True, False), ("eu", True, False), ("us", False, False),
+    assert [
+        (location, enabled, bool(terms), retry)
+        for location, enabled, terms, retry, _ in calls
+    ] == [
+        ("us", True, True, False),
+        ("eu", True, True, False),
+        ("us", False, False, False),
     ]
-    assert all(pcm == b"\0\0" * 16000 for _, _, _, pcm in calls)
+    assert all(pcm == b"\0\0" * 16000 for _, _, _, _, pcm in calls)
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [
         {key: value for key, value in row.items() if key != "response_ms"}

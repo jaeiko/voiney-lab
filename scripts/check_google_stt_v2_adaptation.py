@@ -89,7 +89,11 @@ def main(arguments: list[str] | None = None) -> int:
     for name, location, keyterms in scenarios:
         scenario_settings = replace(
             settings,
-            google_v2=replace(settings.google_v2, location=location),
+            google_v2=replace(
+                settings.google_v2,
+                location=location,
+                adaptation_enabled=bool(keyterms),
+            ),
         )
         started = time.monotonic()
         try:

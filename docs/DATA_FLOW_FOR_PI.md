@@ -25,7 +25,7 @@ flowchart LR
 | 흐름 | 공급자 역할과 설정 이름 | `.env.example` 예시 | 개발 서버 실제 값 | 보관·학습 사용 약관 확인 |
 |---|---|---|---|---|
 | 서버 호스팅(사업자·지역) | Voiney 운영 서버의 호스팅 사업자·처리 지역(배포 정보, 코드 설정 없음) | 해당 없음(배포 환경에서 정함) | __________________ | __________________ |
-| 말소리 → 받아쓰기 | STT: `VOINEY_LAB_STT_PROVIDER`, `VOINEY_LAB_STT_MODEL` | `elevenlabs` · `scribe_v2` | __________________ | __________________ |
+| 말소리 → 받아쓰기 | STT: `VOINEY_LAB_STT_PROVIDER`, `VOINEY_LAB_STT_MODEL`; Google V2이면 `VOINEY_LAB_GOOGLE_STT_V2_LOCATION`, `VOINEY_LAB_GOOGLE_STT_V2_ADAPTATION_ENABLED` | `elevenlabs` · `scribe_v2`; Google V2 지역 `us`, 인라인 힌트 `false` | __________________ | __________________ |
 | 문장 → 목소리 | TTS: `VOINEY_LAB_TTS_PROVIDER`, `VOINEY_LAB_TTS_MODEL`, `VOINEY_LAB_TTS_VOICE` | `google_cloud` · 모델/목소리 빈칸(공급자 기본 목소리) | __________________ | __________________ |
 | 원문 → 구조 분석 | Analysis: `VOINEY_LAB_ANALYSIS_PROVIDER`, `VOINEY_LAB_ANALYSIS_MODEL` | `google` · `gemini-3.8-flash` | __________________ | __________________ |
 | 원문 문장 → 한국어 번역 | Translation: `VOINEY_LAB_TRANSLATION_PROVIDER`, `VOINEY_LAB_TRANSLATION_MODEL` | `google` · `gemini-3.8-flash` | __________________ | __________________ |
@@ -41,6 +41,13 @@ flowchart LR
 학습 사용, 삭제 요청 방법은 이 저장소가 보증하지 않는다. **파일럿 전에 사람이 각 공급자의
 당시 약관과 계약을 공개 저장소 밖에서 확인한다. 개발 서버 실제 값과 약관 확인 칸은 이 공개
 문서에서 계속 비워 둔다.**
+
+Google V2를 고르면 지역 설정과 같은 `us` 또는 `eu` 다중 지역 endpoint와 recognition
+resource로 한 번 말한 음성이 나간다. 기본 `us`는 바꾸지 않았다. 2026-10-29 같은 한국어
+WAV의 실제 요청 3회는 `us` 힌트 404·3,573 ms, `eu` 힌트 404·5,021 ms, `us` 힌트 없음
+200·3글자·3,915 ms였다. 그래서 인라인 힌트는 기본 false이며, 지역을 바꾸어 해결됐다고
+보지 않는다. 이 endpoint 선택만으로 공급자의 보관·학습 정책이나 법적 데이터 거주를
+Voiney Lab이 보증하지 않는다. 그 두 칸은 파일럿 당시 계약을 사람이 별도로 확인한다.
 
 새 올리기 화면은 **"이 원문은 공개되었거나 시판 제품에 딸린 프로토콜인가요?"**를
 `예·아니요·모름`으로 묻고 출처 메모를 함께 남긴다. 예시 설정
