@@ -75,6 +75,29 @@ def router_plan(args: argparse.Namespace, cases: list) -> dict:
             'rates_verified': False, 'reserve_per_request': args.reserve_usd_per_request}
 
 
+def router_cost_estimate(
+    router: dict | None, *, input_rate: float, output_rate: float,
+) -> dict:
+    """Rough cost from returned usage; timed-out/missing usage stays explicit."""
+    router = router or {}
+    usage = router.get('usage') if isinstance(router.get('usage'), dict) else {}
+    prompt = usage.get('prompt_tokens', 0)
+    completion = usage.get('completion_tokens', 0)
+    prompt = prompt if isinstance(prompt, int) and not isinstance(prompt, bool) else 0
+    completion = completion if isinstance(completion, int) and not isinstance(completion, bool) else 0
+    completed = int(router.get('model_completed_with_usage', 0) or 0)
+    calls = int(router.get('model_calls', 0) or 0)
+    return {
+        'reported_usage_calls': completed,
+        'usage_missing_calls': max(0, calls - completed),
+        'input_usd_per_million_assumed': input_rate,
+        'output_usd_per_million_assumed': output_rate,
+        'reported_usage_usd_estimate': round(
+            (prompt * input_rate + completion * output_rate) / 1e6, 4),
+        'rates_verified': False,
+    }
+
+
 async def evaluate(args: argparse.Namespace) -> dict:
     cases, split, catalog_counts, translation_coverage = prepare_cases(args)
     rows = []
@@ -114,6 +137,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
                 closing = client.close()
                 if inspect.isawaitable(closing):
                     await closing
+    aggregate_report = aggregate(rows)
     return {
         'schema':1, 'mode':'oracle_model' if args.configured_router else 'offline', 'stt_measured':False, 'acoustics_measured':False,
         'latency_measured':'in_process_fake_providers_no_playback', 'router':'configured' if args.configured_router else 'off',
@@ -126,11 +150,15 @@ async def evaluate(args: argparse.Namespace) -> dict:
         'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
         'corpus_sha256':hashlib.sha256(args.corpus.read_bytes()).hexdigest(),
         'workload_sha256':hashlib.sha256(json.dumps([(p.fixture.fixture_sha256,asdict(c)) for p,c in cases],sort_keys=True,ensure_ascii=False).encode()).hexdigest(),
-        'catalog':catalog_counts, 'provider_requests':budget.calls if budget else 0, 'split':split,
+        'catalog':catalog_counts, 'provider_requests':budget.calls if budget else 0,
+        'reserved_usd':round(budget.usd, 4) if budget else 0, 'split':split,
         'budget_stopped':bool(budget and budget.stopped), 'planned_cases':len(cases),
         'translations_sha256':hashlib.sha256(args.translations.read_bytes()).hexdigest() if args.translations else None,
         'translation_coverage':translation_coverage,
-        **aggregate(rows), 'rows':[] if args.split == 'holdout' else rows,
+        'router_cost_estimate':router_cost_estimate(
+            aggregate_report['overall'].get('router'),
+            input_rate=args.router_input_rate, output_rate=args.router_output_rate),
+        **aggregate_report, 'rows':[] if args.split == 'holdout' else rows,
         'rows_suppressed':args.split == 'holdout',
     }
 

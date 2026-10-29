@@ -93,6 +93,23 @@ together.
   typed-record comparison preserves other declared values as source strings.
   This does not detect omissions on the live analysis path. `--output` may
   create a report file and refuses to overwrite any existing file.
+- `scripts/model_reasoning_eval.py` is the opt-in, human-run comparison around
+  those production boundaries. Its default subcommands only make a plan and
+  never construct a provider client; `--execute` is required and both a call
+  cap and a reserved-USD cap are mandatory. `translation-sample` fixes a
+  source-identified, text-free manifest balanced across person-named fields
+  and within-field source-length terciles. `translation` runs that same sample
+  through either the current batch prompt/check or the server's six-second spot
+  request/check, reporting pass/style-shape proxies, p50/p95, tokens and a
+  rate-labelled cost estimate. `analysis` requests append-only reanalysis in a
+  catalog copy, counts the resulting cards/calls/time, keeps raw candidates
+  only in the private report directory, and invokes `score_extraction.py`
+  against each supplied hand-built reference. Only single-pass analyses can
+  be scored this way; the tool refuses piecewise cases before constructing a
+  provider client. Run low and medium on separate copies of the same snapshot.
+  No result is an execution verdict, the style
+  proxy is not human prose review, returned-token cost omits calls whose usage
+  is unavailable, and no report or catalog copy is committed.
 
 ## 4. Release gates (targets, not measurements)
 

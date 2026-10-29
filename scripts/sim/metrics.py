@@ -25,6 +25,34 @@ EXPECTED_ACTIONS = {
     'chat': ('off_topic', 'agent_meta'), 'term': ('question', 'related_question', 'clarify_parameter'),
 }
 
+_ROUTER_USAGE_KEYS = (
+    'prompt_tokens', 'completion_tokens', 'total_tokens',
+    'cached_prompt_tokens', 'cache_write_tokens', 'reasoning_tokens',
+)
+
+
+def _content_free_router(result: dict) -> dict | None:
+    raw = result.get('router')
+    if not isinstance(raw, dict):
+        return None
+    usage = raw.get('usage')
+    safe_usage = {
+        key: value for key in _ROUTER_USAGE_KEYS
+        if isinstance(usage, dict)
+        and isinstance((value := usage.get(key)), int)
+        and not isinstance(value, bool) and value >= 0
+    }
+    handled = raw.get('handled_by')
+    fallback = raw.get('fallback_reason')
+    return {
+        'handled_by': handled if isinstance(handled, str) else None,
+        'fallback_reason': fallback if isinstance(fallback, str) else None,
+        # The model name is already present once in report.router_settings.
+        # Rows keep only whether a call was made, never provider content.
+        'model_called': isinstance(raw.get('model'), str),
+        'usage': safe_usage,
+    }
+
 
 def protected_scientific_names(readings: list[str], source: str) -> tuple[str, ...]:
     """Source-matching proper names retained by checked Korean readings."""
@@ -101,7 +129,7 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
     if stt_summary is not None and counts is not None:
         stt_summary['number_units']=counts['pairs_total']
         stt_summary['number_unit_accuracy']=round(counts['pairs_right']/counts['pairs_total'],4) if counts['pairs_total'] else None
-    return {
+    row = {
         'case': case.code, 'family': case.family, 'understood': bool(understood), 'wrong_state': wrong,
         'emergency_miss':bool((case.family == 'emergency' or case.family.startswith('emergency_')) and result['route'] != 'deterministic_emergency'),
         'false_alarm':bool(case.family == 'negative_control' and result['route'] == 'deterministic_emergency'),
@@ -113,6 +141,10 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
         'timings_ms': result['timings_ms'], 'stt_calls':result.get('stt_calls',0), 'stt_responses':result.get('stt_responses',0),
         'stt': stt_summary, 'stt_counts': counts,
     }
+    router = _content_free_router(result)
+    if router is not None:
+        row['router'] = router
+    return row
 
 
 def aggregate(rows: list[dict]) -> dict:
@@ -136,6 +168,28 @@ def aggregate(rows: list[dict]) -> dict:
                'cer':rate('char_errors','reference_chars'), 'number_accuracy':rate('numbers_right','numbers_total'),
                'unit_accuracy':rate('units_right','units_total'), 'number_unit_accuracy':rate('pairs_right','pairs_total'),
                'term_accuracy':rate('terms_right','terms_total'), 'counts':dict(counts)} if measured else None
+        routed = [r['router'] for r in group if isinstance(r.get('router'), dict)]
+        router = None
+        if routed:
+            model_calls = sum(bool(r.get('model_called')) for r in routed)
+            completed = sum(bool(r.get('usage')) for r in routed if r.get('model_called'))
+            handled_by = Counter(r['handled_by'] for r in routed if r.get('handled_by'))
+            fallback_reasons = Counter(
+                r['fallback_reason'] for r in routed if r.get('fallback_reason'))
+            timeouts = fallback_reasons['timeout']
+            usage = Counter()
+            for routed_row in routed:
+                usage.update(routed_row.get('usage') or {})
+            router = {
+                'model_calls': model_calls,
+                'model_completed_with_usage': completed,
+                'handled_by': dict(sorted(handled_by.items())),
+                'fallback_reasons': dict(sorted(fallback_reasons.items())),
+                'fallbacks': handled_by['fallback_rules'],
+                'timeouts': timeouts,
+                'timeout_rate': round(timeouts / model_calls, 4) if model_calls else None,
+                'usage': dict(usage),
+            }
         failure_counts=Counter(
             (failure.get('status'),failure.get('code'))
             for row in group for failure in row.get('stt_failures',[])
@@ -157,6 +211,7 @@ def aggregate(rows: list[dict]) -> dict:
             'drops': dict(Counter(d for r in group for d in r['drops'])),
             'stt_failures':stt_failures,
             'latency_ms': {k:percentiles(v) for k,v in timings.items()},
+            'router': router,
         }
     tables = {}
     for dimension in ('protocol', 'family', 'protocol_family', 'noise', 'snr', 'effective_snr_db', 'distance_cm', 'denoise', 'voice', 'speed'):

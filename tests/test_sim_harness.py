@@ -155,6 +155,47 @@ def test_score_export_contains_no_transcript_reply_or_path():
     assert '민감한' not in json.dumps(row,ensure_ascii=False)
 
 
+def test_router_measurements_are_content_free_and_aggregated():
+    p = load_corpus()[0]
+    c = next(c for c in generate_cases(p) if c.family == 'current')
+    base = {
+        'action': 'current', 'intent_kind': 'current_step_information',
+        'route': 'curated_protocol', 'step_before': 0, 'step_after': 0,
+        'changed_fields': [], 'spoken': '', 'drop_reasons': [],
+        'terminal': True, 'timings_ms': {'first_audio_ms': 2500},
+        'transcript': '',
+    }
+    completed = score_case(c, {**base, 'router': {
+        'handled_by': 'llm', 'fallback_reason': None,
+        'model': 'model-a',
+        'usage': {'prompt_tokens': 1200, 'completion_tokens': 40,
+                  'total_tokens': 1240, 'reasoning_tokens': 10},
+    }})
+    timed_out = score_case(c, {**base, 'router': {
+        'handled_by': 'fallback_rules', 'fallback_reason': 'timeout',
+        'model': 'model-a', 'usage': {},
+    }})
+
+    assert set(completed['router']) == {
+        'handled_by', 'fallback_reason', 'model_called', 'usage',
+    }
+    assert 'model-a' not in json.dumps(completed, ensure_ascii=False)
+    router = aggregate([completed, timed_out])['overall']['router']
+    assert router == {
+        'model_calls': 2,
+        'model_completed_with_usage': 1,
+        'handled_by': {'fallback_rules': 1, 'llm': 1},
+        'fallback_reasons': {'timeout': 1},
+        'fallbacks': 1,
+        'timeouts': 1,
+        'timeout_rate': 0.5,
+        'usage': {
+            'prompt_tokens': 1200, 'completion_tokens': 40,
+            'total_tokens': 1240, 'reasoning_tokens': 10,
+        },
+    }
+
+
 @pytest.mark.parametrize('field',['biology','chemistry','materials'])
 def test_read_only_state_preservation_across_fields(field):
     protocol=next(p for p in load_corpus() if p.field==field)

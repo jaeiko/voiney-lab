@@ -249,27 +249,111 @@ python scripts/sim/diagnostics.py ~/voiney-lab/data/runtime/stt-diagnostics \
 결과에 실제 번역 수와 없는 단계 수를 낸다. 번역을 붙여도 상태는 바뀌지 않는다.
 
 라우터만 비교할 때는 정답 글자 STT·가짜 TTS와 기존 서버 라우터를 함께 쓴다.
-아래 첫 명령은 호출 0회 계획이고, 두 번째는 **사람이** 실행한다. 모델 공급자와
-모델·키는 셸에 준비하며 도구가 `.env`를 읽지 않는다. 라우터는 이 명령 밖에서
-켜지지 않는다. `VOINEY_LAB_ROUTER_FIRST=true`를 사람이 앞에 붙여 앞단 규칙의
-위임 범위를 달리한 조건도 잴 수 있다. 다른 제품 기능 스위치는 정답 글자 기준과
-동일하게 초기화한다. 다른 모델 역할은 호출하지 않는다. 결과에는 공급자·모델·
-추론 수준·출력 한도·시간 제한을 남기며, 일반 비교는 이 설정이 다르면 거절한다.
+아래 계획 명령은 호출 0회이고, `--execute`가 있는 명령만 **사람이** 실행한다.
+모델 공급자와 모델·키는 셸에 준비하며 도구가 `.env`를 읽지 않는다. 라우터는 이
+명령 밖에서 켜지지 않는다. `VOINEY_LAB_ROUTER_FIRST=false`로 앞단 규칙 다음의
+기존 한 길을 고정한다. 다른 제품 기능 스위치는 정답 글자 기준과 동일하게 초기화하고
+다른 모델 역할은 호출하지 않는다. 결과에는 공급자·모델·추론 수준·출력 한도·시간
+제한을 남기며, 일반 비교는 이 설정이 다르면 거절한다.
+
+비용을 먼저 줄일 때는 아래 **1단계**만 실행한다. 규칙 개발용·시험용 두 결과를 먼저
+만들고, 첫 유료 조건은 기존 사람 20문장 근거와 직접 이어지는 OpenAI
+`gpt-6-luna`·`none`·2.5초의 **개발용만** 실행한다. 이 조건의 호출 상한은 540회,
+예약 상한은 $16.20, 아래의 확인하지 않은 토큰 단가 가정에서는 $14.04 어림이다.
+잘못 바뀐 상태가 1개라도 있거나, 열린 질문 갈래가 규칙보다 좋아지지 않거나, 공급자
+턴 첫 소리 p95가 3초를 넘으면 여기서 멈추고 시험용·나머지 행렬을 실행하지 않는다.
+이 순서는 모델 채택이 아니라 다음 비용을 써도 되는지 확인하는 게이트다.
 
 ```bash
-python scripts/sim/run.py --configured-router --split development --limit 20 --max-calls 20 --max-usd 5
-VOINEY_LAB_LLM_ROUTER_ENABLED=true python scripts/sim/run.py --configured-router --execute \
-  --split development --limit 20 --max-calls 20 --max-usd 5 \
-  --translations data/fixtures/evaluation/sim/stored_korean.json --output ~/reports/sim/router-development.json
-python scripts/sim/compare.py --compare-routing ~/reports/sim/rules-development.json ~/reports/sim/router-development.json
+# 1) 외부 호출 0회: 규칙 두 분할
+python scripts/sim/run.py --split development --fail-on-wrong-state \
+  --translations data/fixtures/evaluation/sim/stored_korean.json \
+  --output ~/reports/sim/model1-rules-development.json
+python scripts/sim/run.py --split holdout --fail-on-wrong-state \
+  --translations data/fixtures/evaluation/sim/stored_korean.json \
+  --output ~/reports/sim/model1-rules-holdout.json
+
+# 2) 사람이 계획을 확인한 뒤에만 --execute: 라우터 한 조건, 개발용만
+VOINEY_LAB_LLM_ROUTER_ENABLED=true VOINEY_LAB_ROUTER_FIRST=false \
+VOINEY_LAB_ROUTER_PROVIDER=openai VOINEY_LAB_ROUTER_MODEL=gpt-6-luna \
+VOINEY_LAB_ROUTER_REASONING=none VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS=2.5 \
+python scripts/sim/run.py --configured-router --execute --split development \
+  --max-calls 540 --max-usd 16.20 --reserve-usd-per-request 0.03 \
+  --router-input-rate 5 --router-output-rate 15 --fail-on-wrong-state \
+  --translations data/fixtures/evaluation/sim/stored_korean.json \
+  --output ~/reports/sim/model1-openai-none-2p5-development.json
 ```
 
-두 결과는 같은 분할·제한·저장 번역이어야 한다. 계획의 모델 요금은 입력 4000토큰·
-출력 최대 400토큰/턴과 입력 $5·출력 $15/백만 토큰이라는 계산용 가정이다.
-20턴이면 $0.52 어림이며 실제 토큰·요금 확인값이 아니다. 전송마다 기본 $0.25를
-예약해 20회·예약 $5에서 멈춘다. 실제 청구액 상한을 보장하지 않는다. 음성 실측은
-기존 `live.py --configured-models`를 쓰고 음성·번역·라우터의 모든 HTTP 전송을
-함께 예약한다. HTTPX와 SDK의 HTTPX2 전송도 같은 원장에 센다.
+1단계가 위 중단 기준을 모두 통과한 뒤에만 아래 전체 행렬을 검토한다.
+
+```bash
+python scripts/sim/run.py --configured-router --split development \
+  --max-calls 540 --max-usd 16.20 --reserve-usd-per-request 0.03 \
+  --router-input-rate 5 --router-output-rate 15
+
+python scripts/sim/run.py --split development --fail-on-wrong-state \
+  --translations data/fixtures/evaluation/sim/stored_korean.json \
+  --output ~/reports/sim/model1-rules-development.json
+python scripts/sim/run.py --split holdout --fail-on-wrong-state \
+  --translations data/fixtures/evaluation/sim/stored_korean.json \
+  --output ~/reports/sim/model1-rules-holdout.json
+
+run_router_condition () {
+  local provider="$1" model="$2" reasoning="$3" timeout="$4" slug="$5"
+  VOINEY_LAB_LLM_ROUTER_ENABLED=true \
+  VOINEY_LAB_ROUTER_FIRST=false \
+  VOINEY_LAB_ROUTER_PROVIDER="$provider" \
+  VOINEY_LAB_ROUTER_MODEL="$model" \
+  VOINEY_LAB_ROUTER_REASONING="$reasoning" \
+  VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS="$timeout" \
+  python scripts/sim/run.py --configured-router --execute \
+    --split development --max-calls 540 --max-usd 16.20 \
+    --reserve-usd-per-request 0.03 --router-input-rate 5 --router-output-rate 15 \
+    --fail-on-wrong-state --translations data/fixtures/evaluation/sim/stored_korean.json \
+    --output "$HOME/reports/sim/model1-${slug}-development.json"
+  VOINEY_LAB_LLM_ROUTER_ENABLED=true \
+  VOINEY_LAB_ROUTER_FIRST=false \
+  VOINEY_LAB_ROUTER_PROVIDER="$provider" \
+  VOINEY_LAB_ROUTER_MODEL="$model" \
+  VOINEY_LAB_ROUTER_REASONING="$reasoning" \
+  VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS="$timeout" \
+  python scripts/sim/run.py --configured-router --execute \
+    --split holdout --max-calls 332 --max-usd 9.96 \
+    --reserve-usd-per-request 0.03 --router-input-rate 5 --router-output-rate 15 \
+    --fail-on-wrong-state --translations data/fixtures/evaluation/sim/stored_korean.json \
+    --output "$HOME/reports/sim/model1-${slug}-holdout.json"
+}
+
+run_router_condition openai gpt-6-luna none 2.5 openai-none-2p5
+run_router_condition openai gpt-6-luna none 4 openai-none-4
+run_router_condition google gemini-3.8-flash none 2.5 google-none-2p5
+run_router_condition google gemini-3.8-flash none 4 google-none-4
+run_router_condition google gemini-3.8-flash low 2.5 google-low-2p5
+run_router_condition google gemini-3.8-flash low 4 google-low-4
+```
+
+규칙과 각 모델 결과는 같은 분할·저장 번역이어야 한다. 현재 고정 묶음은 개발용
+540문장·시험용 332문장이다. 위 조건 하나의 최악 호출 상한은 872회, 예약 상한은
+$26.16이다. 계획의 모델 요금은 입력 4000토큰·출력 최대 400토큰/턴과 입력 $5·출력
+$15/백만 토큰이라는 **확인하지 않은 계산 가정**이며, 모든 턴이 모델을 부르면 조건당
+$22.672 어림이다. 여섯 조건 합계의 호출 상한은 5,232회, 예약 상한은 $156.96,
+같은 가정의 비용 어림은 $136.032이다. 앞단 규칙이 처리한 턴에는 모델을 부르지 않으므로
+실제 호출은 이보다 적다. 최신 공급자 요금이나 청구액 약속이 아니며, 실행 전에 사람이
+요금과 상한을 다시 정한다.
+
+`overall.router`와 갈래별 `tables.family.*.router`는 모델 호출·처리 주체·규칙 폴백·
+폴백 이유·시간 초과 수/율과 반환된 토큰을 낸다. `overall.latency_ms`는 첫 소리와
+라우터 모델 p50/p95를 함께 낸다. `router_cost_estimate`는 **사용량을 돌려준 호출만**
+위 가정으로 계산하며 시간 초과 등 사용량이 없는 호출 수를 따로 남긴다.
+`provider_requests`·`reserved_usd`는 HTTP 전송 원장 값이다. 이해율은 전체와 갈래별로,
+특히 `problem_question`·`purpose`·`safety`·`term` 같은 열린 질문/설명 갈래를 본다.
+잘못 바뀐 상태는 모든 조건에서 0이어야 한다. 시험용은 개별 행 없이 집계만 읽는다.
+
+현재 Google 어댑터는 `gemini-3.8-flash`의 도구 호출을 지원한다. 다만 Gemini 3.x는
+추론을 끌 수 없어 설정 `none`도 요청에서는 `low`가 된다. 따라서 Google `none`과
+`low`는 서로 다른 추론 단계 비교가 아니라 같은 요청 설정의 반복/변동 확인으로 읽는다.
+이는 가짜 전송 계약 시험을 통과한 지원이며 실제 공급자 성공을 뜻하는 live-tested가 아니다.
+OpenAI·Google 어느 쪽도 실패할 때 다른 공급자로 넘어가지 않는다.
 
 |조건|이해|잘못 바뀐 상태|응급 놓침|영어 원문|호출 수|예약액|
 |---|---:|---:|---:|---:|---:|---:|
@@ -277,6 +361,90 @@ python scripts/sim/compare.py --compare-routing ~/reports/sim/rules-development.
 |라우터·개발용|사람 실행 뒤|사람 실행 뒤|사람 실행 뒤|사람 실행 뒤|원장|원장|
 |규칙·시험용|집계만|집계만|집계만|집계만|0|0|
 |라우터·시험용|사람 실행 뒤 집계만|사람 실행 뒤|사람 실행 뒤|사람 실행 뒤|원장|원장|
+
+## 번역·분석 추론 비교
+
+`scripts/model_reasoning_eval.py`도 기본은 호출 0회 계획이며 `--execute`가 있어야
+모델을 부른다. 원본 카탈로그가 아니라 `~/reports/` 아래의 일관된 복사본을 쓴다.
+번역 표본은 사람이 분야별 프로토콜 id를 정하고, 각 분야 안에서 원문 길이 3분위가
+고르게 되도록 60문장을 한 번 고정한다. manifest에는 원문 대신 프로토콜/문장 id,
+원문 SHA-256, 글자 수와 길이 구간만 남는다. 아래의 id와 공급자·모델은 실제 값으로
+바꾼다.
+
+```bash
+python scripts/model_reasoning_eval.py translation-sample \
+  --data-dir ~/reports/model1/catalog-translation \
+  --group biology=BIOLOGY_PROTOCOL_ID \
+  --group chemistry=CHEMISTRY_PROTOCOL_ID \
+  --group materials=MATERIALS_PROTOCOL_ID \
+  --sample-size 60 --seed 1028 \
+  --output ~/reports/model1/translation-60.json
+
+# 호출 0회 계획: effort와 output 이름만 low/medium/high로 바꿔 각각 먼저 본다.
+VOINEY_LAB_TRANSLATION_PROVIDER="$MODEL1_TRANSLATION_PROVIDER" \
+VOINEY_LAB_TRANSLATION_MODEL="$MODEL1_TRANSLATION_MODEL" \
+VOINEY_LAB_TRANSLATION_REASONING=low \
+python scripts/model_reasoning_eval.py translation \
+  --data-dir ~/reports/model1/catalog-translation \
+  --manifest ~/reports/model1/translation-60.json --mode batch \
+  --output-dir ~/reports/model1/translation-batch-low \
+  --max-calls 20 --max-usd 2 --reserve-usd-per-request 0.10 \
+  --input-rate 5 --output-rate 15
+
+# 사람이 계획의 호출 수를 확인한 뒤에만 --execute를 더한다.
+# batch는 low/medium/high 각각 호출 20·예약 $2 상한,
+# spot은 mode/output만 바꾸고 각각 호출 60·예약 $6 상한으로 실행한다.
+```
+
+묶음 결과는 검사 통과율, 명시적인 문체 금지 꼴의 기계 검사율, 응답 꼴 실패,
+번역 호출 지연 p50/p95, 반환 토큰과 비용 어림을 낸다. 그 자리 결과는 같은 값과
+함께 6초 안에 끝난 호출 비율을 낸다. 문체 값은 합니다체·독자 호칭·영어 동사+
+한국어 어미·저자 1인칭·명시한 직역투·지침에서 금지한 표기의 **기계적 대리값**이지
+자연스러움의 사람 판정이 아니다. 실행은 low/medium/high 중 하나를 명시해야 하고 각
+reasoning은 같은 manifest를 써야 한다. 묶음과 그 자리는 제품에서 서로 다른 프롬프트·
+시간 경계를 쓰므로 결과도 따로 정한다. 6초 취소도 논리 호출과 사용량 누락에 세며,
+논리 호출 상한이 다음 요청을 막았는지는 `calls.logical_call_cap_stopped`에 남는다.
+`budget_stopped`나 `logical_call_cap_stopped`가 참인 조건은 불완전하므로 다른 조건과
+성능을 비교하지 않고 더 보수적인 상한으로 새 출력 폴더에서 다시 실행한다.
+
+분석은 low와 medium마다 같은 원본 snapshot에서 만든 **서로 다른 복사본**을 쓴다.
+`--case`는 기준 분석이 있는 프로토콜 id와 현재 분석 응답 JSON을 짝짓는다. 실행은
+append-only 재분석이고 현재 `ProtocolCatalog.analyze`의 자동 재시도·근거 다시 묻기·
+카드 생성을 그대로 거친다. 원응답은 지정한 개인 보고 폴더에만 두고 커밋하지 않는다.
+0호출 계획에는 기준 JSON의 경로 대신 SHA-256만 남긴다.
+0호출 계획의 모든 `cases[].pieces`가 0인 프로토콜만 비교한다. 조각 분석의 개별 응답은
+문서 전체 응답이 아니므로 실행 명령은 조각이 필요한 프로토콜을 공급자 호출 전에
+거부한다. 그런 프로토콜을 비교하려면 병합된 분석을 같은 기준으로 채점하는 별도 도구가
+먼저 필요하다.
+
+```bash
+ANALYSIS_CASES=(
+  --case "PROTOCOL_ID_1=$HOME/reports/model1/reference-1.json"
+  --case "PROTOCOL_ID_2=$HOME/reports/model1/reference-2.json"
+)
+
+# low 복사본으로 0호출 계획을 본 뒤, 같은 명령에 --execute를 더한다.
+VOINEY_LAB_ANALYSIS_PROVIDER="$MODEL1_ANALYSIS_PROVIDER" \
+VOINEY_LAB_ANALYSIS_MODEL="$MODEL1_ANALYSIS_MODEL" \
+VOINEY_LAB_ANALYSIS_REASONING=low \
+python scripts/model_reasoning_eval.py analysis \
+  --data-dir ~/reports/model1/catalog-analysis-low "${ANALYSIS_CASES[@]}" \
+  --output-dir ~/reports/model1/analysis-low --timeout 600 \
+  --max-calls 16 --max-usd 8 --reserve-usd-per-request 0.50 \
+  --input-rate 5 --output-rate 15
+
+# medium은 원본 snapshot에서 새로 만든 catalog-analysis-medium과 별도 output을 쓴다.
+```
+
+조건마다 분석 호출 16회·예약 $8 상한이다. 결과는 프로토콜별 호출 수·전체 시간·
+확인 카드 수와 `scripts/score_extraction.py`의 단계 수/순서/문장 유사도/값 비교를
+원문 PDF·기준 분석 SHA와 함께 내고, 조건 전체의 단계 수·순서 일치율과 문장 유사도
+평균·값 비교 합계도 낸다.
+기준본은 회귀 기준이지 절대 정답이 아니며 실행 판정으로 쓰지 않는다.
+모델 응답이 여러 번이면 도구는 전부 개인 폴더에 보존하고, 현재 파서와 근거 검사를
+통과한 마지막 전체 응답을 채점한다. 시간 초과/실패로 사용량이 없는 호출은 비용 어림에서
+빠졌다고 별도로 센다. 두 분석 조건의 예약 상한 합계는 $16이고, 번역 3단계의 묶음+
+그 자리 예약 상한 합계는 $24다. 이 역시 실제 청구액 보장이 아니다.
 
 듣기 시험대는 입력 소리가 끝나도 처리 중인 마지막 STT·답변·재생 완료를 기다린다.
 일정 시간 뒤 연결을 닫아 마지막 실패 알림을 잃지 않으며, 기다림 상한이 지나면

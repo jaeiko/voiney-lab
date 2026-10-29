@@ -210,6 +210,29 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         events = capture.events
         done = next((e for e in reversed(events) if e['type'] == 'turn.done'), {})
         decision = next((e for e in reversed(events) if e['type'] == 'turn.route_decision'), {})
+        router_stopped = next((e for e in reversed(events) if e['type'] == 'router.stopped'), {})
+        router_measurement = decision.get('router')
+        if not isinstance(router_measurement, dict) and router_stopped:
+            router_measurement = {
+                'handled_by': 'model_unavailable',
+                'fallback_reason': router_stopped.get('fallback_reason'),
+                'model': getattr(router_settings, 'model', None),
+                'usage': {},
+            }
+        elif (
+            not isinstance(router_measurement, dict)
+            and done.get('route') == 'model_unavailable'
+            and getattr(router_settings, 'enabled', False)
+        ):
+            # A 429 deliberately stops before turn.route_decision. The public
+            # turn.done route is enough to retain that content-free call in
+            # SIM; rate_limited is currently the only unavailable router kind.
+            router_measurement = {
+                'handled_by': 'model_unavailable',
+                'fallback_reason': 'model_unavailable:rate_limited',
+                'model': getattr(router_settings, 'model', None),
+                'usage': {},
+            }
         drops += [str(e.get('reason', 'unknown')) for e in events if e['type'] == 'speech.dropped']
         stt_failures=[]
         for event in events:
@@ -235,6 +258,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             'route': done.get('route'), 'runtime_router':decision.get('runtime_router'),
             'front_rule':workflow.last_front_rule,
             'router_handled':decision.get('router',{}).get('handled_by'), 'changed_fields': sorted(k for k in before if before[k] != after[k]),
+            'router': router_measurement,
             'step_before': before['step'][0], 'step_after': after['step'][0],
             'transcript': ' '.join(hypotheses), 'spoken': ' '.join(capture.spoken),
             'drop_reasons': sorted(set(drops)), 'stt_failures':stt_failures,
