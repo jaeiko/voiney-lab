@@ -9080,7 +9080,10 @@ def _screen_translation_status(fixture:Any,step:Any)->str|None:
 
     if step is None:
         return None
-    if is_korean(step.instruction_source_text) or fixture.localized_fact(
+    source_text=getattr(step,"instruction_source_text",None)
+    if not isinstance(source_text,str) or not source_text.strip():
+        return None
+    if is_korean(source_text) or fixture.localized_fact(
             step.step_id,"current_step"):
         return "available"
     fact_key=f"{step.step_id}/current_step"
