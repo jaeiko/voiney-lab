@@ -15,7 +15,11 @@ test.describe('The new screen: upload → pages → analysis → confirmation �
     // The protocols menu item is the current one for these pages.
     await expect(page.locator('[data-nav="protocols"]')).toHaveAttribute('aria-current', 'page');
 
+    await expect(page.getByText('이 원문은 공개되었거나 시판 제품에 딸린 프로토콜인가요?')).toBeVisible();
+    await page.getByRole('radio', { name: '예' }).check();
+    await page.getByLabel('출처 메모').fill('시판 제품 설명서');
     await page.getByTestId('file-input').setInputFiles({ name: 'western-blot.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 fake') });
+    expect(server.uploadDisclosures).toEqual([{ status: 'yes', note: '시판 제품 설명서' }]);
     await expect(page.getByText('어느 쪽을 분석할까요?')).toBeVisible();
     await expect(page.getByTestId('pages-all')).toContainText('전체 분석');
     await page.getByTestId('pages-pick').click();

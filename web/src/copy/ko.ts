@@ -106,6 +106,11 @@ export const protocols = {
   emptyAction: "첫 프로토콜 올리기",
   steps: (count: number) => `${count}단계`,
   uploaded: (day: string) => `${day} 올림`,
+  sourceScope: (status: string | null, recorded: boolean) =>
+    recorded
+      ? `공개·시판 원문: ${{ yes: "예", no: "아니요", unknown: "모름" }[status ?? ""] ?? "확인 필요"}`
+      : "공개·시판 원문: 확인 기록 없음",
+  sourceNote: (note: string) => `출처: ${note}`,
   actions: {
     start: "시작하기",
     review: "확인하기",
@@ -494,6 +499,12 @@ export const upload = {
   drop: "PDF · Word · 사진을 여기에 놓거나",
   pick: "파일 고르기",
   formats: "PDF · Word(.docx) · 사진(JPG · PNG · HEIC)",
+  sourceQuestion: "이 원문은 공개되었거나 시판 제품에 딸린 프로토콜인가요?",
+  sourceWhy: "고른 답과 출처 메모는 원문 정보와 실험 노트에 남아요.",
+  sourceOptions: { yes: "예", no: "아니요", unknown: "모름" },
+  sourceNote: "출처 메모",
+  sourceNoteHint: "공개 주소, DOI, 제품명처럼 나중에 확인할 단서를 적어 주세요. 선택 사항이에요.",
+  sourceRequired: "예·아니요·모름 중 하나를 골라 주세요.",
   linkLead: "공개 Google Drive · Docs 주소로도 올릴 수 있어요.",
   linkLabel: "공개 링크",
   linkButton: "링크로 가져오기",
@@ -528,6 +539,8 @@ export const upload = {
     heic_support_unavailable: "이 앱은 지금 HEIC 사진을 받지 못해요. JPG 나 PNG 로 바꿔 올려 주세요.",
     invalid_source_file: "파일을 읽을 수 없었어요. 원본을 다시 골라 주세요.",
     analysis_page_range_invalid: "고른 쪽이 이 문서에 없어요. 시작 쪽과 끝 쪽을 다시 골라 주세요.",
+    public_source_required: "이 파일럿에서는 ‘예’인 원문만 올릴 수 있어요. 원문 범위를 연구실 담당에게 확인해 주세요.",
+    source_disclosure_invalid: "원문 출처 확인을 읽지 못했어요. 답과 메모를 다시 확인해 주세요.",
     protocol_catalog_unavailable: "지금은 올릴 수 없어요. 잠시 뒤 다시 해 주세요.",
     network: "연결이 안 돼요. 인터넷을 확인한 뒤 다시 해 주세요.",
     unknown: "올리지 못했어요. 다시 해 주세요.",
@@ -717,6 +730,7 @@ export const detail = {
   why: '전체 단계와 원문 근거를 살펴보고 실험할 프로토콜을 정해요.',
   back: '목록으로', reviewCards: '확인 화면 열기', analyse: '분석하기', timers: '원문에서 확인한 타이머', start: '이 프로토콜로 시작', review: '확인하기', summary: '시작 전에 볼 것',
   noContent: '표시할 내용이 없어요.', step: (label: string) => `${label}단계`, source: '원문과 맞춰 보기', steps: '전체 단계·조건', materials: '시약·재료', equipment: '장비',
+  sourceDisclosure: '원문 출처 확인', sourceDisclosureStatus: '공개·시판 원문', sourceNote: '출처 메모',
   before: '시작 전 준비', constructs: '분기·반복·함께 하는 일', history: '확인한 버전 기록',
   empty: '아직 분석한 내용이 없어요. 분석 뒤 다시 확인해 주세요.', failed: '상세를 불러오지 못했어요. 다시 불러와 주세요.',
   pendingAnalysis: '아직 원문과 맞춰 확인할 분석 내용이 있어요. 확인 화면에서 원문과 함께 살펴봐 주세요.',

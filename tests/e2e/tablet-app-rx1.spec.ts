@@ -9,7 +9,10 @@ test.describe('The new protocol screens on a tablet (lane RX1)', () => {
   test('the cards sit beside the page on a wide tablet and under it on a narrow one; every target is 44 px', async ({ page }) => {
     const server = await mockProtocolScreens(page);
     await page.goto(`${APP}#/upload`);
+    await page.getByRole('radio', { name: '예' }).check();
+    await page.getByLabel('출처 메모').fill('시판 제품 설명서');
     await page.getByTestId('file-input').setInputFiles({ name: 'western-blot.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 fake') });
+    expect(server.uploadDisclosures).toEqual([{ status: 'yes', note: '시판 제품 설명서' }]);
     await page.getByTestId('pages-all').tap();
     await expect(page).toHaveURL(/#\/protocols\/p-rx1-new\/analysis$/);
     expect(server.analysisRequests[0]).not.toContain('first_page');
