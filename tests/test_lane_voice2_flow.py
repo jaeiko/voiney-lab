@@ -56,6 +56,7 @@ def test_short_timer_word_combinations_are_read_only_at_the_runtime_boundary() -
         "타임 얼마나?",
         "타이머 얼마?",
         "어, 그럼 타이머 얼마나 남았지?",
+        "어... 타임, 얼마 남았어?",
         "시간 몇 남았어?",
         "몇 분 남았지?",
     )

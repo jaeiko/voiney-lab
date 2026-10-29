@@ -164,7 +164,8 @@ def generate_development_cases(protocol: Protocol) -> tuple[Case, ...]:
             )
             for at, text in enumerate((
                 '타임 얼마?', '타임 얼마나?', '타이머 얼마?',
-                '어, 그럼 타이머 얼마나 남았지?', '시간 몇 남았어?',
+                '어, 그럼 타이머 얼마나 남았지?', '어... 타임, 얼마 남았어?',
+                '시간 몇 남았어?',
             ))
         ),
         *(
