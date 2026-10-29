@@ -8844,11 +8844,12 @@ def _cascade_stt_keyterms(curated:Any)->tuple[str,...]:
     if (getattr(curated,"active",False)
             and isinstance(index,int)
             and 0<=index<len(getattr(fixture,"steps",()))):
-        label=fixture.steps[index].source_label
-        step_tokens=(
-            f"{label}단계",f"{label} 단계",
-            f"현재 {label}단계",f"이번 {label}단계",
-        )
+        label=getattr(fixture.steps[index],"source_label",None)
+        if isinstance(label,str) and label:
+            step_tokens=(
+                f"{label}단계",f"{label} 단계",
+                f"현재 {label}단계",f"이번 {label}단계",
+            )
     ordered=(
         *STT_KOREAN_COMMAND_KEYTERMS,
         *_stored_korean_stt_keyterms(curated),
