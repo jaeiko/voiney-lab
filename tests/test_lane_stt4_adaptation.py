@@ -16,6 +16,7 @@ from voiney_lab.curated_protocol import CuratedProtocolSession
 
 PROJECT = "VOINEY_LAB_GOOGLE_STT_V2_PROJECT"
 CREDENTIALS = "VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE"
+ADAPTATION = "VOINEY_LAB_GOOGLE_STT_V2_ADAPTATION_ENABLED"
 TOKEN = "fake-private-bearer-token"
 TERMS = ("AMBIC", "acetonitrile", "Solution A", "gel plug", "트립신")
 SUCCESS = {
@@ -34,6 +35,7 @@ def v2_env(tmp_path, monkeypatch):
     monkeypatch.setenv(vp.STT_PROVIDER_ENV, vp.GOOGLE_CLOUD_V2)
     monkeypatch.setenv(PROJECT, "test-project")
     monkeypatch.setenv(CREDENTIALS, str(credentials))
+    monkeypatch.setenv(ADAPTATION, "true")
     monkeypatch.setenv("VOINEY_LAB_USAGE_SCOPE", "source_protocol_only")
     return credentials
 

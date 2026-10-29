@@ -87,7 +87,14 @@ generation is cancelled and its audio cleared (barge-in).
    `VOINEY_LAB_CASCADE_VAD_ENDPOINT_SILENCE_MS`), at 15 s, or — in a
    calibrated session in a room that keeps the VAD on — when the level stays
    under the wearer's line (`EndpointResult.endpoint` = `silence`/`level`/
-   `forced`). With the filter on (lane HEAR, decision 2: the experimenter's
+   `forced`). When no wearer reference or calibration owns the level, a
+   turn-local relative gate observes one second of VAD verdicts; if WebRTC
+   calls at least 60% voiced, only frames at least 6 dB above the lower fifth
+   of those voiced levels may keep the endpoint open after one frame actually
+   reaches that rise; a steady wearer voice cannot arm the gate against
+   itself. It does not alter PCM,
+   the 1000 ms silence, or the 15 s safety bound. With the filter on (lane
+   HEAR, decision 2: the experimenter's
    `speaker_filter`, a `voice_reference` measured through
    `POST /api/voice/calibration` under `VOICE_REFERENCE_MAX_AGE_DAYS` old, on
    the microphone the page names in `client.audio_ready` — `stored_voice_filter`),
@@ -495,11 +502,18 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   explicit ADC JSON outside git: service account, AWS WIF or developer user;
   in-memory OAuth token). The ADC loader does no project discovery or ambient
   fallback; AWS IMDS/Google STS/impersonation and recognition share one deadline,
-  with fixed endpoint allowlists and no redirect. A Google V2 inline-adaptation
-  400/404 gets one same-provider/model request with adaptation removed; success
+  with fixed endpoint allowlists and no redirect. Google V2 inline adaptation is
+  off by default (`VOINEY_LAB_GOOGLE_STT_V2_ADAPTATION_ENABLED=false`) after the
+  same Korean WAV returned 404 in both `us` and `eu` on 2026-10-29; the default
+  region remains `us`. When explicitly enabled, an inline-adaptation 400/404 gets
+  one same-provider/model request with adaptation removed; success
   disables adaptation for the rest of that voice session and records the
   content-free reason `stt_adaptation_disabled`. No other STT failure retries or
-  changes provider. OCR: `clova`,
+  changes provider. The shared ordinary/barge-in transcription context orders at
+  most 100 hints as fixed Korean commands, checked Korean names from the revision's
+  stored translation glossary, existing step/control phrases, then source technical
+  terms; it invents no term and reads the session-prepared vocabulary on the turn path.
+  OCR: `clova`,
   `google`. Background roles (`analysis`, `translation`, `report`) retry
   429/5xx and carry the Gemini safety setting; voice-turn roles do neither.
 
@@ -746,7 +760,8 @@ Everything fails closed and visibly, and none of it mutates workflow state:
 | Condition | Result |
 |---|---|
 | A model role, STT or TTS provider not set | `RoleNotConfiguredError` / `ConfigurationError` naming the missing setting; no fallback provider |
-| Google V2 inline adaptation returns HTTP 400/404 | Retry once with only adaptation removed; on success record `stt_adaptation_disabled` and omit hints for that voice session; never choose another provider |
+| Google V2 inline adaptation is off (default) | Omit hints from the first request; keep the configured provider, model and `us` default region |
+| Enabled Google V2 inline adaptation returns HTTP 400/404 | Retry once with only adaptation removed; on success record `stt_adaptation_disabled` and omit hints for that voice session; never choose another provider |
 | Router enabled without its provider/model | Router off, reason in `ready.research_capabilities.llm_router`; turns take the rules |
 | `VOINEY_LAB_ROUTER_FIRST` without the router | `/ws` refuses the configuration |
 | Outside-PDF, web or drawing switched on without its key or role | `/ws` refuses at connect |

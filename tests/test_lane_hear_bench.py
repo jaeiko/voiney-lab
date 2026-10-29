@@ -18,6 +18,7 @@ import logging
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,6 +34,98 @@ def load_bench():
 
 
 class ListeningBenchTests(unittest.TestCase):
+    def test_a_new_started_turn_supersedes_the_previous_pending_turn(self) -> None:
+        bench = load_bench()
+
+        async def run():
+            clock = bench.AudioClock()
+            session = bench.make_session(clock)
+            socket = bench.BenchSocket(bench.Script(), session, clock)
+
+            await socket.send_text('{"type":"speech.start","turn_id":4}')
+            await socket.send_text('{"type":"speech.start","turn_id":5}')
+
+            self.assertEqual(socket.pending_turns, {5})
+
+        asyncio.run(run())
+
+    def test_bench_completion_wait_does_not_use_a_wall_clock_deadline(self) -> None:
+        bench = load_bench()
+
+        async def run():
+            clock = bench.AudioClock()
+            session = bench.make_session(clock)
+            socket = bench.BenchSocket(bench.Script(), session, clock)
+            await socket.send_text('{"type":"speech.start","turn_id":5}')
+
+            async def terminal_signal():
+                await asyncio.sleep(.01)
+                await socket.send_text(
+                    '{"type":"speech.dropped","turn_id":5,"reason":"stt_empty"}')
+
+            worker = asyncio.create_task(terminal_signal())
+            try:
+                with patch.object(
+                    bench.asyncio,
+                    "timeout",
+                    side_effect=AssertionError("wall-clock completion deadline"),
+                ):
+                    message = await socket.receive()
+                self.assertEqual(message['type'], 'websocket.disconnect')
+            finally:
+                await worker
+
+        asyncio.run(run())
+
+    def test_bench_accepts_cancelled_playback_clear_as_a_terminal_signal(self) -> None:
+        bench = load_bench()
+
+        async def run():
+            clock = bench.AudioClock()
+            session = bench.make_session(clock)
+            socket = bench.BenchSocket(bench.Script(), session, clock)
+            await socket.send_text('{"type":"speech.start","turn_id":6}')
+
+            # ``cancel_cascade_generation`` always sends this event, while a
+            # following terminal turn.state exists only when progress was
+            # still registered for the superseded turn.
+            await socket.send_text(
+                '{"type":"cascade.playback.clear","turn_id":6,'
+                '"state":"cancelled","reason":"continued_speech"}')
+
+            self.assertEqual(socket.pending_turns, set())
+
+        asyncio.run(run())
+
+    def test_bench_waits_for_a_terminal_signal_after_the_session_enters_cooldown(self) -> None:
+        bench = load_bench()
+        from voiney_lab.vad import TurnState
+
+        async def run():
+            clock = bench.AudioClock()
+            session = bench.make_session(clock)
+            socket = bench.BenchSocket(bench.Script(), session, clock)
+            await socket.send_text('{"type":"speech.start","turn_id":7}')
+            session.detector.state = TurnState.COOLDOWN
+
+            async def late_terminal_signal():
+                await asyncio.sleep(.06)
+                await socket.send_text(
+                    '{"type":"speech.dropped","turn_id":7,"reason":"stt_empty"}')
+
+            worker = asyncio.create_task(late_terminal_signal())
+            try:
+                message = await socket.receive()
+                self.assertEqual(message['type'], 'websocket.disconnect')
+                self.assertTrue(
+                    worker.done(),
+                    'the bench disconnected while the turn still lacked a terminal signal',
+                )
+            finally:
+                await worker
+
+        asyncio.run(run())
+
     def test_bench_waits_for_the_last_provider_failure_before_disconnect(self) -> None:
         bench = load_bench()
         bench.SPEED = 100.0
@@ -43,15 +136,17 @@ class ListeningBenchTests(unittest.TestCase):
             session = bench.make_session(clock)
             session.detector.state = TurnState.PROCESSING
             socket = bench.BenchSocket(bench.Script(), session, clock)
+            await socket.send_text('{"type":"speech.start","turn_id":8}')
             async def late_provider_failure():
                 await asyncio.sleep(.06)
-                await socket.send_text('{"type":"speech.dropped","reason":"stt_failed"}')
+                await socket.send_text(
+                    '{"type":"speech.dropped","turn_id":8,"reason":"stt_failed"}')
                 session.detector.state = TurnState.IDLE
             worker = asyncio.create_task(late_provider_failure())
             message = await socket.receive()
             self.assertEqual(message['type'], 'websocket.disconnect')
             self.assertTrue(worker.done(), 'the bench disconnected before the pending STT result')
-            self.assertEqual(len(socket.sent), 1)
+            self.assertEqual(len(socket.sent), 2)
             await worker
         asyncio.run(run())
 

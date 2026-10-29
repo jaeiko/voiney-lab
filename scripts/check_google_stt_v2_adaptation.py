@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 import wave
 from dataclasses import replace
 from pathlib import Path
@@ -40,8 +41,16 @@ def _pcm16(path: Path, parser: argparse.ArgumentParser) -> bytes:
             if not valid:
                 parser.error("WAV must be mono 16-bit 16 kHz PCM and shorter than 60 seconds")
             return recording.readframes(recording.getnframes())
-    except (OSError, EOFError, wave.Error):
-        parser.error("WAV could not be read")
+    except wave.Error as exc:
+        reason = str(exc).casefold()
+        if any(word in reason for word in ("format", "compression", "unsupported")):
+            parser.error(
+                "WAV encoding is unsupported; convert it to mono 16-bit "
+                "16 kHz PCM (WAVE_FORMAT_PCM)"
+            )
+        parser.error("WAV header or audio data is damaged or truncated")
+    except (OSError, EOFError):
+        parser.error("WAV header or audio data is damaged or truncated")
 
 
 def _settings(parser: argparse.ArgumentParser) -> SttProviderSettings:
@@ -80,8 +89,13 @@ def main(arguments: list[str] | None = None) -> int:
     for name, location, keyterms in scenarios:
         scenario_settings = replace(
             settings,
-            google_v2=replace(settings.google_v2, location=location),
+            google_v2=replace(
+                settings.google_v2,
+                location=location,
+                adaptation_enabled=bool(keyterms),
+            ),
         )
+        started = time.monotonic()
         try:
             result = transcribe_google_cloud_v2(
                 pcm,
@@ -100,11 +114,13 @@ def main(arguments: list[str] | None = None) -> int:
             characters = 0
         except ConfigurationError as exc:
             parser.error(str(exc))
+        response_ms = max(0, round((time.monotonic() - started) * 1000))
         print(json.dumps({
             "scenario": name,
             "location": location,
             "status": status,
             "characters": characters,
+            "response_ms": response_ms,
         }, ensure_ascii=False, separators=(",", ":")))
     return 0
 

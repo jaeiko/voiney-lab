@@ -1,11 +1,11 @@
 name: CI
 
 on:
-  # Work happens on feature/** and fix/** branches cut from dev, and reaches
-  # main only through dev (docs/GIT_WORKFLOW.md), so every one of those is
-  # checked. A branch with an open PR into dev runs twice, once per event.
+  # Branch work is checked by its pull request into dev. Push runs are only
+  # for the two integration branches, so an open PR does not run this full
+  # workflow twice for the same commit.
   push:
-    branches: ["main", "dev", "feature/**", "fix/**", "refactor/**"]
+    branches: ["main", "dev"]
   pull_request:
     branches: ["main", "dev"]
 

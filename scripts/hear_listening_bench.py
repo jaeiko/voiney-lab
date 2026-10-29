@@ -195,6 +195,12 @@ class BenchSocket:
         self.frames_sent = 0
         self.paused = False
         self.changed = asyncio.Event()
+        # Server events, rather than the mutable detector state, tell the
+        # bench when a started turn has actually reached its terminal signal.
+        # Under load the session may enter COOLDOWN before the final event is
+        # delivered to this fake page.
+        self.pending_turns: set[int] = set()
+        self.saw_started_turn = False
 
     async def accept(self):
         return None
@@ -205,16 +211,22 @@ class BenchSocket:
         if not self.script:
             # Audio time can end before a worker scheduled under machine
             # load returns its final STT result. Drain that real turn and
-            # the page's playback receipt before disconnecting. The guard is
-            # a failed bench, never a successful partial measurement.
-            async with asyncio.timeout(10):
-                while True:
-                    self.changed.clear()
-                    if self.inbox:
-                        return {"type": "websocket.receive", "text": json.dumps(self.inbox.pop(0))}
-                    if self.session.detector.state not in {TurnState.PROCESSING, TurnState.AGENT_SPEAKING}:
-                        return {"type": "websocket.disconnect", "code": 1000}
-                    await self.changed.wait()
+            # the page's playback receipt before disconnecting. A wall-clock
+            # deadline makes this bench depend on host load; the explicit
+            # terminal events below are its completion authority.
+            while True:
+                self.changed.clear()
+                if self.inbox:
+                    return {"type": "websocket.receive", "text": json.dumps(self.inbox.pop(0))}
+                if self.saw_started_turn:
+                    pending = bool(self.pending_turns)
+                else:
+                    pending = self.session.detector.state in {
+                        TurnState.PROCESSING, TurnState.AGENT_SPEAKING,
+                    }
+                if not pending:
+                    return {"type": "websocket.disconnect", "code": 1000}
+                await self.changed.wait()
         kind, value = self.script.pop(0)
         if kind == "text" and str(value.get("type", "")).startswith("bench."):  # type: ignore[union-attr]
             # Lane HEAR2: the bench's own directions, never sent to the server.
@@ -236,6 +248,23 @@ class BenchSocket:
     async def send_text(self, value):
         message = json.loads(value)
         self.sent.append((self.frames_sent, message))
+        kind = message.get("type")
+        turn_id = message.get("turn_id")
+        if kind == "speech.start" and isinstance(turn_id, int):
+            self.saw_started_turn = True
+            # The production socket cancels its one previous turn task when
+            # it announces a new primary speech start.  That supersession has
+            # no separate terminal event when the worker was still pending.
+            self.pending_turns.clear()
+            self.pending_turns.add(turn_id)
+        elif isinstance(turn_id, int) and (
+            kind in {"speech.dropped", "speech.ignored"}
+            or (
+                kind in {"turn.state", "cascade.playback.clear"}
+                and message.get("state") in {"complete", "blocked", "cancelled", "error"}
+            )
+        ):
+            self.pending_turns.discard(turn_id)
         self.changed.set()
         if message.get("type") == "audio.segment.start":
             frames = int(message.get("frame_count") or 0)

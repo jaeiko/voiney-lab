@@ -89,7 +89,7 @@
   ```
 
   첫 줄은 공급자를 부르지 않고 그때 받아 적은 글만 채점한다. `--live` 는 녹음마다 공급자마다 인식 요청을 한 번씩 보낸다(요청 수를 찍는다, 인증 설정이 필요하다 — 사람만 돌린다). V2 토큰을 처음 받거나 갱신하는 인증 요청은 이 숫자와 별도다. 셸에 인증 설정을 넣은 뒤 실행한다. Python에서 실행하려면 먼저 `from dotenv import load_dotenv; load_dotenv()`로 서버와 같은 설정을 읽는다(설정값을 출력하지 않는다). 단어 오류율·글자 오류율, 숫자와 단위가 맞은 비율, 실험 용어가 맞은 비율, 빈 결과 수를 공급자마다 보인다. `--details` 는 턴마다 글도 찍으므로 화면 공유에 주의한다.
-- **용어**: 지금 실험의 용어(단계 이름·제어 말·프로토콜 용어)는 받아쓰기 요청에 들어간다 — ElevenLabs 는 `keyterms`(50자 미만·5단어 이하·100개까지), Google v1은 `speechContexts`, V2는 인라인 음성 적응 구절(중복 제거, 한 구절 100자·1,000개·총 100,000자 이하)이다. 요청 모양은 가짜 전송으로 확인했다. 용어 힌트의 인식 개선 효과는 아직 재지 않았다.
+- **용어**: 지금 실험의 힌트는 한국어 명령 9개, 저장 번역 용어집의 한국어 이름, 기존 단계·제어 말, 원문 기술용어 순으로 최대 100개다. 일반 턴과 끼어들기가 같은 목록을 쓴다. ElevenLabs 는 `keyterms`(50자 미만·5단어 이하·100개까지), Google v1은 `speechContexts`, V2는 `VOINEY_LAB_GOOGLE_STT_V2_ADAPTATION_ENABLED=true`일 때만 인라인 음성 적응 구절(중복 제거, 한 구절 100자·1,000개·총 100,000자 이하)로 받는다. 요청 모양은 가짜 전송으로 확인했다. 번역 문장 전체나 새 용어를 만들지 않는다.
 
 ### Google V2가 답하지 않을 때
 
@@ -102,20 +102,20 @@
 | `permission_denied` / 403 | Speech-to-Text API 사용 설정, 같은 프로젝트의 Cloud Speech Client 역할, 결제 연결을 확인한다 |
 | `resource_exhausted` / 429 | 콘솔의 할당량과 결제·크레딧을 확인한다. 같은 말을 계속 반복하지 않는다 |
 | `invalid_argument` / 400 | 모델은 `chirp_3`, 지원 지역과 언어인지 확인한다. 공급자 변경 때 남은 `scribe_v2` 값을 지운다 |
-| `not_found` / 404가 용어를 보낼 때만 남음 | 아래 같은-WAV 진단을 실행한다. 서버는 그 턴을 adaptation 없이 한 번 재시도하고, 성공하면 같은 세션에서 용어 힌트를 끈다 |
+| `not_found` / 404가 용어를 보낼 때만 남음 | 기본 설정은 이미 adaptation을 보내지 않는다. 사람이 `VOINEY_LAB_GOOGLE_STT_V2_ADAPTATION_ENABLED=true`로 시험할 때는 아래 같은-WAV 진단을 실행한다. 서버는 그 턴을 adaptation 없이 한 번 재시도하고, 성공하면 같은 세션에서 용어 힌트를 끈다 |
 | `timeout`, `unreachable`, `unavailable` | EC2의 외부 HTTPS 연결과 Google 서비스 상태를 확인한다 |
 | WIF 인증 확인 명령이 실패 | EC2 IAM 역할 연결·IMDSv2 설정, 공급자의 AWS 계정/역할 조건, 서비스 계정의 Workload Identity User 바인딩, IAM Credentials·STS API를 확인한다. 파일의 URL·audience를 직접 임의 수정하지 말고 `create-cred-config --aws --enable-imdsv2`로 다시 만든다 |
 | 개발자 ADC는 되는데 EC2 WIF만 실패 | EC2 서비스의 오래된 AWS 액세스 키 환경 변수를 제거하고, 자격 파일 소유자·권한과 metadata 연결을 확인한다. 사용자 로그인 파일을 운영에 복사하지 않는다 |
 
-용어를 보낸 요청만 400·404이고 같은 요청에서 용어를 빼면 성공하는지 보려면, 서버 설정을 안전하게 셸 환경에 읽은 뒤 같은 16 kHz 모노 PCM16 WAV 하나로 아래 명령을 사람이 실행한다. 이 스크립트는 `.env`를 직접 읽지 않고 정확히 세 번만 인식한다: 현재 지역+공식 인라인 모양, 공식 지원표의 다른 다중 지역(`us`이면 `eu`, 그 밖이면 `us`)+같은 모양, 현재 지역+adaptation 없음. 인식문은 출력하지 않고 시나리오·지역·HTTP 상태·글자 수만 출력한다. `--max-calls`는 3~10만 받으며 아래 값 10은 상한이지 실제 호출 수가 아니다.
+용어를 보낸 요청만 400·404이고 같은 요청에서 용어를 빼면 성공하는지 보려면, 서버 설정을 안전하게 셸 환경에 읽은 뒤 같은 16 kHz 모노 PCM16 WAV 하나로 아래 명령을 사람이 실행한다. 이 스크립트는 `.env`를 직접 읽지 않고 정확히 세 번만 인식한다: 현재 지역+공식 인라인 모양, 공식 지원표의 다른 다중 지역(`us`이면 `eu`, 그 밖이면 `us`)+같은 모양, 현재 지역+adaptation 없음. 인식문은 출력하지 않고 시나리오·지역·HTTP 상태·글자 수·응답 시간(ms)만 출력한다. WAV가 손상·잘렸거나 PCM 인코딩이 아니면 그 이유와 필요한 16 kHz 모노 PCM 형식을 말한다. `--max-calls`는 3~10만 받으며 아래 값 10은 상한이지 실제 호출 수가 아니다.
 
 ```bash
 set -a; source .env; set +a; source .venv/bin/activate; python scripts/check_google_stt_v2_adaptation.py --execute --wav /absolute/path/to/the-same-recording.wav --max-calls 10
 ```
 
-공식 근거는 [REST V2 SpeechAdaptation·인라인 PhraseSet 모양](https://docs.cloud.google.com/speech-to-text/docs/reference/rest/v2/projects.locations.recognizers), [Chirp 3 기능·`us`/`eu` 지역과 1,000구절 한도](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3), [모델·지역·언어별 기능표](https://docs.cloud.google.com/speech-to-text/docs/speech-to-text-supported-languages), [일반 adaptation 한도와 boost 최대 20](https://docs.cloud.google.com/speech-to-text/docs/quotas)다. 현재 제품 모양·기본 `us`·다섯 구절은 이 표 안이고 boost는 보내지 않는다. 그런데 2026-10-28 사람 실측에서 `us`의 같은 녹음은 용어 없음 200, 용어 다섯 개 404였으므로 Google 내부 원인은 확인 안 됨이다. 결과의 세 줄과 실행 시각만 사고 기록에 남기고 WAV·인식문·자격은 남기지 않는다.
+공식 근거는 [REST V2 SpeechAdaptation·인라인 PhraseSet 모양](https://docs.cloud.google.com/speech-to-text/docs/reference/rest/v2/projects.locations.recognizers), [Chirp 3 기능·`us`/`eu` 지역과 1,000구절 한도](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3), [모델·지역·언어별 기능표](https://docs.cloud.google.com/speech-to-text/docs/speech-to-text-supported-languages), [일반 adaptation 한도와 boost 최대 20](https://docs.cloud.google.com/speech-to-text/docs/quotas)다. 현재 제품 모양·기본 `us`·다섯 구절은 이 표 안이고 boost는 보내지 않는다. 그런데 2026-10-29 같은 한국어 WAV 실측은 `us` 힌트 404·3,573 ms, `eu` 힌트 404·5,021 ms, `us` 힌트 없음 200·3글자·3,915 ms였다. Google 내부 원인은 확인 안 됨이며 기본 지역은 `us`, adaptation 기본은 false다. 결과의 세 줄과 실행 시각만 사고 기록에 남기고 WAV·인식문·자격은 남기지 않는다.
 
-실패해도 다른 공급자로 자동으로 바뀌지 않는다. adaptation 400·404만 같은 공급자·모델에서 힌트 없이 한 번 더 보내며, 성공하면 화면 턴 진단에 `stt_adaptation_disabled`, 지표에 `stt_adaptation_fallback`을 남긴다. 그 밖의 실패는 화면에 실패 코드와 까닭이 보이고, 같은 장애에서는 한 번만 말로 알린다. V2 내장 잡음 제거는 `VOINEY_LAB_GOOGLE_STT_V2_DENOISE=false`로 끌 수 있으나 2026-10-28 실측에서는 이 404와 무관했다. 실제 인증·지역 지원·인식 품질은 가짜 전송 시험으로 확인할 수 없다.
+실패해도 다른 공급자로 자동으로 바뀌지 않는다. 기본 false에서는 첫 요청부터 adaptation을 빼며, true에서만 adaptation 400·404를 같은 공급자·모델에서 힌트 없이 한 번 더 보낸다. 성공하면 화면 턴 진단에 `stt_adaptation_disabled`, 지표에 `stt_adaptation_fallback`을 남긴다. 그 밖의 실패는 화면에 실패 코드와 까닭이 보이고, 같은 장애에서는 한 번만 말로 알린다. V2 내장 잡음 제거는 `VOINEY_LAB_GOOGLE_STT_V2_DENOISE=false`로 끌 수 있으나 2026-10-28 실측에서는 이 404와 무관했다. 실제 인증·지역 지원·인식 품질은 가짜 전송 시험만으로 확인할 수 없다.
 
 ### 고정 주소와 매일 백업
 
