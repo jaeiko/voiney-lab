@@ -33,6 +33,26 @@ def load_bench():
 
 
 class ListeningBenchTests(unittest.TestCase):
+    def test_bench_accepts_cancelled_playback_clear_as_a_terminal_signal(self) -> None:
+        bench = load_bench()
+
+        async def run():
+            clock = bench.AudioClock()
+            session = bench.make_session(clock)
+            socket = bench.BenchSocket(bench.Script(), session, clock)
+            await socket.send_text('{"type":"speech.start","turn_id":6}')
+
+            # ``cancel_cascade_generation`` always sends this event, while a
+            # following terminal turn.state exists only when progress was
+            # still registered for the superseded turn.
+            await socket.send_text(
+                '{"type":"cascade.playback.clear","turn_id":6,'
+                '"state":"cancelled","reason":"continued_speech"}')
+
+            self.assertEqual(socket.pending_turns, set())
+
+        asyncio.run(run())
+
     def test_bench_waits_for_a_terminal_signal_after_the_session_enters_cooldown(self) -> None:
         bench = load_bench()
         from voiney_lab.vad import TurnState

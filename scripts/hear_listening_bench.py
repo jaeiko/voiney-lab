@@ -256,7 +256,7 @@ class BenchSocket:
         elif isinstance(turn_id, int) and (
             kind in {"speech.dropped", "speech.ignored"}
             or (
-                kind == "turn.state"
+                kind in {"turn.state", "cascade.playback.clear"}
                 and message.get("state") in {"complete", "blocked", "cancelled", "error"}
             )
         ):
