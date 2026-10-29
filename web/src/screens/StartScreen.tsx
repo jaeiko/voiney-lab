@@ -7,7 +7,7 @@ import { runApi, serverWords, type StartAnswer, type StartCheck } from "../api/r
 import type { CatalogEntry } from "../api/types";
 import { Chip, EmptyBox, ErrorBox, LoadingBox, Note } from "../components/Pieces";
 import { StepProgress } from "../components/StepProgress";
-import { start as copy } from "../copy/ko";
+import { changes as changeCopy, start as copy } from "../copy/ko";
 import { go, routes } from "../lib/navigation";
 import { protocolStatus, sortEntries } from "../lib/protocolStatus";
 import { loadVoiceScripts, primeStart, startRun } from "../voice/engine";
@@ -372,6 +372,7 @@ function GoStep({
       <div className="start-summary" data-testid="start-summary">
         <p className="start-protocol-title">{entry?.title ?? ""}</p>
         {resume ? <p>{copy.go.resumeLine(resume.step)}</p> : <p>{changes.length ? copy.go.changes(changes.map((item) => `${item.step_label}단계 ${item.kind_ko} ${item.words_ko}`).join(" · ")) : copy.go.noChanges}</p>}
+        {chosen?.lab_revision ? <p className="muted">{changeCopy.labRevisionSaved(chosen.lab_revision.label_ko)}</p> : null}
         {voice ? <p className="muted">{copy.go.voice(voice.label_ko)}</p> : null}
       </div>
       <AmbientChoice value={shown} onChange={setAmbient} disabled={busy || settings.isPending} />
