@@ -16,7 +16,8 @@ Here, through the rules' route and the server's record writer:
     ("알겠어", "고마워") skips the question like "넘어가";
   * the detail words ask for the current step in detail (read-only), and
     "다시" / "한 번 더" repeat the last guidance;
-  * a real answer, however short ("연습", "BSA 정량"), is still recorded.
+  * a real answer, however short ("연습", "BSA 정량"), is not discarded;
+    a one- or two-syllable answer is confirmed once before it is recorded.
 """
 
 from __future__ import annotations

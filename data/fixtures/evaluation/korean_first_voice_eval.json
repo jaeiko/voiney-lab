@@ -320,13 +320,13 @@
    "setup": "purpose_question",
    "utterance": "연습",
    "expect": {
-    "action": null,
-    "intent": "notebook_purpose",
+    "action": "clarify_completion",
+    "intent": "notebook_confirmation_required",
     "moved": false,
-    "record": true,
+    "record": false,
     "no_english_source": false
    },
-   "why": "decision 5: a short real answer is still the purpose"
+   "why": "SAFE1: a short real answer is kept but confirmed once before recording"
   },
   {
    "id": "SAY022",
