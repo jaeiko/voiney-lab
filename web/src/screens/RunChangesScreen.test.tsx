@@ -110,12 +110,55 @@ describe("RunChangesScreen", () => {
     );
     renderWithClient(<RunChangesScreen protocolId="p-ready" />);
     await user.click(await screen.findByTestId("changes-last-time"));
+    expect(screen.getByText("지난 실험(10월 20일)에서 불러왔어요.")).toBeInTheDocument();
     expect(screen.getByText("고른 값 1개")).toBeInTheDocument();
     expect(screen.getByText(/4단계 시간 · 원문: 5분 → 오늘: 8분/)).toBeInTheDocument();
     await user.click(screen.getByTestId("changes-done"));
     await waitFor(() => expect(calls.some((call) => call.init?.method === "POST")).toBe(true));
     const sent = calls.find((call) => call.init?.method === "POST");
     expect(JSON.parse(String(sent?.init?.body))).toEqual({ target: RUN_OPTIONS.target, source: "last_time", changes: [{ item_id: "s4#2", value: "8분" }] });
+  });
+
+  it("saves changed conditions as a lab revision only when the person chooses it", async () => {
+    const user = userEvent.setup();
+    const { calls } = fakeFetch(
+      table({
+        "/api/protocols/p-ready/start-check/changes": (init?: RequestInit) =>
+          init?.method === "POST"
+            ? { json: { change_set_id: "run-changes-4", changes: [], source: "wizard", lab_revision: { revision_id: "lab-adapted-1", version: 1, label_ko: "연구실판 v1", changes: [] } } }
+            : { json: RUN_OPTIONS },
+      }),
+    );
+    renderWithClient(<RunChangesScreen protocolId="p-ready" />);
+    await user.click(await screen.findByTestId("changes-some"));
+    await user.click(screen.getByRole("button", { name: "2단계" }));
+    await user.click(screen.getByRole("button", { name: "시간 10분" }));
+    await user.type(screen.getByTestId("value-number"), "20");
+    await user.click(screen.getByTestId("value-use"));
+    await user.click(screen.getByRole("checkbox", { name: "이 조건을 연구실판으로 저장" }));
+    await user.click(screen.getByTestId("changes-done"));
+    expect(await screen.findByTestId("changes-chosen")).toHaveTextContent("연구실판 v1로 저장했어요.");
+    const sent = calls.find((call) => call.init?.method === "POST");
+    expect(JSON.parse(String(sent?.init?.body))).toMatchObject({ save_as_lab_revision: true });
+  });
+
+  it("loads the latest own lab revision as a person-confirmed start value", async () => {
+    const user = userEvent.setup();
+    const { calls } = fakeFetch(
+      table({
+        "/api/protocols/p-ready/start-check/changes": (init?: RequestInit) =>
+          init?.method === "POST"
+            ? { json: { change_set_id: "run-changes-5", changes: [], source: "lab_revision", lab_revision: null } }
+            : { json: { ...RUN_OPTIONS, lab_revision: { revision_id: "lab-adapted-1", version: 1, label_ko: "연구실판 v1", changes: [{ item_id: "s4#2", step_label: "4", kind: "time", source_number: "5", source_unit: "min", number: "8", unit: "min", shown_ko: "8분" }] } } },
+      }),
+    );
+    renderWithClient(<RunChangesScreen protocolId="p-ready" />);
+    await user.click(await screen.findByTestId("changes-lab-revision"));
+    expect(screen.getByText("연구실판 v1에서 불러왔어요.")).toBeInTheDocument();
+    expect(screen.getByText(/4단계 시간 · 원문: 5분 → 오늘: 8분/)).toBeInTheDocument();
+    await user.click(screen.getByTestId("changes-done"));
+    const sent = calls.find((call) => call.init?.method === "POST");
+    expect(JSON.parse(String(sent?.init?.body))).toMatchObject({ source: "lab_revision" });
   });
 
   it("the server's refusal of a value is shown in its own words", async () => {

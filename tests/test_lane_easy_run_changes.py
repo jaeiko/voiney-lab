@@ -181,6 +181,43 @@ class TheWizardsChoiceTests(_CatalogCase):
             self.protocol_id, skipped["change_set_id"], actor_principal_id="person-a",
             revision_ids=(self.options["revision_id"],)), ())
 
+    def test_a_person_may_save_changed_conditions_as_an_append_only_lab_revision(self) -> None:
+        before = self.catalog._latest_protocol_revision(self.protocol_id)  # noqa: SLF001
+        chosen = self.changes.choose(
+            self.protocol_id,
+            [{"item_id": self.item("2", "time"), "value": "20분"}],
+            target=self.options["target"],
+            actor_principal_id="person-a",
+            save_as_lab_revision=True,
+        )
+        saved = chosen["lab_revision"]
+        self.assertEqual(saved["label_ko"], "연구실판 v1")
+        self.assertEqual(saved["source_revision_id"], self.options["revision_id"])
+        self.assertEqual(saved["changes"][0]["words_ko"], "20분(오늘 바꾼 값 · 원문 10분)")
+        # The source protocol and its immutable bytes are not revised or overwritten.
+        after = self.catalog._latest_protocol_revision(self.protocol_id)  # noqa: SLF001
+        self.assertEqual((after.revision_number, after.pdf_checksum),
+                         (before.revision_number, before.pdf_checksum))
+
+        mine = self.changes.options(self.protocol_id, actor_principal_id="person-a")
+        self.assertEqual(mine["lab_revision"]["revision_id"], saved["revision_id"])
+        self.assertEqual(mine["lab_revision"]["changes"][0]["item_id"], self.item("2", "time"))
+        self.assertIsNone(
+            self.changes.options(self.protocol_id, actor_principal_id="person-b")["lab_revision"]
+        )
+
+    def test_a_lab_revision_is_saved_only_after_an_explicit_person_choice(self) -> None:
+        plain = self.changes.choose(
+            self.protocol_id,
+            [{"item_id": self.item("2", "time"), "value": "20분"}],
+            target=self.options["target"],
+            actor_principal_id="person-a",
+        )
+        self.assertIsNone(plain["lab_revision"])
+        self.assertIsNone(
+            self.changes.options(self.protocol_id, actor_principal_id="person-a")["lab_revision"]
+        )
+
     def test_a_wrong_kind_an_unknown_item_or_a_stale_target_is_refused_with_its_sentence(self) -> None:
         cases = (
             ([{"item_id": self.item("2", "time"), "value": "40 °C"}], self.options["target"], "run_change_unit_kind"),
@@ -563,8 +600,12 @@ class TheRoutesTests(_CatalogCase):
             options = server.get_protocol_run_changes(self.protocol_id)
             item = next(value["item_id"] for value in options["values"] if value["kind"] == "time")
             chosen = server.post_protocol_run_changes(
-                self.protocol_id, {"target": options["target"], "changes": [{"item_id": item, "value": "20분"}]})
+                self.protocol_id, {"target": options["target"], "changes": [{"item_id": item, "value": "20분"}],
+                                   "save_as_lab_revision": True})
             self.assertEqual(chosen["changes"][0]["shown_ko"], "20분")
+            self.assertEqual(chosen["lab_revision"]["label_ko"], "연구실판 v1")
+            options = server.get_protocol_run_changes(self.protocol_id)
+            self.assertEqual(options["lab_revision"]["changes"][0]["shown_ko"], "20분")
             with self.assertRaises(server.HTTPException) as caught:
                 server.post_protocol_run_changes(
                     self.protocol_id, {"target": options["target"],

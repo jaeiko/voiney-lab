@@ -6021,7 +6021,7 @@ def get_protocol_run_changes(protocol_id:str)->dict[str,object]:
             options=RunChanges(
                 catalog,
                 localize=lambda fixture:_with_revision_translations(fixture,start_missing=False),
-            ).options(protocol_id)
+            ).options(protocol_id,actor_principal_id=_start_check_principal_id())
         finally:
             store.close()
         # Lane EASY, decision 3: "지난번처럼" -- the same account's last run of
@@ -6054,7 +6054,8 @@ def post_protocol_run_changes(
             return RunChanges(catalog).choose(
                 protocol_id,body.get("changes"),target=body.get("target"),
                 actor_principal_id=_start_check_principal_id(),source=body.get("source","wizard"),
-                confirm_large=body.get("confirm_large") or ())
+                confirm_large=body.get("confirm_large") or (),
+                save_as_lab_revision=body.get("save_as_lab_revision",False))
         finally:
             store.close()
     except RunChangeError as exc:

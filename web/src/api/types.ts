@@ -324,10 +324,12 @@ export interface RunChangeOptions {
   limit: number;
   steps?: RunStep[];
   last_time?: { changes: RunChange[]; report_id?: string | null; when_ko?: string } | null;
+  lab_revision?: { revision_id: string; version: number; label_ko: string; changes: RunChange[]; recorded_at?: string } | null;
 }
 
 export interface RunChangesChosen {
   change_set_id: string;
   changes: RunChange[];
   source: string;
+  lab_revision?: { revision_id: string; version: number; label_ko: string; changes: RunChange[] } | null;
 }
