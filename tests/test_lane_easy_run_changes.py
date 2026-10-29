@@ -40,6 +40,7 @@ from voiney_lab.curated_protocol import (
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.llm_router import CHANGE_STATE_ACTIONS, RECORD_LOG
 from voiney_lab.protocol_catalog import ProtocolCatalog
+from voiney_lab.runtime_routing import route_curated_runtime_turn
 from voiney_lab.start_check import (
     RUN_CHANGES_APPLIED_EVENT,
     RUN_CHANGES_EVENT,
@@ -354,13 +355,44 @@ class SaidDuringTheRunTests(unittest.TestCase):
         self.assertEqual([change.shown for change in session.run_changes()], ["600 µL"])
         self.assertIsNotNone(session.notebook_question_open())
 
-    def test_before_the_start_words_change_nothing(self) -> None:
+    def test_before_the_first_step_words_change_the_ready_runs_value_only(self) -> None:
         fixture = replace(agitation_fixture(), timer_manifest={"step-1": 900})
         session = session_at(fixture, step_index=None)
         plan = self.say(session, "1단계 15분 대신 20분으로 할게", 2)
-        self.assertFalse(plan.state_changed)
-        self.assertIn("시작 화면", plan.speech_text)
-        self.assertEqual(session.run_changes(), ())
+        self.assertTrue(plan.state_changed)
+        self.assertEqual(plan.action, CuratedProtocolAction.CHANGE_VALUE)
+        self.assertFalse(session.active)
+        self.assertEqual(session.current_index, 0)
+        self.assertEqual([change.shown for change in session.run_changes()], ["20분"])
+        self.assertEqual(session.timer_seconds_for_step(0), 1200)
+
+    def test_before_the_first_step_confirm_mode_still_requires_the_persons_yes(self) -> None:
+        fixture = replace(agitation_fixture(), timer_manifest={"step-1": 900})
+        session = session_at(fixture, step_index=None)
+        session.confirm_mode = "confirm"
+        asked = self.say(session, "1단계 15분 대신 20분으로 할게", 2)
+        self.assertEqual(asked.intent_kind, "run_value_change_confirmation_required")
+        self.assertFalse(asked.state_changed)
+        confirmed = self.say(session, "네", 3)
+        self.assertTrue(confirmed.state_changed)
+        self.assertFalse(session.active)
+        self.assertEqual([change.shown for change in session.run_changes()], ["20분"])
+
+    def test_the_rules_only_production_route_changes_a_ready_runs_value_without_starting_it(self) -> None:
+        fixture = replace(agitation_fixture(), timer_manifest={"step-1": 900})
+        session = session_at(fixture, step_index=None)
+        routed = route_curated_runtime_turn(
+            session,
+            "1단계 15분 대신 20분으로 할게",
+            turn_id=2,
+            language="ko",
+            configuration_id=1,
+            generation=1,
+        )
+        self.assertEqual(routed.runtime_router, "curated_protocol")
+        self.assertTrue(routed.plan.state_changed)
+        self.assertEqual(routed.plan.step_record["kind"], "run_value_changed")
+        self.assertFalse(session.active)
 
     def test_questions_past_doings_notes_and_timer_commands_are_left_to_their_rules(self) -> None:
         for words in ("15분 대신 20분으로 할까?", "15분 대신 20분 했어", "노트에 적어 줘 15분 대신 20분",
