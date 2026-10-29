@@ -255,7 +255,12 @@ from voiney_lab.vad import (
 )
 from voiney_lab import voice_providers
 from voiney_lab import accounts as accounts_module
-from voiney_lab.voice_providers import SpeechProviderError, SttProviderSettings, TtsProviderSettings
+from voiney_lab.voice_providers import (
+    SpeechProviderError,
+    SttAdaptationFallback,
+    SttProviderSettings,
+    TtsProviderSettings,
+)
 from voiney_lab.start_check import (
     RunChange,
     RunChangeError,
@@ -3037,6 +3042,7 @@ class CascadeTranscriptionContext:
     audio_origin:str
     vad_threshold:float=0.5
     filler_words:bool=False
+    google_v2_adaptation_disabled:bool=False
 
     def __post_init__(self)->None:
         if self.audio_origin not in {"ordinary","barge_in"}:
@@ -3047,6 +3053,8 @@ class CascadeTranscriptionContext:
             raise ValueError("STT vad_threshold is outside bounds")
         if not isinstance(self.filler_words,bool):
             raise ValueError("STT filler_words is invalid")
+        if not isinstance(self.google_v2_adaptation_disabled,bool):
+            raise ValueError("Google V2 adaptation state is invalid")
 
     def request_policy(self)->dict[str,object]:
         fields=["format"]
@@ -3151,6 +3159,7 @@ def transcribe(
     keyterms:tuple[str,...]=(),
     vad_threshold:float=0.5,
     filler_words:bool=False,
+    disable_google_v2_adaptation:bool=False,
 )->Transcription:
     """Send one utterance to the configured STT provider (xAI by default).
 
@@ -3162,8 +3171,14 @@ def transcribe(
     settings=SttProviderSettings.from_environment()
     language=voice_providers.stt_language(settings,language)
     if settings.provider!=voice_providers.XAI:
+        provider_keyterms=(
+            ()
+            if settings.provider==voice_providers.GOOGLE_CLOUD_V2
+            and disable_google_v2_adaptation
+            else keyterms
+        )
         return voice_providers.transcribe(
-            pcm,settings,language=language,keyterms=keyterms)
+            pcm,settings,language=language,keyterms=provider_keyterms)
     multipart,_,_= _stt_multipart(
         pcm,language=language,keyterms=keyterms,vad_threshold=vad_threshold,
         filler_words=filler_words)
@@ -7385,6 +7400,9 @@ class ListenerSession:
         #: Lane HEAR2: whether the provider outage under way was said aloud;
         #: a response that comes back ends the outage.
         self.stt_failure_said:bool=False
+        #: Lane STT4: a 400/404 from Google V2 inline adaptation disables
+        #: hints for the rest of this voice session only.
+        self.google_v2_adaptation_disabled:bool=False
         #: Lane HEAR, decision 4: the last committed turn's audio (for a
         #: continuation to join) and events of a turn opened between chunks.
         self._joinable_turn:dict[str,Any]|None=None
@@ -7647,6 +7665,13 @@ class ListenerSession:
         """The provider answered: the outage, if one was under way, is over."""
 
         self.stt_failure_said=False
+    def note_stt_adaptation_fallback(self)->bool:
+        """Remember Google V2's rejected hints; True only on the transition."""
+
+        if self.google_v2_adaptation_disabled:
+            return False
+        self.google_v2_adaptation_disabled=True
+        return True
     def note_heard(self)->None:
         """Words reached routing: the drops before them no longer count."""
 
@@ -7736,6 +7761,7 @@ class ListenerSession:
         self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
         self.history.reset()
         self.last_confirmed_language=None
+        self.google_v2_adaptation_disabled=False
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
         self._reset_turn_identity()
         self.session_id=experiment_session_id or new_session_id()
@@ -7752,6 +7778,7 @@ class ListenerSession:
         self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
         self.history.reset()
         self.last_confirmed_language=None
+        self.google_v2_adaptation_disabled=False
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
         self.accepted_configuration_id=None; self.accepted_mode=None
         self.accepted_language=None; self.accepted_protocol_id=None
@@ -8398,6 +8425,8 @@ def cascade_transcription_context(
         pending_frame=pending_frame,
         keyterms=keyterms,
         audio_origin=audio_origin,
+        google_v2_adaptation_disabled=(
+            session.google_v2_adaptation_disabled),
         filler_words=bool(getattr(
             getattr(session,"stt_settings",None),"filler_words",False)),
         vad_threshold=getattr(
@@ -8428,13 +8457,15 @@ def transcribe_cascade_audio(
     """
 
     try:
-        return transcribe(
-            clean_path(pcm),
-            language=context.language,
-            keyterms=context.keyterms,
-            vad_threshold=getattr(context, "vad_threshold", 0.5),
-            filler_words=bool(getattr(context, "filler_words", False)),
-        )
+        options={
+            "language":context.language,
+            "keyterms":context.keyterms,
+            "vad_threshold":getattr(context,"vad_threshold",0.5),
+            "filler_words":bool(getattr(context,"filler_words",False)),
+        }
+        if context.google_v2_adaptation_disabled:
+            options["disable_google_v2_adaptation"]=True
+        return transcribe(clean_path(pcm),**options)
     except requests.Timeout as exc:
         raise SpeechProviderError("STT timed out",code="timeout") from exc
     except requests.RequestException as exc:
@@ -12006,6 +12037,7 @@ def drop_reason_words(reason:str)->str:
 #: 주세요" (the words would fail again), never the provider's own text.
 STT_FAILURE_SCREEN_WORDS="받아쓰기 서비스가 답하지 않아요"
 STT_FAILURE_WORDS="받아쓰기 서비스가 답하지 않아요. 관리자에게 알려 주세요."
+STT_ADAPTATION_FALLBACK_REASON="stt_adaptation_disabled"
 STT_FAILURE_REASON_WORDS={
     "quota_exceeded":"받아쓰기 서비스의 한도가 다 됐어요",
     "unauthorized":"받아쓰기 서비스의 키에 문제가 있어요",
@@ -12145,6 +12177,7 @@ async def _report_stt_failure(
     await sender.text(
         "speech.dropped",configuration_id=session.accepted_configuration_id,
         turn_id=turn_id,generation=generation,reason="stt_failed",code=code,
+        status=status if isinstance(status,int) else None,
         duration_ms=duration_ms,level_db=level,paused=paused,
         during_playback=during_playback,
         notice=None if paused else STT_FAILURE_SCREEN_WORDS,
@@ -12155,6 +12188,29 @@ async def _report_stt_failure(
     if session.note_stt_failure():
         session.track_visual_task(asyncio.create_task(_say_server_words(
             session,sender,STT_FAILURE_WORDS,kind="stt_failure")))
+
+
+def _note_stt_adaptation_fallback(
+    session:ListenerSession,transcription:Transcription,
+)->SttAdaptationFallback|None:
+    """Record one privacy-safe session transition after a hint rejection."""
+
+    fallback=getattr(transcription,"adaptation_fallback",None)
+    if not isinstance(fallback,SttAdaptationFallback):
+        return None
+    if session.note_stt_adaptation_fallback():
+        log.warning(
+            "stt.adaptation_fallback status=%s code=%s",
+            fallback.status,fallback.code)
+        _record_workspace_metric(
+            category="voice",metric_name="stt_adaptation_fallback",
+            dimensions={
+                "status":"recovered",
+                "reason_code":STT_ADAPTATION_FALLBACK_REASON,
+                "event_kind":fallback.code,
+            },
+        )
+    return fallback
 
 
 async def _report_level_drop(
@@ -12651,11 +12707,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                    accepted_stt_context:CascadeTranscriptionContext|None=None,
                    voiced_level_db:float|None=None)->None:
     sender=sender or LockedSender(websocket); endpoint=session.endpoint_at or clock(); timings={}; generation=session.generation
+    stt_reason_code:str|None=None
     async def current_text(kind:str,**fields)->bool:
         if not session.is_current(turn_id,generation): return False
         fields.setdefault("generation",generation)
         if session.accepted_configuration_id is not None:
             fields.setdefault("configuration_id",session.accepted_configuration_id)
+        if kind=="turn.done" and stt_reason_code is not None:
+            fields.setdefault("reason_code",stt_reason_code)
         await sender.text(kind,**fields)
         _pilot_turn_event(session,turn_id,kind,fields); return True
 
@@ -12741,6 +12800,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         accepted_stt_context
         or cascade_transcription_context(session,audio_origin="ordinary")
     )
+    if transcription_context.google_v2_adaptation_disabled:
+        stt_reason_code=STT_ADAPTATION_FALLBACK_REASON
     stt_language=transcription_context.language
     stt_keyterms=transcription_context.keyterms
     if accepted_transcription is None:
@@ -12771,10 +12832,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     duration_ms=input_frames*20,level_db=voiced_level_db)
             return
         timings["stt"]=round((clock()-started)*1000)
+        if _note_stt_adaptation_fallback(session,transcription) is not None:
+            stt_reason_code=STT_ADAPTATION_FALLBACK_REASON
         session.note_stt_ok()
     else:
         transcription=accepted_transcription
         timings["stt"]=max(0,accepted_stt_ms or 0)
+        if _note_stt_adaptation_fallback(session,transcription) is not None:
+            stt_reason_code=STT_ADAPTATION_FALLBACK_REASON
     # Keep test/custom adapters written to the pre-Phase-3 text-only boundary
     # working in manual mode while production returns structured metadata.
     if isinstance(transcription,str):
@@ -15545,6 +15610,7 @@ async def voice_socket(websocket:WebSocket):
                         transcription=await asyncio.to_thread(
                             transcribe_cascade_audio,
                             item.result.utterance or b"",stt_context)
+                        _note_stt_adaptation_fallback(session,transcription)
                         if isinstance(transcription,str):
                             transcription=Transcription(transcription,None)
                     except Exception as exc:
