@@ -20,6 +20,8 @@ export interface RunSnapshot {
   micOn: boolean;
   /** The microphone was lost and not opened again: voice-core's words for it. */
   micProblem: string | null;
+  /** The microphone identity changed while this run was open. */
+  micNotice: { text: string; at: number } | null;
   /** The saved experiment the server bound this run to. */
   experimentId: string | null;
   /** The protocol the last start named (a refused start goes back to its start flow). */
@@ -37,6 +39,7 @@ const INITIAL: RunSnapshot = {
   audioHeld: false,
   micOn: false,
   micProblem: null,
+  micNotice: null,
   experimentId: null,
   startedProtocolId: null,
   startRefusal: null,

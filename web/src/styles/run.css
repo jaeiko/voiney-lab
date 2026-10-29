@@ -10,6 +10,44 @@
 
 body[data-run="on"] { background: var(--paper); }
 
+/* HOOD1: an intentionally sparse, high-contrast screen for reading through a
+   hood or glovebox window from 1.5–2 m. The minimums are assertions in the
+   four-device browser walk: step 72 px, timer 144 px, next words 32 px. */
+.run.run-far {
+  display: block; overflow: auto; background: var(--ink); color: var(--on-ink);
+}
+.run-far-main {
+  min-height: 100dvh; padding: clamp(24px, 4vw, 64px); display: grid;
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 0.7fr); align-items: center;
+  gap: clamp(20px, 4vh, 56px);
+}
+.run-far-step, .run-far-prompt { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.run-far-label { color: var(--on-ink); font-size: clamp(20px, 2vw, 32px); line-height: 1.25; font-weight: 600; }
+.run-far-step-text {
+  color: var(--on-ink); font-size: clamp(72px, 7vw, 112px); line-height: 1.15; font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.run-far-timer .run-timer {
+  width: 100%; padding: 0; border: 0; background: var(--ink); color: var(--on-ink);
+}
+.run-far-timer .run-timer-name { color: var(--on-ink); font-size: clamp(20px, 2vw, 32px); line-height: 1.25; }
+.run-far-timer .run-timer-digits { font-size: clamp(144px, 16vw, 224px); line-height: 0.95; }
+.run-far-timer .run-timer-words { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.run-far-timer .run-timer-bar { height: 10px; background: var(--ink-muted); }
+.run-far-timer .run-timer-bar span { background: var(--on-ink); }
+.run-far-prompt > p:not(.run-far-label) { color: var(--on-ink); font-size: clamp(32px, 3vw, 56px); line-height: 1.25; font-weight: 700; }
+.run-far-prompt .run-far-normal { font-size: clamp(20px, 2vw, 32px); font-weight: 600; }
+.run-far-mic-notice {
+  position: fixed; z-index: 2; top: 16px; right: 16px; max-width: calc(100vw - 32px);
+  padding: 12px 16px; border: 2px solid var(--on-ink); background: var(--ink); color: var(--on-ink);
+  font-size: clamp(20px, 2vw, 32px); line-height: 1.25; font-weight: 700;
+}
+.run-voice-hint { color: var(--ink-muted); font-size: var(--run-status); line-height: var(--run-status-line); }
+
+@media (max-width: 599px), (max-height: 699px) {
+  .run-far-main { grid-template-rows: auto auto auto; }
+}
+
 .run {
   position: relative; height: 100dvh; overflow: hidden; background: var(--paper);
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 32%);

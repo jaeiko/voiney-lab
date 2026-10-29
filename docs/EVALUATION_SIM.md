@@ -121,7 +121,9 @@ python scripts/sim/live.py --execute --limit 20 --stt-provider elevenlabs \
 ```
 
 기본은 Google TTS 한국어 Chirp 3 HD의 Charon·Kore, 속도 0.85·1·1.15,
-조용함과 팬 20 dB·원심분리기 10 dB·초음파 세척기 10 dB·말소리 모사 10 dB·키보드 5 dB다.
+조용함과 팬 20 dB·원심분리기 10 dB·초음파 세척기 10 dB·말소리 모사 10 dB·키보드 5 dB,
+클린벤치·생물안전작업대 팬 10 dB·흄후드 배기 10 dB·글러브박스 순환 펌프 10 dB·
+팬과 원심분리기 10 dB·팬과 옆 사람 말소리 모사 10 dB다.
 `--voices`, `--speeds`, `--conditions quiet,fan:20`으로 작은 묶음부터 시작한다.
 속도는 받은 소리를 로컬에서 재표본화하므로 **음높이도 바뀐다**. 공급자의 속도 조절 기능을
 검증했다는 뜻이 아니다. 모든 입력은 제품 PCM 변환으로 16 kHz mono PCM16이 되고,
@@ -130,6 +132,24 @@ python scripts/sim/live.py --execute --limit 20 --stt-provider elevenlabs \
 라우터는 기본으로 끈다. `--configured-models`는 셸의 라우터와 번역 역할을 사용하며,
 라우터 설정이 불완전하면 실행하지 않는다. 역할 공급자를 바꿔 재시도하지 않는다.
 필수 설정이 빠지면 음성 합성 전에 멈추고 필요한 설정 이름만 결과에 남긴다.
+
+작업 공간 소음에서 Chirp 3 잡음 제거 켬·끔과 마이크 거리 30 cm·1 m를 비교할 때는
+먼저 아래 호출 0회 계획을 보고, 사람이 같은 명령에 `--execute`를 더한다. 문장 1개 ×
+소음 5개 × 거리 2개 × 잡음 제거 2개 = 20조건이다. `--max-calls 80`과 `--max-usd 8`은
+입력 TTS·STT·응답 TTS·인증·재시도를 포함해 멈추는 상한이며 실제 청구액 약속은 아니다.
+
+```bash
+python scripts/sim/live.py --limit 1 \
+  --voices ko-KR-Chirp3-HD-Charon --speeds 1 \
+  --conditions cleanbench_bsc_fan:10,fume_hood_exhaust:10,glovebox_circulation_pump:10,fan_centrifuge:10,fan_adjacent_speech:10 \
+  --distances 30,100 --denoise on,off \
+  --max-calls 80 --max-usd 8 --output ~/reports/sim/hood-chirp3-denoise.json
+# 계획을 확인한 사람이 위 명령에 --execute를 더한다.
+```
+
+`--denoise on,off` 비교는 `google_cloud_v2`에서만 받는다. 각 행과 표에는 소음·지정 SNR,
+유효 SNR, 마이크 거리, 잡음 제거 켬·끔이 남고 비교기는 이 축이 다른 행을 같은 조건으로
+합치지 않는다.
 
 올린 프로토콜은 오프라인과 같은 `--catalog-copy`로 추가한다. 공개 고정 묶음 뒤에
 추가되므로 `--limit`만 주면 앞의 공개 문장만 선택될 수 있다. 오프라인 결과의
@@ -145,10 +165,14 @@ python scripts/sim/live.py --catalog-copy ~/reports/sim/catalog-snapshot \
 먼저 계획을 확인한 뒤 사람이 같은 명령에 `--execute`를 더해 실행한다.
 
 소음은 도구가 수식으로 만든 견본이며 별도의 외부 라이선스가 없다. 실제 팬·원심분리기·
-세척기 측정음이 아니며 말소리 모사도 알아들을 수 있는 옆 사람 발화가 아니다.
+세척기·클린벤치·생물안전작업대·흄후드·글러브박스에서 잰 소리가 아니며 말소리 모사도
+알아들을 수 있는 옆 사람 발화가 아니다.
 지정한 SNR로 섞은 뒤 포화가 없도록 신호와 소음을 함께 낮춘다. 소음 조건은 끝의
 1초에도 소음을 유지하고, 시험 입력 뒤에는 유한한 무음 종료 구간을 둔다.
-실제 방의 무한한 배경 소음·마이크 거리·방향·방언은 별도 사람 시험 대상이다.
+거리 축은 30 cm를 기준으로 목소리만 `30 / 거리(cm)`로 낮추는 자유음장 계획용 근사다.
+1 m에서는 같은 소음 바닥에서 유효 SNR이 약 10.46 dB 낮아진다. 창·후드의 반사와 차음,
+마이크 방향, Bluetooth 처리, 실제 방의 무한한 배경 소음·방언은 모사하지 않으며 별도
+사람 시험 대상이다.
 
 캐시는 `~/reports/sim/audio-cache/`의 해시 이름 WAV다. 같은 문장·목소리는 다시
 합성하지 않고 속도·소음은 로컬에서 바꾼다. 점수·캐시·원장은 모두 `~/reports/sim/` 아래만
@@ -204,7 +228,7 @@ python scripts/sim/diagnostics.py ~/voiney-lab/data/runtime/stt-diagnostics \
 설명이 모두 맞는지를 재는 지표는 아니다. 잘못 바뀐 상태·영어 원문 복사·단계 이름 겹침은
 이해와 따로 센다. 영어 원문은 연속 네 영어 단어 이상의 원문 일치를 탐지하는 보수적인
 검사이며, 두세 단어의 짧은 영어 조작 문장도 원문과 대조한다. 한국어 문장 속 시약·장비 이름 자체는 오류로 세지 않는다. 한국어 포함 여부도
-별도로 보고한다. 소음·갈래·프로토콜·목소리·속도별 표를 본다.
+별도로 보고한다. 소음·지정 SNR·유효 SNR·거리·잡음 제거·갈래·프로토콜·목소리·속도별 표를 본다.
 
 실측에서 STT 호출 경계에 도달한 입력만 CER·WER와 숫자·단위·숫자+단위·용어 정확도를 낸다. VAD에서 버린 입력은 STT 분모에서 제외하고 버림으로 센다. 공급자 실패는 실패 요청으로 남긴다. 실제 받아쓰기 응답이 하나도 없으면 STT 측정 완료로 표시하지 않는다. 기준 문장이 없는 소음만의
 입력은 STT 분모를 만들지 않는다. 버린 말의 이유 코드·미종료 턴·취소 이벤트와 강제 종료·여러 조각으로 나뉜 입력도 센다.

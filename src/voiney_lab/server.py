@@ -13981,6 +13981,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         speech_text=f"{plan.speech_text}{unsaved}",
                     )
                 await current_text("experimenter.settings",turn_id=turn_id,settings=saved)
+            if getattr(plan,"display_mode",None) in {"far","normal"}:
+                # HOOD1: this is a configuration-fenced instruction to the
+                # browser, not durable experimenter or workflow state.
+                await current_text(
+                    "screen.display_mode",turn_id=turn_id,mode=plan.display_mode)
             if (
                 plan.action is CuratedProtocolAction.RECORD_CORRECTION
                 and plan.record_fix is not None
@@ -14528,6 +14533,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.STOP:"protocol_stop",
             CuratedProtocolAction.INACTIVE:"inactive_session_guard",
             CuratedProtocolAction.AGENT_META:"agent_meta_information",
+            CuratedProtocolAction.DISPLAY_MODE:"display_mode_changed",
             CuratedProtocolAction.PAUSE:"workflow_paused",
             CuratedProtocolAction.RESUME:"workflow_resumed",
             CuratedProtocolAction.START_TIMER:"step_timer_started",

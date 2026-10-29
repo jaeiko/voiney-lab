@@ -132,7 +132,7 @@ function createPcm16Downsampler(sourceRate,targetRate){
 // button. Frames are sent exactly as before: while the session is active
 // and the socket is open (the worklet handler below is unchanged).
 const MIC_RECONNECT_DELAY_MS=800,MIC_AUTO_RECONNECT_GAP_MS=30000,MIC_DEVICE_STORAGE_KEY="voiney-lab.mic-device";
-let micReconnectTimer=null,micReconnecting=false,micAutoReconnectAt=0,micTrackWatched=null;
+let micReconnectTimer=null,micReconnecting=false,micAutoReconnectAt=0,micTrackWatched=null,micReportedIdentity=null;
 function readStoredMicDevice(){try{const raw=localStorage.getItem(MIC_DEVICE_STORAGE_KEY),value=raw?JSON.parse(raw):null;return value&&typeof value.deviceId==="string"&&value.deviceId?{deviceId:value.deviceId,label:typeof value.label==="string"?value.label:""}:null;}catch(_){return null;}}
 function storeMicDevice(value){try{if(value)localStorage.setItem(MIC_DEVICE_STORAGE_KEY,JSON.stringify(value));else localStorage.removeItem(MIC_DEVICE_STORAGE_KEY);}catch(_){}}
 async function listMicDevices(){try{const all=await navigator.mediaDevices?.enumerateDevices?.();return Array.isArray(all)?all.filter(item=>item.kind==="audioinput"&&item.deviceId&&!["default","communications"].includes(item.deviceId)):[];}catch(_){return [];}}
@@ -169,7 +169,10 @@ function reportMicSettings(stream,audioConstraints){
  // the speaker can be heard again as the researcher's words. Say so in the
  // body, with what to do, instead of only in the developer chip.
  const echoNotice=$("audio-echo-notice");if(echoNotice){echoNotice.hidden=actual.echoCancellation===true;echoNotice.textContent=actual.echoCancellation===true?"":"이 마이크는 에코 제거가 켜지지 않아 스피커 소리가 내 말로 들어갈 수 있습니다. 헤드폰을 쓰거나 스피커 소리를 줄이세요.";}
- const name=track?.label;setText("mic-device-status",name?`사용 중 · ${name}`:"");
+ const name=track?.label||"",identity=settings.deviceId?`device:${settings.deviceId}`:name?`label:${name}`:null;
+ const changed=Boolean(sessionActive&&identity&&micReportedIdentity&&identity!==micReportedIdentity);
+ if(identity)micReportedIdentity=identity;
+ setText("mic-device-status",name?(changed?`마이크가 바뀌었어요 · ${name} 사용 중`:`사용 중 · ${name}`):"");
  renderAgcStatus(actual.autoGainControl);
 }
 // Lane SP1 decision 2 (2026-10-10): the microphone's automatic gain control
@@ -367,7 +370,7 @@ globalThis.document?.addEventListener?.("visibilitychange",onAudioVisibilityChan
 async function closeAudio(){
  if(micReconnectTimer){clearTimeout(micReconnectTimer);micReconnectTimer=null;}
  if(micTrackWatched){try{micTrackWatched.removeEventListener?.("ended",onMicTrackEnded);}catch(_){}micTrackWatched=null;}
- hideMicRecovery();setText("mic-device-status","");
+ hideMicRecovery();setText("mic-device-status","");micReportedIdentity=null;
  if(micWorkletNode){
   try{micWorkletNode.port.onmessage=null;}catch(_){}
   try{micWorkletNode.disconnect();}catch(_){}
