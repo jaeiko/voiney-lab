@@ -74,7 +74,8 @@ EXPECTED_SCHEMA_SHA256 = "2533d564c54332d84ef3b7fdadb0d0010110fb0130a6772d907738
 #: 완료했어") says what it recorded first, and the first time in a session
 #: how to take it back.
 MOVED_TO_2_SAID = (
-    "1단계 완료. 2단계: 두 세척 용액을 준비합니다. 잘못이면 '취소'."
+    "1단계 완료로 기록했어요. 잘못 넘어갔으면 '방금 완료 취소'라고 해 주세요. "
+    "2단계로 이동했습니다. 안내를 화면에 표시했습니다."
 )
 OFF_TOPIC_SAID = "지금은 '현재 단계', '타이머 얼마', '다음 뭐야'처럼 말해 주세요."
 
