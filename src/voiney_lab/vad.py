@@ -49,9 +49,9 @@ log = logging.getLogger("voiney_lab.vad")
 #: listening detector takes the lower fifth of those voiced levels as the
 #: local room floor.  Only after a frame actually rises 6 dB over it does the
 #: relative gate arm; a steady wearer voice therefore cannot define and then
-#: cut itself off.  The PCM is unchanged; this only qualifies the VAD decision used for
-#: onset/end counting.  A fixed absolute dB line would discard a wearer who
-#: moved farther from the microphone.
+#: cut itself off.  The PCM is unchanged; this only qualifies the VAD decision
+#: used for onset/end counting.  A fixed absolute dB line would discard a
+#: wearer who moved farther from the microphone.
 ADAPTIVE_NOISE_WINDOW_FRAMES = 50
 ADAPTIVE_NOISE_MIN_VOICED_SHARE = 0.6
 ADAPTIVE_NOISE_FLOOR_PERCENTILE = 20.0
