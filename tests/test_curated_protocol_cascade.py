@@ -74,9 +74,9 @@ EXPECTED_SCHEMA_SHA256 = "2533d564c54332d84ef3b7fdadb0d0010110fb0130a6772d907738
 #: 완료했어") says what it recorded first, and the first time in a session
 #: how to take it back.
 MOVED_TO_2_SAID = (
-    "1단계 완료로 기록했어요. 잘못 넘어갔으면 '방금 완료 취소'라고 해 주세요. "
-    "2단계로 이동했습니다. 안내를 화면에 표시했습니다."
+    "1단계 완료. 2단계: 두 세척 용액을 준비합니다. 잘못이면 '취소'."
 )
+OFF_TOPIC_SAID = "지금은 '현재 단계', '타이머 얼마', '다음 뭐야'처럼 말해 주세요."
 
 class RecordingCompletions:
     def __init__(self, fact_id: str = "current_step", error: Exception | None = None):
@@ -711,7 +711,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
                 plan = session.plan(phrase, turn_id=turn_id, language="ko")
                 self.assertEqual(plan.action, CuratedProtocolAction.OFF_TOPIC)
                 self.assertFalse(plan.state_changed)
-                self.assertIn("진행 중인 실험 절차", plan.display_text)
+                self.assertEqual(plan.display_text, OFF_TOPIC_SAID)
                 self.assertNotIn("픽스처", plan.display_text)
                 self.assertEqual(session.current_index, 1)
                 self.assertTrue(session.active)
@@ -1276,7 +1276,7 @@ class CuratedProtocolSessionTests(unittest.TestCase):
         self.assertNotIn(unrelated, "\n".join(fact.text for fact in supported.facts))
         unsupported = session.plan("달의 질량은?", turn_id=2, language="ko")
         self.assertEqual(unsupported.action, CuratedProtocolAction.OFF_TOPIC)
-        self.assertIn("관련 실험실 자료", unsupported.response_text)
+        self.assertEqual(unsupported.response_text, OFF_TOPIC_SAID)
         self.assertNotIn("픽스처", unsupported.response_text)
         self.assertEqual(unsupported.display_text, unsupported.speech_text)
         self.assertEqual(
@@ -2901,7 +2901,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertTrue(off_session.curated_protocol_session.active)
         self.assertEqual(off_session.curated_protocol_session.current_index, 1)
-        self.assertIn("관련 실험실 자료", off_reply)
+        self.assertEqual(off_reply, OFF_TOPIC_SAID)
         self.assertNotIn("픽스처", off_reply)
         self.assertEqual(off_operation["operation"], "scope_reminder")
         self.assertEqual(off_client.chat.completions.calls, [])
@@ -3213,7 +3213,7 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         spoken = said_aloud(tts)
         llm.assert_not_called()
         self.assertEqual(len(client.chat.completions.calls), 0)
-        self.assertIn("관련 실험실 자료", spoken)
+        self.assertEqual(spoken, OFF_TOPIC_SAID)
         self.assertNotIn("픽스처", spoken)
         self.assertNotIn(self.fixture.steps[2].instruction_source_text, spoken)
         done = next(item for item in socket.text if item["type"] == "turn.done")

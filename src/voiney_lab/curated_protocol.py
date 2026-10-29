@@ -4718,6 +4718,18 @@ _TIMER_START_PATTERNS = (
     re.compile(r"^(?:start\s+(?:the\s+)?timer|timer\s+start)$", re.I),
 )
 _TIMER_QUERY_PATTERNS = (
+    # Lane VOICE2: short bench questions are combinations, not a sentence
+    # list. A timer/time word plus an amount/remaining word is enough; only
+    # fillers, particles and question endings may surround them, so "점심
+    # 타임" and a source-duration question keep their existing readings.
+    re.compile(
+        r"^(?:(?:어|음|아|그럼|그러면|그래서|근데|그런데)\s*[,~]?\s*)*"
+        r"(?=[^?？]*(?:타이머|타임|시간|몇\s*분))"
+        r"(?=[^?？]*(?:얼마나|얼마|몇|남))"
+        r"(?:타이머|타임|시간|몇|분|초|얼마나|얼마|남았|남아|남은|남았는지|남지|남나|"
+        r"더|좀|대충|대략|쯤|정도|이|가|은|는|을|를|이나|나|알려|말해|줘|주세요|"
+        r"야|이야|예요|에요|어|어요|지|죠|니|나요|습니까|요|\s|[?？.,~])+$"
+    ),
     re.compile(r"타이머.*(?:얼마나|몇\s*분|몇\s*초|남았|상태|어떻게)"),
     re.compile(r"^타임\s*(?:얼마나\s*남았어|몇\s*(?:분|초)\s*남았어|남은\s*시간\s*알려\s*(?:줘|주세요))$"),
     re.compile(r"^(?:몇\s*분\s*남았어|얼마나\s*남았어)\??$"),
@@ -5875,6 +5887,9 @@ _UNDO_COMPLETION = re.compile(
     r"(?:완료(?:한\s*(?:거|것|단계))?(?:를|을)?\s*)취소(?:해|하자|할게|할래)?"
     rf"{_REVERT_POLITE}$"
 )
+_BARE_COMPLETION_UNDO = re.compile(
+    r"^(?:방금\s*)?취소(?:해|해줘|해\s*줘|해주세요|해요)?$"
+)
 
 
 @dataclass(frozen=True)
@@ -6326,6 +6341,11 @@ _CURRENT_INFORMATION_PATTERNS = (
     re.compile(r"^(?:(?:이\s*)?실험에서\s*)?(?:지금|현재)\s*단계(?:는|가)?\s*(?:뭐야|무엇|어디야)$"),
     re.compile(
         r"^(?:지금|현재)\s*(?:뭐|무엇을?)\s*(?:해야|할)\s*(?:돼|되|하나요|합니까|해)$"
+    ),
+    re.compile(
+        r"^(?:(?:어|음|아|그럼|그러면|그래서)\s*[,~]?\s*)*"
+        r"(?:지금|현재)\s*(?:몇\s*단계(?:야|예요|에요|지|죠|니|인가|인가요)?|"
+        r"단계(?:는|가)?\s*몇(?:이야|이에요|예요|지|죠|이니|인가|인가요)?)$"
     ),
 )
 _OPERATIONAL_DEVIATION_PATTERNS = (
@@ -15202,6 +15222,18 @@ class CuratedProtocolSession:
         if self._pause_state == "paused" or self._experiment_ended():
             return None
         revert = step_revert_request(transcript)
+        if (
+            revert is None
+            and self.active
+            and self.current_index > 0
+            and _BARE_COMPLETION_UNDO.fullmatch(command_key)
+            and self.fixture.steps[self.current_index - 1].step_id
+            in self._completed_step_ids
+        ):
+            # Lane VOICE2: the short completion reply teaches "취소". It is
+            # accepted only where the immediately preceding step is recorded
+            # complete, and it keeps the existing named confirmation gate.
+            revert = StepRevertRequest("undo_completion", None)
         if revert is not None:
             return self._plan_step_revert_request(
                 revert, command_key=command_key, turn_id=turn_id, language=language,
@@ -18378,6 +18410,23 @@ class CuratedProtocolSession:
             self._forward_hint_said = True
             words += " 잘못 넘어갔으면 '방금 완료 취소'라고 해 주세요."
         return words
+
+    def _short_forward_words(self, completed_label: str) -> str:
+        """The direct "다음" reply: completion, new source step, undo word."""
+
+        step = self.fixture.steps[self.current_index]
+        reading = self._localized_fact(step.step_id, "current_step")
+        summary = (
+            _without_step_prefix(step.source_label, " ".join(reading.split()))
+            if reading else "화면에서 확인해 주세요."
+        )
+        summary = re.split(r"(?<=[.!?。])\s+", summary.strip(), maxsplit=1)[0]
+        if summary and summary[-1] not in ".!?。":
+            summary += "."
+        return (
+            f"{completed_label}단계 완료. {step.source_label}단계: {summary} "
+            "잘못이면 '취소'."
+        )
 
     def _peek_advance_refusal(self) -> str | None:
         """Would a forward move be refused right now, without moving?
@@ -23456,9 +23505,12 @@ class CuratedProtocolSession:
                 if rounds_notice and language == "ko":
                     control_text = f"{rounds_notice}{control_text}"
                 if forward_said and intent.reported_completion and language == "ko":
-                    # Lane VX, decision 1: nothing was asked, so what was
-                    # recorded is said first.
-                    control_text = f"{self._forward_record_words(completed_label)} {control_text}"
+                    # Lane VOICE2: the direct "다음" response is one short
+                    # progress line. The next-step summary is only a checked
+                    # stored Korean reading; when none exists, the screen is
+                    # named instead of translating or inventing one here.
+                    self._forward_hint_said = True
+                    control_text = self._short_forward_words(completed_label)
                 plan = self._arrival_plan(
                     control_text, language=language, intent_kind=intent.intent_kind,
                     requested_transition=intent.requested_transition,
@@ -24328,8 +24380,7 @@ class CuratedProtocolSession:
                     f"và tài liệu liên quan. Quy trình vẫn ở bước {step.source_label}."
                 ),
                 "ko": (
-                    "현재 진행 중인 실험 절차와 관련 실험실 "
-                    f"자료에 대한 질문을 도와드릴 수 있어요. 현재 {step.source_label}단계를 유지합니다."
+                    "지금은 '현재 단계', '타이머 얼마', '다음 뭐야'처럼 말해 주세요."
                 ),
                 }.get(language, f"현재 프로토콜은 {step.source_label}단계를 유지합니다.")
             plan = CuratedProtocolTurnPlan(
