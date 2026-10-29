@@ -214,6 +214,8 @@ adaptation이 실린 요청의 HTTP 400·404만 같은 OAuth 토큰·공급자·
 
 `VOINEY_LAB_GOOGLE_STT_V2_ADAPTATION_ENABLED`를 추가하고 기본 false로 두어 첫 턴부터 힌트를 빼 한 번 실패한 뒤 다시 보내는 지연을 피한다. 사람이 true로 켠 경우에는 STT4의 같은 공급자·모델·지역 400/404 제거 재요청과 세션 기억을 그대로 유지한다. 진단 스크립트는 세 시나리오에서 이 설정을 강제로 켜거나 끄고 상태·글자 수·응답 시간만 출력한다. 근거: [Chirp 3 기능·지역](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3), [모델·지역·언어 지원](https://docs.cloud.google.com/speech-to-text/docs/speech-to-text-supported-languages), [REST V2 설정](https://docs.cloud.google.com/speech-to-text/docs/reference/rest/v2/projects.locations.recognizers).
 
+같은 줄에서 일반 턴과 끼어들기의 STT 힌트 목록을 하나로 유지한다. 고정 한국어 명령 9개를 먼저, revision에 저장된 번역 용어집에서 `ProtocolVocabulary` 검사를 통과한 한국어 이름을 다음, 기존 원문 기술용어를 마지막으로 두고 전체 100개·항목 50자 이하로 자른다. 번역 문장·수량·새 용어를 만들지 않으며, 새 명령 힌트는 용어 나열 거절 검사에서 기술용어로 세지 않는다. Google V2 기본 off에서도 다른 힌트 지원 공급자와 사람이 V2를 켠 경우에 같은 목록을 쓴다.
+
 - 2026-10-27 · 줄 RX3: 새 화면에 기록 목록·상세·기존 서버 노트 투영과 내려받기를 연결한다. 목록에는 소유자가 저장한 평점 숫자만 추가한다. 기본 전환은 opt-in 설정·빌드가 있을 때 기존 주소와 manifest에 적용하고, `?legacy=1`로 이전 화면을 유지한다. 기능 비교는 `docs/UI_PARITY.md`; 묶음 앱 전환과 실제 설치 확인 및 기본값 전환은 사람·APP 줄의 후속 조건이다. 병합 대기 모드로 PR·검토·측정까지만 진행한다.
 - 2026-10-27 · 줄 KO3: 번역 지침 판을 v5로 올린다. 흔한 실험 낱말·표기 통일·명시적 한국어 단위 동등 표(숫자 표기 그대로)·짧은 목적 답, TTS 직전 수량 읽기, 시간 초과 묶음 반분 재시도와 루프 안 클라이언트 종료를 적용한다. 사람이 확인한 번역은 보존하며 실제 재번역은 사람이 호출 상한을 정해 돌린다.
 
