@@ -256,6 +256,36 @@ python scripts/sim/diagnostics.py ~/voiney-lab/data/runtime/stt-diagnostics \
 다른 모델 역할은 호출하지 않는다. 결과에는 공급자·모델·추론 수준·출력 한도·시간
 제한을 남기며, 일반 비교는 이 설정이 다르면 거절한다.
 
+비용을 먼저 줄일 때는 아래 **1단계**만 실행한다. 규칙 개발용·시험용 두 결과를 먼저
+만들고, 첫 유료 조건은 기존 사람 20문장 근거와 직접 이어지는 OpenAI
+`gpt-6-luna`·`none`·2.5초의 **개발용만** 실행한다. 이 조건의 호출 상한은 540회,
+예약 상한은 $16.20, 아래의 확인하지 않은 토큰 단가 가정에서는 $14.04 어림이다.
+잘못 바뀐 상태가 1개라도 있거나, 열린 질문 갈래가 규칙보다 좋아지지 않거나, 공급자
+턴 첫 소리 p95가 3초를 넘으면 여기서 멈추고 시험용·나머지 행렬을 실행하지 않는다.
+이 순서는 모델 채택이 아니라 다음 비용을 써도 되는지 확인하는 게이트다.
+
+```bash
+# 1) 외부 호출 0회: 규칙 두 분할
+python scripts/sim/run.py --split development --fail-on-wrong-state \
+  --translations data/fixtures/evaluation/sim/stored_korean.json \
+  --output ~/reports/sim/model1-rules-development.json
+python scripts/sim/run.py --split holdout --fail-on-wrong-state \
+  --translations data/fixtures/evaluation/sim/stored_korean.json \
+  --output ~/reports/sim/model1-rules-holdout.json
+
+# 2) 사람이 계획을 확인한 뒤에만 --execute: 라우터 한 조건, 개발용만
+VOINEY_LAB_LLM_ROUTER_ENABLED=true VOINEY_LAB_ROUTER_FIRST=false \
+VOINEY_LAB_ROUTER_PROVIDER=openai VOINEY_LAB_ROUTER_MODEL=gpt-6-luna \
+VOINEY_LAB_ROUTER_REASONING=none VOINEY_LAB_LLM_ROUTER_TIMEOUT_SECONDS=2.5 \
+python scripts/sim/run.py --configured-router --execute --split development \
+  --max-calls 540 --max-usd 16.20 --reserve-usd-per-request 0.03 \
+  --router-input-rate 5 --router-output-rate 15 --fail-on-wrong-state \
+  --translations data/fixtures/evaluation/sim/stored_korean.json \
+  --output ~/reports/sim/model1-openai-none-2p5-development.json
+```
+
+1단계가 위 중단 기준을 모두 통과한 뒤에만 아래 전체 행렬을 검토한다.
+
 ```bash
 python scripts/sim/run.py --configured-router --split development \
   --max-calls 540 --max-usd 16.20 --reserve-usd-per-request 0.03 \
