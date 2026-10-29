@@ -10741,7 +10741,11 @@ def _record_experiment_report_plan(
             step_id=notebook.get("step_id") or step_id
             step_label=str(notebook.get("step_label"))
     elif notebook.get("kind")=="fix":
-        wanted="purpose_recorded" if notebook.get("target")=="purpose" else "result_recorded"
+        wanted={
+            "purpose":"purpose_recorded",
+            "result":"result_recorded",
+            "observation":"observation",
+        }.get(str(notebook.get("target") or ""),"result_recorded")
         amended=next(
             (item for item in reversed(report.get("events") or ()) if item.get("event_type")==wanted),
             None,
@@ -10922,6 +10926,10 @@ def _record_experiment_report_plan(
             category=category,
             severity=("unknown" if plan.reported_anomaly else None),
             confirmation_state=(
+                str(notebook.get("confirmation_state"))
+                if notebook.get("confirmation_state") else
+                "experimenter_confirmed"
+                if (getattr(plan,"note_record",None) or {}).get("experimenter_confirmed") else
                 "user_reported"
                 if plan.reported_anomaly or plan.reported_observation else None
             ),

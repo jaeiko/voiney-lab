@@ -76,6 +76,18 @@ class SafeRecordVoiceBoundaryTests(VoiceNotesHarness, unittest.TestCase):
         )
         self.assertEqual(observation["confirmation_state"], "experimenter_confirmed")
 
+    def test_numeric_observation_can_be_corrected_before_any_value_is_saved(self) -> None:
+        socket = self.turns(
+            "프로토콜 시작해줘", "넘어가", "기록해 줘: 1.7 100",
+            "정정", "1.8 100",
+        )
+        observations = [
+            event for event in self.report()["events"] if event["event_type"] == "observation"
+        ]
+        self.assertEqual([event["user_wording"] for event in observations], ["1.8 100"])
+        self.assertEqual(observations[0]["confirmation_state"], "experimenter_confirmed")
+        self.assertIn("고칠 값을 말해 주세요", shown(socket)[4])
+
 
 class SafeRecordReplayTests(_Voice):
     def test_diagnostic_transcripts_do_not_write_before_confirmation(self) -> None:
@@ -100,4 +112,3 @@ class SafeRecordReplayTests(_Voice):
         self.assertEqual(self.session.current_index, 1)
         timer = self.say("타이머 시작해 줘")
         self.assertEqual(timer.action.value, "start_timer")
-

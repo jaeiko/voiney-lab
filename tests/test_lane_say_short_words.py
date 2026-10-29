@@ -141,6 +141,10 @@ class PurposeQuestionTests(_Voice):
             with self.subTest(words=words):
                 self.open_purpose()
                 plan = self.say(words)
+                if words == "연습":
+                    self.assertEqual(plan.intent_kind, "notebook_confirmation_required")
+                    self.assertIsNone(plan.notebook_record)
+                    plan = self.say("네")
                 self.assertEqual(plan.notebook_record["kind"], "purpose")
                 self.assertEqual(plan.notebook_record["text"], words)
                 self.assertEqual(self.recorded(), ["purpose_recorded"])

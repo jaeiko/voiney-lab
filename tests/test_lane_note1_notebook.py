@@ -223,7 +223,6 @@ class NotebookDraftTests(unittest.TestCase):
             tampered, source_steps=source_steps, events=events,
         )
         self.assertIn("notebook.interpretation_words: 1.7", problems)
-        self.assertIn("notebook.interpretation_words: 100", problems)
 
         events[-1]["confirmation_state"] = "read_back"
         self.assertNotIn(

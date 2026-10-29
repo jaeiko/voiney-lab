@@ -333,6 +333,17 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   `run_value_reverted`, `session_started.run_changes`) feeds the notebook's
   "원문 → 실제"; the workspace events feed a recovery; "지난번처럼" reads the
   owner's last record (`ExperimentReportStore.last_run_values`).
+- Record transcript gate (lane SAFE1): purpose/result answers are echoed
+  exactly after persistence and accept an immediate append-only correction.
+  One- or two-syllable answers and contextless numbers wait for one explicit
+  confirmation. Contextless values such as a bare `측정값 37 °C` also wait
+  before persistence; a value with a named property or sample keeps the
+  normal save-and-read-back path. A pending value cannot move a step,
+  complete work, or start a timer.
+  Report events carry `read_back`, `experimenter_confirmed`, or correction
+  evidence, and notebook number provenance admits record prose only with one
+  of those human-intent states (ordinary observations retain
+  `user_reported`).
 
 ### Page evidence segments and known analysis limits
 

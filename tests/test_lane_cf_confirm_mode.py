@@ -139,8 +139,14 @@ class NoteByModeTests(unittest.TestCase):
         plan = turns.say("실험노트에 적어 줘, 0.5 mL")
         self.assertIsNone(plan.note_record)
         self.assertFalse(plan.reported_observation)
-        self.assertEqual(plan.display_text, "0.5 mL로 기록할까요? 맞으면 '네'라고 해 주세요.")
-        self.assertEqual(plan.speech_text, "영 점 오 밀리리터로 기록할까요? 맞으면 '네'라고 해 주세요.")
+        self.assertEqual(
+            plan.display_text,
+            "0.5 mL로 기록할까요? 맞으면 '네', 아니면 '정정'이라고 말해 주세요.",
+        )
+        self.assertEqual(
+            plan.speech_text,
+            "영 점 오 밀리리터로 기록할까요? 맞으면 '네', 아니면 '정정'이라고 말해 주세요.",
+        )
         self.assertEqual(turns.session.last_front_rule, "note_record")
         plan = turns.say("네")
         self.assertEqual(turns.session.last_front_rule, "yes_no_open_question")
@@ -242,7 +248,10 @@ class ServedModeTests(VoiceNotesHarness, unittest.TestCase):
             "프로토콜 시작해줘", "1단계 완료했어", "실험노트에 적어 줘, 0.5 mL", "네",
             "실험노트에 적어 줘, 7 mL", "아니")
         replies = shown(socket)
-        self.assertEqual(replies[3], "0.5 mL로 기록할까요? 맞으면 '네'라고 해 주세요.")
+        self.assertEqual(
+            replies[3],
+            "0.5 mL로 기록할까요? 맞으면 '네', 아니면 '정정'이라고 말해 주세요.",
+        )
         self.assertEqual(replies[4], "0.5 mL로 기록했어요.")
         self.assertEqual(replies[6], "기록하지 않았어요. 값을 다시 말씀해 주세요.")
         self.assertEqual(self.notes(), [("measurement", "0.5 mL")])

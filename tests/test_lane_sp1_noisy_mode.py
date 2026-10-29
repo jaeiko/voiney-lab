@@ -128,7 +128,10 @@ class NoisyModeRulesTests(unittest.TestCase):
         session = self.session(noisy=True)
         plan = self.say(session, "메모해 줘 밴드가 흐릿해")
         self.assertEqual(plan.intent_kind, "note_confirmation_required")
-        self.assertEqual(plan.display_text, "'밴드가 흐릿해' 이렇게 기록할까요? 맞으면 '네'라고 해 주세요.")
+        self.assertEqual(
+            plan.display_text,
+            "'밴드가 흐릿해' 이렇게 기록할까요? 맞으면 '네', 아니면 '정정'이라고 말해 주세요.",
+        )
         self.assertIsNone(plan.note_record)
         plan = self.say(session, "네")
         self.assertEqual(plan.action.value, "record_observation")
