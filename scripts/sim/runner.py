@@ -103,6 +103,14 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         workflow.active = True
         workflow._workflow_status = 'running'
         workflow.current_index = case.index
+        if case.setup == 'completion_pending':
+            workflow.confirm_mode = 'confirm'
+            primed = workflow.front_plan(
+                '다음', turn_id=0, language='ko', configuration_id=1,
+                generation=1,
+            )
+            if primed is None or workflow.pending_completion_confirmation is None:
+                raise AssertionError('completion_pending setup did not open the real gate')
         if case.setup == 'paused':
             workflow.pause_workflow(now=time.time()-5)
         if case.setup in ('timer_running', 'timer_paused'):

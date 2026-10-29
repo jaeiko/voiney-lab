@@ -3850,6 +3850,11 @@ def _public_protocol_catalog_entries(
     """
 
     config=server_config()
+    include_development=(
+        not tenant_scoped
+        or not _auth_settings().accounts
+        or _account_is_admin()
+    )
     visible=_visible_catalog_resource_ids() if tenant_scoped else None
     # A development fixture that does not fit takes only itself out of the
     # list (lane PL, stage 2b; lane BT section 6 item 1): one that cannot be
@@ -3870,6 +3875,8 @@ def _public_protocol_catalog_entries(
         entries.append(_candidate_catalog_dict(candidate))
     settings=_protocol_store_settings()
     if not settings.enabled:
+        if not include_development:
+            entries=[item for item in entries if item.get("development_only") is not True]
         return entries,settings,candidate_protocol_id
     catalog,store=_open_protocol_catalog()
     try:
@@ -3897,6 +3904,8 @@ def _public_protocol_catalog_entries(
             entries.append(public)
     finally:
         store.close()
+    if not include_development:
+        entries=[item for item in entries if item.get("development_only") is not True]
     return entries,settings,candidate_protocol_id
 
 
@@ -9147,6 +9156,30 @@ def fixture_safety_notices(fixture:CuratedProtocolFixture)->list[dict[str,Any]]:
     return items
 
 
+def _screen_translation_status(fixture:Any,step:Any)->str|None:
+    """Presentation status for one step sentence; never a workflow verdict."""
+
+    if step is None:
+        return None
+    source_text=getattr(step,"instruction_source_text",None)
+    if not isinstance(source_text,str) or not source_text.strip():
+        return None
+    if is_korean(source_text) or fixture.localized_fact(
+            step.step_id,"current_step"):
+        return "available"
+    fact_key=f"{step.step_id}/current_step"
+    stored=getattr(fixture,"translation_failures",None) or {}
+    try:
+        spot=_spot_refusals(translation_revision_key(fixture))
+    except Exception:  # noqa: BLE001 - a fixture without ids has no spot status
+        spot={}
+    if fact_key in stored or fact_key in spot:
+        return "rejected"
+    if _translation_pending(fixture) or _screen_translating(fixture):
+        return "pending"
+    return "missing"
+
+
 def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     """What the page draws beside a fixture state: the safety list, the round, the open question.
 
@@ -9198,21 +9231,29 @@ def curated_screen_fields(curated:CuratedProtocolSession)->dict[str,Any]:
     candidates=getattr(curated,"clarify_candidates",None)
     readback=getattr(curated,"readback_values",None)
     deviation=getattr(curated,"record_deviation",None)
+    current_step=(steps[curated.current_index] if (
+        (curated.active or curated.workflow_status in {"preview","ready"})
+        and 0<=curated.current_index<len(steps)) else None)
+    next_step=(steps[curated.current_index+1] if (
+        curated.active and 0<=curated.current_index<len(steps)-1) else None)
     return {
         "source_basis":basis() if callable(basis) else None,
         "safety_items":items,"translation_source":source,
         # Lane KO2: also while the screen's sentences are read in place.
         "translation_pending":_translation_pending(fixture) or _screen_translating(fixture),
+        "translation_status":_screen_translation_status(fixture,current_step),
         "repeat_round":round_status() if callable(round_status) else None,
         "open_question":open_question() if callable(open_question) else None,
         # Lane WV, decision 1: the step's own figures, cut from the uploaded
         # PDF -- the list once its pages are cut, None while they are being.
         "source_figures":_screen_source_figures(curated),
         "next_step_sentence":next_sentence("ko") if callable(next_sentence) else None,
+        "next_step_label":next_step.source_label if next_step is not None else None,
         # Lane KO2, decision 3: the next step line is the source for want of
         # Korean ("번역 준비 중" beside it).
         "next_step_translation_missing":(
             bool(next_missing("ko")) if callable(next_missing) else False),
+        "next_step_translation_status":_screen_translation_status(fixture,next_step),
         "confirm_question":confirm() if callable(confirm) else None,
         "clarify_candidates":candidates() if callable(candidates) else [],
         "readback_values":readback() if callable(readback) else [],
@@ -9854,6 +9895,10 @@ async def _apply_reader_translation(
 #: stored machine row that was refused cannot be replaced in the store
 #: (append-only), so these live here. Bounded by revisions.
 _SPOT_READINGS:"collections.OrderedDict[str,dict[str,str]]"=collections.OrderedDict()
+#: Sentence keys whose generated Korean failed the mechanical check, with
+#: the privacy-safe reason code. The source remains on screen. Bounded with
+#: the accepted spot readings and never used as workflow state.
+_SPOT_REFUSED:"collections.OrderedDict[str,dict[str,str]]"=collections.OrderedDict()
 #: Sentence keys asked for already, by translation key, with when they may be
 #: asked for again: never after a reading came back (accepted or refused),
 #: ``SPOT_RETRY_AFTER_SECONDS`` after a provider failure.
@@ -9877,6 +9922,11 @@ def _spot_readings(key:str)->dict[str,str]:
         return dict(_SPOT_READINGS.get(key,{}))
 
 
+def _spot_refusals(key:str)->dict[str,str]:
+    with _SPOT_LOCK:
+        return dict(_SPOT_REFUSED.get(key,{}))
+
+
 def _spot_attempt(key:str,sentence:str,now:float)->bool:
     """Mark one sentence as asked for; False when it may not be asked for now."""
 
@@ -9898,9 +9948,26 @@ def _spot_keep(key:str,sentence:str,korean:str)->None:
         readings=_SPOT_READINGS.setdefault(key,{})
         _SPOT_READINGS.move_to_end(key)
         readings[sentence]=korean
+        refused=_SPOT_REFUSED.get(key)
+        if refused is not None:
+            refused.pop(sentence,None)
+            if not refused:
+                _SPOT_REFUSED.pop(key,None)
         while len(_SPOT_READINGS)>SPOT_READINGS_MAX_REVISIONS:
             dropped,_=_SPOT_READINGS.popitem(last=False)
             _SPOT_ATTEMPTED.pop(dropped,None)
+            _SPOT_REFUSED.pop(dropped,None)
+
+
+def _spot_refuse(key:str,sentence:str,reason:str)->None:
+    with _SPOT_LOCK:
+        refused=_SPOT_REFUSED.setdefault(key,{})
+        _SPOT_REFUSED.move_to_end(key)
+        refused[sentence]=reason
+        while len(_SPOT_REFUSED)>SPOT_READINGS_MAX_REVISIONS:
+            dropped,_=_SPOT_REFUSED.popitem(last=False)
+            _SPOT_ATTEMPTED.pop(dropped,None)
+            _SPOT_READINGS.pop(dropped,None)
 
 
 async def _request_spot_translation(session:ListenerSession,quote:Any)->str:
@@ -10031,6 +10098,7 @@ async def _translate_in_place(
                 readings[quote.key]=answer
                 statuses.append("accepted")
             else:
+                _spot_refuse(key,quote.key,issue)
                 statuses.append(f"rejected_{issue}")
     return {quote.key:readings[quote.key] for quote in quotes if quote.key in readings},len(asked),statuses
 
@@ -10057,9 +10125,13 @@ def _put_readings(curated:CuratedProtocolSession,readings:Mapping[str,str])->boo
     machine.update(added)
     versions=dict(getattr(fixture,"translation_versions",None) or {})
     versions.update({quote_key:TRANSLATION_STYLE_VERSION for quote_key in added})
+    failures=dict(getattr(fixture,"translation_failures",None) or {})
+    for quote_key in added:
+        failures.pop(quote_key,None)
     vocabulary=curated._vocabulary_cache
     curated.fixture=replace(
-        fixture,machine_localizations=machine,translation_versions=versions)
+        fixture,machine_localizations=machine,translation_versions=versions,
+        translation_failures=failures or None)
     if vocabulary is not None and vocabulary[0] is fixture:
         # Presentation only: the protocol's vocabulary is the same.
         curated._vocabulary_cache=(curated.fixture,vocabulary[1])
@@ -10087,6 +10159,7 @@ async def _korean_for_screen(session:ListenerSession,curated:CuratedProtocolSess
         return False
     fixture=curated.fixture
     key=translation_revision_key(fixture)
+    refused_before=_spot_refusals(key)
     # The turn's clock (``run_turn``): one base for the retry times kept in
     # ``_SPOT_ATTEMPTED``.
     started=time.perf_counter()
@@ -10113,7 +10186,8 @@ async def _korean_for_screen(session:ListenerSession,curated:CuratedProtocolSess
         readings={
             quote_key:text for quote_key,text in readings.items()
             if quote_key not in (getattr(fixture_now,"machine_localizations",None) or {})}
-    return _put_readings(curated,readings)
+    readings_changed=_put_readings(curated,readings)
+    return readings_changed or _spot_refusals(key)!=refused_before
 
 
 def _screen_translating(fixture:Any)->bool:

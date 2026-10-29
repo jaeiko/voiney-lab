@@ -335,6 +335,10 @@ class CuratedProtocolFixture:
     #: 1 and 6; ``protocol_translation.STYLE_VERSION``, 0 before versions
     #: were kept). Presentation only; a key it lacks is of no known version.
     translation_versions: dict[str, int] | None = None
+    #: "<step_id>/<fact_id>" -> today's mechanical-check refusal reason for
+    #: a stored translation that has no passing reading to show. Presentation
+    #: only: the source remains authoritative and workflow state is untouched.
+    translation_failures: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not self.revision_id:
@@ -3303,6 +3307,9 @@ _MIXED_MOVE_NO_CLAIM = re.compile(
 _LEADING_FILLERS = re.compile(
     r"^(?:(?:어+|음+|아+|흠+|에|저기|저|그|그러니까|그니까|있잖아)(?=[\s…,.~]|$)[\s…,.~]*)+"
 )
+_TRAILING_FILLERS = re.compile(
+    r"(?:(?:[?？.,!~…]\s*|\s+)(?:어+|음+|아+|흠+))+\s*$"
+)
 #: The step said not to be done ("덜 됐는데", "아직", "안 끝났어"): decision
 #: D7's (``llm_router._NOT_DONE``) -- the move is refused with the step's
 #: completion criterion, not asked about.
@@ -3311,6 +3318,12 @@ _MIXED_MOVE_NOT_DONE = re.compile(r"덜|아직|안\s*(?:됐|되었|돼|끝났|�
 
 def _without_leading_fillers(transcript: str) -> str:
     return _LEADING_FILLERS.sub("", " ".join(str(transcript or "").split())).strip()
+
+
+def _without_trailing_fillers(transcript: str) -> str:
+    """Drop a separated final hesitation, without changing a word ending in 어."""
+
+    return _TRAILING_FILLERS.sub("", " ".join(str(transcript or "").split())).strip()
 
 
 def mixed_move_claim(transcript: str) -> str | None:
@@ -8106,7 +8119,7 @@ def classify_curated_control_intent(
             language=language,
             normalized_transcript=key,
         )
-    if any(pattern.search(key) for pattern in _TIMER_QUERY_PATTERNS):
+    if any(pattern.search(_without_trailing_fillers(key)) for pattern in _TIMER_QUERY_PATTERNS):
         return CuratedControlIntent(
             intent_kind="step_timer_status",
             action=CuratedProtocolAction.TIMER_STATUS,
@@ -19921,7 +19934,9 @@ class CuratedProtocolSession:
                 self._replay[turn_id] = planned
                 return planned
             key = _utterance_key(transcript)
-            if (any(pattern.search(key) for pattern in _TIMER_QUERY_PATTERNS)
+            if (any(
+                    pattern.search(_without_trailing_fillers(key))
+                    for pattern in _TIMER_QUERY_PATTERNS)
                     and not any(pattern.search(key) for pattern in _TIMER_START_PATTERNS)):
                 self._last_front_rule = "timer_remaining"
                 planned = self._words_plan(
@@ -20688,6 +20703,31 @@ class CuratedProtocolSession:
                 language=language,
                 normalized_transcript=normalized_confirmation,
             )
+        elif (
+            pending_valid
+            and language == "ko"
+            and transcript_quality is None
+            and forward_step_request(_without_leading_fillers(transcript))
+        ):
+            # Voice1 (2026-10-29): the completion gate already owns this
+            # turn. Repeating a move word is not evidence that the step was
+            # completed; keep the same gate open and name the answer that can
+            # authorize the move. Only a later affirmative reaches NEXT.
+            self._last_front_rule = "yes_no_open_question"
+            plan = self._ask_open_question_again(
+                "completion", turn_id=turn_id, generation=generation,
+                language=language,
+            )
+            words = "완료했으면 ‘네’라고 말해 주세요. 아직이면 ‘아니요’라고 말해 주세요."
+            plan = replace(
+                plan,
+                display_text=words,
+                speech_text=words,
+                primary_text=words,
+                intent_kind="pending_completion_reasked",
+            )
+            self._replay[turn_id] = plan
+            return plan
         elif observation_pending_valid and (
             observed := _observation_predicate(
                 self._endpoint_words_for_label(observation_pending.step_label), transcript

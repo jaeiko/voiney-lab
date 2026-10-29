@@ -64,6 +64,7 @@ def _plan(session: CuratedProtocolSession, words: str, turn_id: int = 2):
 def _clear_spot_readings() -> None:
     server_module._SPOT_READINGS.clear()
     server_module._SPOT_ATTEMPTED.clear()
+    getattr(server_module, "_SPOT_REFUSED", {}).clear()
 
 
 class SessionReadingTests(unittest.TestCase):

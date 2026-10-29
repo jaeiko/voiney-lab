@@ -29,6 +29,32 @@ def test_real_server_read_only_and_completion_confirmation():
     assert score_case(cases['current'], read)['wrong_state'] is False
 
 
+def test_voice1_development_regressions_keep_confirmation_and_timer_queries_read_only():
+    from scripts.sim.corpus import generate_development_cases
+
+    for protocol in load_corpus():
+        cases = generate_development_cases(protocol)
+        repeated = next(case for case in cases if case.family == 'completion_reask')
+        assert repeated.text == '다음'
+        assert repeated.setup == 'completion_pending'
+        result = asyncio.run(run_case(protocol, repeated))
+        assert result['action'] == 'clarify_completion'
+        assert result['intent_kind'] == 'pending_completion_reasked'
+        assert result['step_after'] == result['step_before']
+        assert score_case(repeated, result)['wrong_state'] is False
+
+        timer_cases = [case for case in cases if case.family == 'timer_remaining']
+        assert {case.text for case in timer_cases} == {
+            '타임 얼마나 남았어? 어',
+            '시간 얼마나 남았어 음',
+        }
+        for case in timer_cases:
+            result = asyncio.run(run_case(protocol, case))
+            assert result['action'] == 'timer_status'
+            assert result['changed_fields'] == []
+            assert score_case(case, result)['wrong_state'] is False
+
+
 def test_existing_mixed_command_must_stage_completion_confirmation():
     protocol=load_corpus()[0]
     case=next(c for c in generate_cases(protocol) if c.family=='mixed' and '왜' in c.text)

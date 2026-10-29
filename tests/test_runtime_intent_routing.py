@@ -182,6 +182,9 @@ class RuntimeIntentRoutingTests(unittest.TestCase):
             "타임 얼마나 남았어?",
             "타임 몇 분 남았어?",
             "타임 남은 시간 알려줘",
+            "타이머 얼마나 남았어? 음",
+            "타임 얼마나 남았어? 어",
+            "시간 얼마나 남았어 음",
             "timer status",
             "how much time is left",
         ):

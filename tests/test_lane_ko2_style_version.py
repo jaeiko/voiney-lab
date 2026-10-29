@@ -134,6 +134,20 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(shown.localized_fact("step-1", "current_step"),
                          good_korean(MINIPREP_STEPS[0]))
 
+    def test_a_refused_sentence_without_a_passing_reading_keeps_its_status(self) -> None:
+        fixture = rich_fixture()
+        rows = generate(fixture, FakeTranslator(wrong={
+            "step-2/current_step": "2단계: 틀린 번역 99 µL",
+        })).records
+
+        shown = with_stored_translations(fixture, rows)
+
+        self.assertIsNone(shown.localized_fact("step-2", "current_step"))
+        self.assertEqual(
+            shown.translation_failures["step-2/current_step"],
+            "quantities_changed",
+        )
+
     def test_a_reviewed_translation_is_never_made_again_and_wins(self) -> None:
         reviewed_text = "1단계: 검토된 번역 250 µL Buffer 1 Tris-HCl buffer"
         fixture = replace(rich_fixture(), localizations={"step-1/current_step": reviewed_text})

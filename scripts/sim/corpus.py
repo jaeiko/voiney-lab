@@ -107,6 +107,55 @@ TEMPLATES = (
 )
 
 
+def generate_development_cases(protocol: Protocol) -> tuple[Case, ...]:
+    """Known field regressions kept outside the outcome-blind holdout.
+
+    These utterances come from an observed pilot failure, so they belong to
+    the development workload rather than the concealed evaluation split.
+    Every public protocol receives the same cases; no source-specific rule is
+    introduced.
+    """
+    session = CuratedProtocolSession(protocol.fixture)
+    timed = next(
+        (
+            index
+            for index in range(len(protocol.fixture.steps))
+            if session.timer_seconds_for_step(index)
+        ),
+        None,
+    )
+    timer_index = timed if timed is not None else 0
+    timer_setup = 'timer_running' if timed is not None else 'active'
+    return (
+        Case(
+            f'{protocol.code}.voice1_completion_reask.0',
+            'completion_reask',
+            '다음',
+            0,
+            'completion_pending',
+            ('clarify_completion',),
+            ('pending_completion_reasked',),
+            ('confirmation',),
+        ),
+        Case(
+            f'{protocol.code}.voice1_timer_remaining.0',
+            'timer_remaining',
+            '타임 얼마나 남았어? 어',
+            timer_index,
+            timer_setup,
+            ('timer_status',),
+        ),
+        Case(
+            f'{protocol.code}.voice1_timer_remaining.1',
+            'timer_remaining',
+            '시간 얼마나 남았어 음',
+            timer_index,
+            timer_setup,
+            ('timer_status',),
+        ),
+    )
+
+
 def generate_cases(protocol: Protocol) -> tuple[Case, ...]:
     cases = []
     session = CuratedProtocolSession(protocol.fixture)

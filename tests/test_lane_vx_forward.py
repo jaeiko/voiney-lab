@@ -172,6 +172,28 @@ class StillAskedTests(Session, unittest.TestCase):
         # A yes to the question is not a word that moved on: no record line.
         self.assertFalse(plan.speech_text.startswith("3단계 완료로 기록했어요."))
 
+    def test_repeated_next_reasks_for_yes_and_only_yes_moves(self) -> None:
+        self.open_with(index_of("3"), confirm_mode="confirm")
+        first = self.say("다음")
+        before = self.projection()
+        self.assertFalse(first.state_changed)
+        self.assertIsNotNone(self.session.pending_completion_confirmation)
+
+        repeated = self.say("다음")
+
+        self.assertEqual(repeated.action.value, "clarify_completion")
+        self.assertEqual(
+            repeated.speech_text,
+            "완료했으면 ‘네’라고 말해 주세요. 아직이면 ‘아니요’라고 말해 주세요.",
+        )
+        self.assertFalse(repeated.state_changed)
+        self.assertEqual(self.projection(), before)
+        self.assertIsNotNone(self.session.pending_completion_confirmation)
+
+        confirmed = self.say("네")
+        self.assertTrue(confirmed.state_changed)
+        self.assertEqual(self.label(), "4")
+
     def test_an_open_question_asks(self) -> None:
         self.open_with(index_of("3"))
         self.complete("3", "4")

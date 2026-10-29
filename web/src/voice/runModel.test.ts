@@ -182,10 +182,11 @@ describe("Korean first (lane RX4, person's decision 2), as the server's fields s
     expect(stepWords(state({ primary_summary: null, display_summary: "Weigh.", translation_missing: undefined }))).toEqual({ korean: null, source: "Weigh.", missing: false });
   });
 
-  it("keeps the next step's one label as the server wrote it, and shows the source only when the server says so", () => {
-    expect(nextStepWords("5단계: 상층액을  버리고\n아세토나이트릴을 넣습니다.", false)).toEqual({ korean: "5단계: 상층액을 버리고 아세토나이트릴을 넣습니다.", source: null, missing: false });
-    expect(nextStepWords("5. Discard the supernatant.", true)).toEqual({ korean: null, source: "5. Discard the supernatant.", missing: true });
-    expect(nextStepWords("  ", true)).toEqual({ korean: null, source: null, missing: false });
+  it("takes the server's explicit next label off the body and shows the source only when the server says so", () => {
+    expect(nextStepWords("5단계: 상층액을  버리고\n아세토나이트릴을 넣습니다.", false, "5")).toEqual({ korean: "상층액을 버리고 아세토나이트릴을 넣습니다.", source: null, missing: false });
+    expect(nextStepWords("Step 2단계: 2단계: Add the buffer.", false, "Step 2")).toEqual({ korean: "Add the buffer.", source: null, missing: false });
+    expect(nextStepWords("5. Discard the supernatant.", true, "5")).toEqual({ korean: null, source: "Discard the supernatant.", missing: true });
+    expect(nextStepWords("  ", true, "5")).toEqual({ korean: null, source: null, missing: false });
   });
 
   it("a translation_update redraws the step with its Korean and keeps the turn's card", () => {

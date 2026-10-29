@@ -30,6 +30,7 @@ TIME_LEFT = (
     "얼마나 남았어?", "얼마 남았어?", "얼마나 더 남았어요", "지금 얼마나 남았어", "시간 얼마나 남았지",
     "남은 시간 얼마야", "남은 시간 알려 줘", "언제 끝나?", "타이머 언제 끝나", "이거 언제 끝나요", "언제쯤 끝나",
     "몇 분 더 기다려야 해?", "얼마나 기다려야 돼", "끝나려면 얼마나 남았어", "타이머 몇 분 남았노",
+    "타이머 얼마나 남았어? 음", "타임 얼마나 남았어? 어", "시간 얼마나 남았어 음",
     "Time 얼마나 남았어?", "how much longer", "when does it end",
 )
 #: Not this: a named thing, the steps, an observation, the endpoint, a pause.
@@ -107,9 +108,13 @@ class TheAnswerTests(_Wash):
         self.assertEqual(session.timer_status()["state"], "not_started")
         # A step whose source states no time: the first sentence alone.
         session = self.open(0, fixture=wash())
-        plan = self.say("몇 분 남았어?")
-        self.assertEqual(plan.speech_text, "지금 도는 타이머는 없어요.")
-        self.assertFalse(plan.state_changed)
+        for said in ("몇 분 남았어?", "타임 얼마나 남았어? 어"):
+            with self.subTest(said=said):
+                before = self.projection()
+                plan = self.say(said)
+                self.assertEqual(plan.speech_text, "지금 도는 타이머는 없어요.")
+                self.assertFalse(plan.state_changed)
+                self.assertEqual(self.projection(), before)
 
     def test_in_english(self) -> None:
         session = self.open(1, fixture=wash())

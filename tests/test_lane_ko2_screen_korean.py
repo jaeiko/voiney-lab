@@ -82,6 +82,7 @@ def _session(fixture, index: int = 0) -> CuratedProtocolSession:
 def _clear_spot_readings() -> None:
     server_module._SPOT_READINGS.clear()
     server_module._SPOT_ATTEMPTED.clear()
+    getattr(server_module, "_SPOT_REFUSED", {}).clear()
 
 
 def _shown_texts(plan) -> list[str]:
@@ -155,10 +156,12 @@ class StateFieldTests(unittest.TestCase):
                 screen = server_module.curated_screen_fields(session)
                 self.assertEqual(screen["next_step_sentence"], " ".join(step.instruction_source_text.split()))
                 self.assertIs(screen["next_step_translation_missing"], True)
+                self.assertEqual(screen["next_step_translation_status"], "missing")
                 session.fixture = replace(fixture, machine_localizations={f"{step.step_id}/current_step": korean})
                 screen = server_module.curated_screen_fields(session)
                 self.assertEqual(screen["next_step_sentence"], " ".join(korean.split()))
                 self.assertIs(screen["next_step_translation_missing"], False)
+                self.assertEqual(screen["next_step_translation_status"], "available")
                 # A reading stored without its label gets one, once.
                 bare = re.sub(r"^\d+단계:\s*", "", korean)
                 session.fixture = replace(fixture, machine_localizations={f"{step.step_id}/current_step": bare})
@@ -215,8 +218,25 @@ class ScreenTranslationTests(unittest.TestCase):
         session = reader._listener(notes_fixture(), 1, model_roles=True)
         sent = self.run_screen(session, model)
         state = [item for item in sent if item["type"] == "protocol.fixture.state"][-1]["state"]
+        screen = [item for item in sent if item["type"] == "protocol.fixture.state"][-1]["screen"]
         self.assertIsNone(state["primary_summary"])
         self.assertIs(state["translation_missing"], True)
+        self.assertEqual(screen["translation_status"], "rejected")
+
+    def test_only_rejected_readings_still_redraw_with_the_rejection_status(self) -> None:
+        model = _Readings({
+            "2 Wash": "2단계: Solution A 50 µL로 조각을 10 min 동안 세척해요.",
+            "3 Remove": "3단계: Solution A 50 µL를 빼서 버려요.",
+        })
+        session = reader._listener(notes_fixture(), 1, model_roles=True)
+
+        sent = self.run_screen(session, model)
+
+        states = [item for item in sent if item["type"] == "protocol.fixture.state"]
+        self.assertEqual(len(states), 1)
+        self.assertEqual(states[0]["action"], "translation_update")
+        self.assertEqual(states[0]["screen"]["translation_status"], "rejected")
+        self.assertEqual(states[0]["screen"]["next_step_translation_status"], "rejected")
 
     def test_without_the_translation_role_nothing_is_called_or_sent(self) -> None:
         model = _Readings({"2 Wash": STEP_TWO_KO})

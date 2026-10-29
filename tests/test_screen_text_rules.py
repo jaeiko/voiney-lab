@@ -328,7 +328,9 @@ class SafetyItemsServerTests(unittest.TestCase):
             warnings=("Keep the lid closed.",), localized={}, documents=[], pack=False)
         self.assertEqual([item["source_text"] for item in curated_safety_items(curated)],
                          ["Keep the lid closed."])
-        self.assertEqual(curated_screen_fields(curated)["translation_source"], "none")
+        fields = curated_screen_fields(curated)
+        self.assertEqual(fields["translation_source"], "none")
+        self.assertIsNone(fields["translation_status"])
         curated.active = False
         curated.workflow_status = "ready_to_start"
         self.assertEqual(curated_safety_items(curated), [])

@@ -77,18 +77,42 @@ def add_split_arguments(parser: object) -> None:
 
 
 def select_cases(protocols: Sequence[Protocol], args: object) -> tuple[list[Pair], dict]:
-    from scripts.sim.corpus import generate_cases
+    from scripts.sim.corpus import generate_cases, generate_development_cases
 
     if getattr(args, 'emergency_matrix', False):
         from scripts.sim.emergency_cases import generate_emergency_cases
         generate_cases = generate_emergency_cases
     pairs = tuple((p, c) for p in protocols for c in generate_cases(p))
+    development_regressions = (
+        ()
+        if getattr(args, 'emergency_matrix', False)
+        else tuple(
+            (protocol, case)
+            for protocol in protocols
+            for case in generate_development_cases(protocol)
+        )
+    )
     partition = partition_cases(pairs, seed=args.split_seed, holdout_fraction=args.holdout_fraction)
-    selected = pairs if args.split == 'all' else getattr(partition, args.split)
+    if args.split == 'all':
+        selected = pairs + development_regressions
+    elif args.split == 'development':
+        selected = partition.development + development_regressions
+    else:
+        selected = partition.holdout
     result = [(p, c) for p, c in selected
               if (not args.protocol or p.code in args.protocol) and (not args.family or c.family in args.family)]
     if args.limit:
         result = result[:args.limit]
-    return result, {'name': args.split, 'seed': args.split_seed, 'holdout_fraction': args.holdout_fraction,
-                    'development_cases': len(partition.development), 'holdout_cases': len(partition.holdout),
-                    'manifest_sha256': partition.manifest, 'text_grouped': True}
+    metadata = {
+        'name': args.split,
+        'seed': args.split_seed,
+        'holdout_fraction': args.holdout_fraction,
+        'development_cases': len(partition.development),
+        'holdout_cases': len(partition.holdout),
+        'manifest_sha256': partition.manifest,
+        'text_grouped': True,
+    }
+    if args.split != 'holdout':
+        metadata['development_cases'] += len(development_regressions)
+        metadata['development_regression_cases'] = len(development_regressions)
+    return result, metadata
