@@ -90,7 +90,9 @@ generation is cancelled and its audio cleared (barge-in).
    `forced`). When no wearer reference or calibration owns the level, a
    turn-local relative gate observes one second of VAD verdicts; if WebRTC
    calls at least 60% voiced, only frames at least 6 dB above the lower fifth
-   of those voiced levels may keep the endpoint open. It does not alter PCM,
+   of those voiced levels may keep the endpoint open after one frame actually
+   reaches that rise; a steady wearer voice cannot arm the gate against
+   itself. It does not alter PCM,
    the 1000 ms silence, or the 15 s safety bound. With the filter on (lane
    HEAR, decision 2: the experimenter's
    `speaker_filter`, a `voice_reference` measured through

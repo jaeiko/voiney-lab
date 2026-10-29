@@ -47,8 +47,9 @@ log = logging.getLogger("voiney_lab.vad")
 #: wearer-level endpoint can help when the optional speaker filter is off.
 #: After one second in which the VAD called at least 60% of frames voiced, the
 #: listening detector takes the lower fifth of those voiced levels as the
-#: local room floor.  A frame must rise 6 dB over it to keep endpoint silence
-#: open.  The PCM is unchanged; this only qualifies the VAD decision used for
+#: local room floor.  Only after a frame actually rises 6 dB over it does the
+#: relative gate arm; a steady wearer voice therefore cannot define and then
+#: cut itself off.  The PCM is unchanged; this only qualifies the VAD decision used for
 #: onset/end counting.  A fixed absolute dB line would discard a wearer who
 #: moved farther from the microphone.
 ADAPTIVE_NOISE_WINDOW_FRAMES = 50
@@ -442,6 +443,7 @@ class EndpointDetector:
         self._adaptive_noise_window: deque[tuple[bool, float]] = deque(
             maxlen=ADAPTIVE_NOISE_WINDOW_FRAMES)
         self._adaptive_noise_threshold_db: float | None = None
+        self._adaptive_noise_armed = False
 
     @property
     def buffered_frames(self) -> int:
@@ -474,6 +476,7 @@ class EndpointDetector:
     def _forget_adaptive_noise(self) -> None:
         self._adaptive_noise_window.clear()
         self._adaptive_noise_threshold_db = None
+        self._adaptive_noise_armed = False
 
     def enable_adaptive_noise_gate(self, enabled: bool) -> None:
         """Use the turn-local relative level gate, or remove all of its state.
@@ -513,15 +516,30 @@ class EndpointDetector:
                     )
                     self._adaptive_noise_threshold_db = (
                         levels[rank] + ADAPTIVE_NOISE_RISE_DB)
-                    log.info(
-                        "adaptive noise gate on threshold_db=%.1f window_ms=%d",
-                        self._adaptive_noise_threshold_db,
-                        ADAPTIVE_NOISE_WINDOW_FRAMES * FRAME_MS,
-                    )
+        if (
+            self._adaptive_noise_threshold_db is not None
+            and not self._adaptive_noise_armed
+        ):
+            observed_peak = max(
+                (
+                    level for was_voiced, level in self._adaptive_noise_window
+                    if was_voiced
+                ),
+                default=LEVEL_FLOOR_DB,
+            )
+            if voiced:
+                observed_peak = max(observed_peak, level_db)
+            if observed_peak >= self._adaptive_noise_threshold_db:
+                self._adaptive_noise_armed = True
+                log.info(
+                    "adaptive noise gate on threshold_db=%.1f window_ms=%d",
+                    self._adaptive_noise_threshold_db,
+                    ADAPTIVE_NOISE_WINDOW_FRAMES * FRAME_MS,
+                )
         return (
             voiced
             and (
-                self._adaptive_noise_threshold_db is None
+                not self._adaptive_noise_armed
                 or level_db >= self._adaptive_noise_threshold_db
             )
         )

@@ -23,6 +23,7 @@ def level_frame(sample: int) -> bytes:
 
 ROOM = level_frame(184)  # about -45 dBFS
 WEARER_AT_ONE_METRE = level_frame(412)  # about -38 dBFS
+ROOM_TRANSIENT = level_frame(420)  # a brief rise arms the relative gate
 
 
 class AdaptiveNoiseEndpointTests(unittest.TestCase):
@@ -47,7 +48,7 @@ class AdaptiveNoiseEndpointTests(unittest.TestCase):
 
     def test_continuous_low_room_sound_ends_before_the_forced_bound(self) -> None:
         session = self.session()
-        events = self.feed(session, [ROOM] * 750)
+        events = self.feed(session, [ROOM] * 50 + [ROOM_TRANSIENT] + [ROOM] * 699)
         ended = [event for event in events if event.kind == "speech.end"]
         self.assertEqual(len(ended), 1, events)
         self.assertFalse(ended[0].result.forced)
@@ -58,7 +59,8 @@ class AdaptiveNoiseEndpointTests(unittest.TestCase):
         session = self.session()
         events = self.feed(
             session,
-            [ROOM] * 60 + [WEARER_AT_ONE_METRE] * 25 + [ROOM] * 100,
+            [ROOM] * 50 + [ROOM_TRANSIENT] + [ROOM] * 9
+            + [WEARER_AT_ONE_METRE] * 25 + [ROOM] * 100,
         )
         ended = [event for event in events if event.kind == "speech.end"]
         self.assertEqual(len(ended), 1, events)
@@ -68,6 +70,14 @@ class AdaptiveNoiseEndpointTests(unittest.TestCase):
         assert result.utterance is not None
         self.assertIn(WEARER_AT_ONE_METRE, result.utterance)
         self.assertLess(result.total_frames, 150)
+
+    def test_a_constant_wearer_is_not_reclassified_as_room_noise(self) -> None:
+        session = self.session()
+        events = self.feed(session, [WEARER_AT_ONE_METRE] * 300)
+        self.assertFalse(
+            any(event.kind == "speech.end" for event in events),
+            "a steady wearer voice was cut off before the configured bound",
+        )
 
 
 if __name__ == "__main__":
