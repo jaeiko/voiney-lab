@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -580,13 +581,11 @@ def write_text_document_in_process(text: str, destination: str | Path) -> None:
         line = []
         line_width = 0.0
 
-    for character in text:
-        if character == "\n":
-            finish_line()
-            continue
+    def add_character(character: str, *, may_wrap: bool) -> None:
+        nonlocal line_width
         font_name, font = font_for(character)
         width = float(font.text_length(character, fontsize=TEXT_FONT_SIZE))
-        if line and line_width + width > max_width:
+        if may_wrap and line and line_width + width > max_width:
             finish_line()
         if line and line[-1][0] == font_name:
             previous_name, previous_text, previous_width = line[-1]
@@ -598,6 +597,26 @@ def write_text_document_in_process(text: str, destination: str | Path) -> None:
         else:
             line.append((font_name, character, width))
         line_width += width
+
+    # Keep ordinary words and scientific tokens together. A single token
+    # wider than the page is the only case that falls back to character
+    # wrapping; its characters are still preserved in source order.
+    for paragraph_number, paragraph in enumerate(text.split("\n")):
+        if paragraph_number:
+            finish_line()
+        for token in re.findall(r"\S+\s*|\s+", paragraph):
+            measured = sum(
+                float(font_for(character)[1].text_length(character, fontsize=TEXT_FONT_SIZE))
+                for character in token
+            )
+            if measured <= max_width:
+                if line and line_width + measured > max_width:
+                    finish_line()
+                for character in token:
+                    add_character(character, may_wrap=False)
+            else:
+                for character in token:
+                    add_character(character, may_wrap=True)
     finish_line()
 
     lines_per_page = int(
