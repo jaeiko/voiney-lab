@@ -8021,6 +8021,12 @@ class ListenerSession:
         floor wavering at the guard cannot change them in mid-sentence.
         """
 
+        # Lane HEAR2: without the optional wearer filter, a turn-local
+        # relative gate keeps low continuous room sound from resetting the
+        # 1000 ms endpoint forever.  Calibration and an explicit wearer line
+        # retain their existing measured behaviour.
+        detector.enable_adaptive_noise_gate(
+            self.level_reference is None and not self.calibration_pending)
         if detector.state is not TurnState.IDLE:
             return
         threshold=self.endpoint_threshold_db()
