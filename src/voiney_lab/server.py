@@ -3850,6 +3850,11 @@ def _public_protocol_catalog_entries(
     """
 
     config=server_config()
+    include_development=(
+        not tenant_scoped
+        or not _auth_settings().accounts
+        or _account_is_admin()
+    )
     visible=_visible_catalog_resource_ids() if tenant_scoped else None
     # A development fixture that does not fit takes only itself out of the
     # list (lane PL, stage 2b; lane BT section 6 item 1): one that cannot be
@@ -3870,6 +3875,8 @@ def _public_protocol_catalog_entries(
         entries.append(_candidate_catalog_dict(candidate))
     settings=_protocol_store_settings()
     if not settings.enabled:
+        if not include_development:
+            entries=[item for item in entries if item.get("development_only") is not True]
         return entries,settings,candidate_protocol_id
     catalog,store=_open_protocol_catalog()
     try:
@@ -3897,6 +3904,8 @@ def _public_protocol_catalog_entries(
             entries.append(public)
     finally:
         store.close()
+    if not include_development:
+        entries=[item for item in entries if item.get("development_only") is not True]
     return entries,settings,candidate_protocol_id
 
 

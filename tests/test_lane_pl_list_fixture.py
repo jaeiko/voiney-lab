@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 from tests.test_protocol_catalog import write_text_pdf
 from voiney_lab import server as server_module
+from voiney_lab.accounts import Account
 from voiney_lab.experiment_protocol_config import ProtocolPersistenceSettings
 from voiney_lab.experiment_protocol_store import initialize_protocol_store
 from voiney_lab.protocol_catalog import ProtocolCatalog
@@ -142,6 +143,54 @@ class NoFixtureTests(_ListCase):
         self.assertEqual(
             sorted(item["protocol_id"] for item in shown),
             sorted(entry.protocol_id for entry in self.entries))
+
+
+class DevelopmentVisibilityTests(_ListCase):
+    def listed_as(self, *, admin: bool) -> list[dict]:
+        account = Account(
+            account_id="account-1", name="Fictional researcher",
+            organization_id="lab-1", admin=admin, entitlement="pilot",
+            disabled=False, created_at="2026-10-29T00:00:00+00:00",
+        )
+        token = server_module._REQUEST_ACCOUNT.set(account)
+        try:
+            return self.listed(
+                VOINEY_LAB_AUTH_MODE="accounts",
+                VOINEY_LAB_CURATED_PROTOCOL_FIXTURE="/fictional/fixture.json",
+                VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE="/fictional/provenance.json",
+                VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF="/fictional/source.pdf",
+            )
+        finally:
+            server_module._REQUEST_ACCOUNT.reset(token)
+
+    def test_a_regular_account_does_not_list_the_development_fixture(self):
+        fixture = _fake_fixture("fixture-protocol-id")
+        with patch.object(server_module, "_configured_candidate_fixture", return_value=fixture):
+            shown = self.listed_as(admin=False)
+        self.assertEqual(
+            sorted(item["protocol_id"] for item in shown),
+            sorted(entry.protocol_id for entry in self.entries),
+        )
+        self.assertFalse(any(item.get("development_only") for item in shown))
+
+    def test_an_administrator_lists_the_development_fixture(self):
+        fixture = _fake_fixture("fixture-protocol-id")
+        with patch.object(server_module, "_configured_candidate_fixture", return_value=fixture):
+            shown = self.listed_as(admin=True)
+        self.assertEqual(shown[0]["protocol_id"], "fixture-protocol-id")
+        self.assertIs(shown[0]["development_only"], True)
+
+    def test_development_auth_mode_lists_the_development_fixture(self):
+        fixture = _fake_fixture("fixture-protocol-id")
+        with patch.object(server_module, "_configured_candidate_fixture", return_value=fixture):
+            shown = self.listed(
+                VOINEY_LAB_AUTH_MODE="dev",
+                VOINEY_LAB_CURATED_PROTOCOL_FIXTURE="/fictional/fixture.json",
+                VOINEY_LAB_CURATED_PROTOCOL_PROVENANCE="/fictional/provenance.json",
+                VOINEY_LAB_CURATED_PROTOCOL_SOURCE_PDF="/fictional/source.pdf",
+            )
+        self.assertEqual(shown[0]["protocol_id"], "fixture-protocol-id")
+        self.assertIs(shown[0]["development_only"], True)
 
 
 if __name__ == "__main__":
