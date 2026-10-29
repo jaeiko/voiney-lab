@@ -45,7 +45,10 @@ def test_shared_stt_context_prioritizes_korean_commands_and_stored_glossary():
 
 
 def test_korean_priority_keeps_the_cross_provider_limit_and_dump_fence():
-    glossary = tuple(
+    glossary = (
+        ("too-many-words", "하나 둘 셋 넷 다섯 여섯"),
+        ("too-many-characters", "가" * 50),
+    ) + tuple(
         (f"source-term-{index}", f"한국용어{index}")
         for index in range(150)
     )
@@ -67,5 +70,8 @@ def test_korean_priority_keeps_the_cross_provider_limit_and_dump_fence():
     assert context.keyterms[:len(COMMANDS)] == COMMANDS
     assert "한국용어90" in context.keyterms
     assert "한국용어91" not in context.keyterms
-    assert all(1 <= len(term) <= 50 for term in context.keyterms)
+    assert "하나 둘 셋 넷 다섯 여섯" not in context.keyterms
+    assert "가" * 50 not in context.keyterms
+    assert all(1 <= len(term) < 50 for term in context.keyterms)
+    assert all(len(term.split()) <= 5 for term in context.keyterms)
     assert not set(COMMANDS) & set(server.keyterm_dump_terms(context.keyterms))

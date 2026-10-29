@@ -8800,7 +8800,8 @@ STT_EXISTING_WORKFLOW_KEYTERMS:tuple[str,...]=(
     "시작","다음 단계","다시 알려줘",*STT_CONTROL_KEYTERMS,
 )
 STT_KEYTERM_LIMIT=100
-STT_KEYTERM_MAX_CHARS=50
+STT_KEYTERM_MAX_CHARS=49
+STT_KEYTERM_MAX_WORDS=5
 _STT_HANGUL=re.compile(r"[가-힣]")
 
 
@@ -8830,6 +8831,7 @@ def _stored_korean_stt_keyterms(curated:Any)->tuple[str,...]:
         and (term:=" ".join(value.split()))
         and _STT_HANGUL.search(term)
         and len(term)<=STT_KEYTERM_MAX_CHARS
+        and len(term.split())<=STT_KEYTERM_MAX_WORDS
     ))
 
 
@@ -8862,6 +8864,7 @@ def _cascade_stt_keyterms(curated:Any)->tuple[str,...]:
         if isinstance(value,str)
         and (term:=" ".join(value.split()))
         and len(term)<=STT_KEYTERM_MAX_CHARS
+        and len(term.split())<=STT_KEYTERM_MAX_WORDS
     ))[:STT_KEYTERM_LIMIT]
 
 
