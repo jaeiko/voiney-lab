@@ -18,6 +18,16 @@ from voiney_lab.curated_protocol import protocol_basis_question
 
 INDEX_HTML = Path(__file__).resolve().parents[1] / "src/voiney_lab/static/index.html"
 BASIS = {"filename": "usingdynamicheadspacecollections.pdf", "uploaded_at": "2026-10-07T09:00:00+00:00"}
+DISCLOSED_BASIS = {
+    **BASIS,
+    "source_disclosure": {
+        "recorded": True,
+        "status": "yes",
+        "status_ko": "예 — 공개·시판 원문",
+        "note": "시판 제품 설명서",
+        "recorded_at": "2026-10-07T08:59:00+00:00",
+    },
+}
 WORDS = "지금 기준: usingdynamicheadspacecollections.pdf · 2026년 10월 7일 올림"
 
 
@@ -88,6 +98,14 @@ class BasisReportTests(RecordedSession, unittest.TestCase):
         facts = er.build_report_facts(self.report(), fixture=self.session.fixture)
         self.assertIn(("기준 파일", "usingdynamicheadspacecollections.pdf · 2026년 10월 7일 올림"),
                       facts.run_rows)
+
+    def test_the_notebook_carries_the_source_disclosure_and_note(self) -> None:
+        self.open_with(None)
+        self.session.set_source_basis(DISCLOSED_BASIS)
+        self.record("프로토콜 시작해줘")
+        facts = er.build_report_facts(self.report(), fixture=self.session.fixture)
+        self.assertIn(("원문 공개 범위", "예 — 공개·시판 원문"), facts.notebook.header_rows)
+        self.assertIn(("출처 메모", "시판 제품 설명서"), facts.notebook.header_rows)
 
 
 class BasisScreenTests(unittest.TestCase):

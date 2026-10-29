@@ -18,6 +18,7 @@ export const UPLOADED = {
   readiness_status: 'analysis_required', analysis_status: 'structured_analysis_ready', step_count: 0, created_at: '2026-10-25T01:00:00+00:00',
   available_for_execution: false, development_only: false, lifecycle_state: 'uploaded', execution_blocker_codes: [], analysis_outdated_codes: [],
   analysis_outdated_ko: null, review_pending: null, review_versions: [], current_review_version: null,
+  source_disclosure: { recorded: true, status: 'yes', status_ko: '예 — 공개·시판 원문', note: '시판 제품 설명서', recorded_at: '2026-10-28T00:00:00Z' },
 };
 
 export const SOURCE_PAGE = (page: number) => ({
@@ -90,6 +91,7 @@ export async function mockProtocolScreens(page: Page) {
   let cards = [CARD_EVIDENCE, CARD_CLAIM];
   const decisions: object[] = [];
   const analysisRequests: string[] = [];
+  const uploadDisclosures: object[] = [];
   let registered = false;
   let runChanges: object | null = null;
   // The protocol's title as the ledger holds it: the read one until a person renames it.
@@ -101,6 +103,10 @@ export async function mockProtocolScreens(page: Page) {
     route.fulfill({ json: { protocols: Object.values(protocols) } }),
   );
   await page.route(/\/api\/protocols\?filename=/, async (route) => {
+    uploadDisclosures.push({
+      status: route.request().headers()['x-voiney-source-status'],
+      note: decodeURIComponent(route.request().headers()['x-voiney-source-note'] ?? ''),
+    });
     protocols[UPLOADED.protocol_id] = UPLOADED;
     await route.fulfill({ status: 201, json: { protocol: UPLOADED, deduplicated: false, ocr: { state: 'not_required', automatic: false } } });
   });
@@ -178,6 +184,7 @@ export async function mockProtocolScreens(page: Page) {
   return {
     decisions,
     analysisRequests,
+    uploadDisclosures,
     isRegistered: () => registered,
     runChanges: () => runChanges,
   };

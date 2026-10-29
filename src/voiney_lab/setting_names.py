@@ -210,6 +210,8 @@ SETTINGS: tuple[Setting, ...] = (
             "음성 합성 요청 제한 시간 (초, 1–300)"),
     # --- 기능 켜기·끄기 -----------------------------------------------------------
     Setting("VOINEY_LAB_PROTOCOL_ENABLED", SWITCHES, "false", "PDF 프로토콜 카탈로그"),
+    Setting("VOINEY_LAB_PUBLIC_SOURCE_ONLY", SWITCHES, "false",
+            "true 면 공개되었거나 시판 제품에 딸린 원문이라고 예로 확인한 프로토콜 업로드만 허용"),
     Setting("VOINEY_LAB_WORKSPACE_ENABLED", SWITCHES, "false",
             "작업공간 (조직·권한·연동)"),
     Setting("VOINEY_LAB_EXPERIMENT_REPORTS_ENABLED", SWITCHES, "false (빈 값)",

@@ -191,6 +191,10 @@ _REVIEW_PENDING_EVENT = "protocol_analysis_review_pending"
 #: analysis's title, the file's metadata and the file name stay as they are.
 PROTOCOL_TITLE_RENAMED_EVENT = "protocol_title_renamed"
 PROTOCOL_TITLE_MAX_CHARS = 120
+#: The uploader's answer to the public/commercial-source question. It is a
+#: declaration, not a licence check or an execution approval.
+PROTOCOL_SOURCE_DISCLOSURE_EVENT = "protocol_source_disclosure_recorded"
+PROTOCOL_SOURCE_NOTE_MAX_CHARS = 500
 #: A person's review registered as a version that runs (lane RV, decision c):
 #: the version's protocol is one more analysis revision, named
 #: ``review-v<N>-...``, and this event beside it holds who registered it,
@@ -386,6 +390,74 @@ class _RepairedAnswerWithItems(ProtocolAnalysisEvidenceError):
         self.response_repair = draft.response_repair
 
 
+class ProtocolSourceStatus(str, Enum):
+    YES = "yes"
+    NO = "no"
+    UNKNOWN = "unknown"
+
+
+_PROTOCOL_SOURCE_STATUS_KO = {
+    ProtocolSourceStatus.YES: "예 — 공개·시판 원문",
+    ProtocolSourceStatus.NO: "아니요 — 공개·시판 아님",
+    ProtocolSourceStatus.UNKNOWN: "모름 — 확인 필요",
+}
+
+
+@dataclass(frozen=True)
+class ProtocolSourceDisclosure:
+    """One person's declared source scope, retained in the catalog ledger."""
+
+    status: ProtocolSourceStatus
+    note: str = ""
+    recorded_at: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, ProtocolSourceStatus):
+            raise ProtocolRegistrationError("Protocol source status is invalid.")
+        if not isinstance(self.note, str):
+            raise ProtocolRegistrationError("Protocol source note is invalid.")
+        note = self.note.strip()
+        try:
+            note.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ProtocolRegistrationError(
+                "Protocol source note is invalid."
+            ) from exc
+        if len(note) > PROTOCOL_SOURCE_NOTE_MAX_CHARS or any(
+            unicodedata.category(character) == "Cc" and character not in "\n\r\t"
+            for character in note
+        ):
+            raise ProtocolRegistrationError("Protocol source note is invalid.")
+        if self.recorded_at is not None and (
+            not isinstance(self.recorded_at, str) or not self.recorded_at.strip()
+        ):
+            raise ProtocolRegistrationError("Protocol source record time is invalid.")
+        object.__setattr__(self, "note", note)
+
+    def public_dict(self) -> dict[str, object]:
+        return {
+            "recorded": True,
+            "status": self.status.value,
+            "status_ko": _PROTOCOL_SOURCE_STATUS_KO[self.status],
+            "note": self.note,
+            "recorded_at": self.recorded_at,
+        }
+
+
+def _source_disclosure_public(
+    disclosure: ProtocolSourceDisclosure | None,
+) -> dict[str, object]:
+    if disclosure is not None:
+        return disclosure.public_dict()
+    return {
+        "recorded": False,
+        "status": None,
+        "status_ko": "확인 기록 없음",
+        "note": "",
+        "recorded_at": None,
+    }
+
+
 @dataclass(frozen=True)
 class ProtocolCatalogEntry:
     protocol_id: str
@@ -420,6 +492,7 @@ class ProtocolCatalogEntry:
     #: d): number, revision id, reviewer, date and how many changes. The
     #: latest is the one that runs.
     review_versions: tuple[dict[str, object], ...] = ()
+    source_disclosure: ProtocolSourceDisclosure | None = None
 
     def public_dict(self) -> dict[str, object]:
         return {
@@ -442,6 +515,9 @@ class ProtocolCatalogEntry:
             "review_versions": list(self.review_versions),
             "current_review_version": (
                 self.review_versions[-1] if self.review_versions else None),
+            "source_disclosure": _source_disclosure_public(
+                self.source_disclosure
+            ),
         }
 
 
@@ -2656,7 +2732,68 @@ class ProtocolCatalog:
             review_versions=tuple(
                 _review_version_summary(event, self.store.list_events(revision.experiment_id))
                 for event in versions),
+            source_disclosure=self._source_disclosure(revision),
         )
+
+    def record_source_disclosure(
+        self,
+        protocol_id: str,
+        disclosure: ProtocolSourceDisclosure,
+    ) -> ProtocolSourceDisclosure:
+        """Append one declared source scope and return its ledger timestamp.
+
+        Repeating exactly the same declaration is idempotent. A changed
+        declaration receives a different event id, so the earlier answer is
+        retained and the latest one is projected.
+        """
+
+        if not isinstance(disclosure, ProtocolSourceDisclosure):
+            raise ProtocolRegistrationError("Protocol source disclosure is invalid.")
+        revision = self._latest_protocol_revision(protocol_id)
+        payload = {
+            "status": disclosure.status.value,
+            "note": disclosure.note,
+        }
+        latest = self._source_disclosure(revision)
+        if (
+            latest is not None
+            and latest.status is disclosure.status
+            and latest.note == disclosure.note
+        ):
+            return latest
+        event = self.store.append_event(
+            f"source-disclosure-{secrets.token_hex(12)}",
+            protocol_id,
+            revision.revision_number,
+            PROTOCOL_SOURCE_DISCLOSURE_EVENT,
+            payload,
+        )
+        return replace(disclosure, recorded_at=event.recorded_at)
+
+    def _source_disclosure(
+        self, revision: ProtocolRevisionRecord
+    ) -> ProtocolSourceDisclosure | None:
+        latest: ProtocolSourceDisclosure | None = None
+        for event in self.store.list_events(revision.experiment_id):
+            if (
+                event.event_type != PROTOCOL_SOURCE_DISCLOSURE_EVENT
+                or event.protocol_revision_number != revision.revision_number
+            ):
+                continue
+            payload = event.payload
+            try:
+                if not isinstance(payload, dict) or set(payload) != {"status", "note"}:
+                    raise ValueError
+                latest = ProtocolSourceDisclosure(
+                    status=ProtocolSourceStatus(payload["status"]),
+                    note=payload["note"],
+                    recorded_at=event.recorded_at,
+                )
+            except (ProtocolRegistrationError, TypeError, ValueError) as exc:
+                raise ProtocolCatalogUnavailableError(
+                    "Stored protocol source disclosure is invalid."
+                ) from exc
+        return latest
 
     def _review_pending_event(self, revision: ProtocolRevisionRecord) -> Any | None:
         """The latest review-pending analysis newer than any passed one and

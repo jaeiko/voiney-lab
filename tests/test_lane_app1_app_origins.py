@@ -73,6 +73,22 @@ def test_the_apps_preflight_is_answered_without_a_session(monkeypatch, tmp_path)
     assert ios.status_code == 204 and ios.headers["access-control-allow-origin"] == IOS_APP
 
 
+def test_the_app_can_preflight_public_source_upload_headers(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path, mode="accounts")
+    response = _preflight(
+        APP,
+        path="/api/protocols",
+        headers=(
+            "authorization, content-type, x-voiney-source-status, "
+            "x-voiney-source-note"
+        ),
+    )
+    assert response.status_code == 204
+    allowed = response.headers["access-control-allow-headers"].lower()
+    assert "x-voiney-source-status" in allowed
+    assert "x-voiney-source-note" in allowed
+
+
 def test_answers_to_the_app_carry_the_origin_refusals_included(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path, mode="accounts")
     refused = _request("GET", "/api/workspace/session", {"Origin": APP})

@@ -66,6 +66,8 @@
 .segmented-option[data-checked="true"] { border-width: var(--border-state); border-color: var(--ink); background: var(--ink); color: var(--on-ink); }
 .segmented-option[data-disabled="true"] { border-style: dashed; color: var(--ink-muted); cursor: default; }
 .segmented-option:focus-within { outline: var(--border-focus) solid var(--focus-ring); outline-offset: 2px; }
+.source-disclosure { margin: 0 0 var(--space-5); }
+.source-disclosure .field { margin-top: var(--space-2); }
 
 /* --- The settings -------------------------------------------------------- */
 .settings { display: flex; flex-direction: column; gap: var(--space-8); max-width: 760px; }
