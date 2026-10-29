@@ -33,6 +33,35 @@ def load_bench():
 
 
 class ListeningBenchTests(unittest.TestCase):
+    def test_bench_waits_for_a_terminal_signal_after_the_session_enters_cooldown(self) -> None:
+        bench = load_bench()
+        from voiney_lab.vad import TurnState
+
+        async def run():
+            clock = bench.AudioClock()
+            session = bench.make_session(clock)
+            socket = bench.BenchSocket(bench.Script(), session, clock)
+            await socket.send_text('{"type":"speech.start","turn_id":7}')
+            session.detector.state = TurnState.COOLDOWN
+
+            async def late_terminal_signal():
+                await asyncio.sleep(.06)
+                await socket.send_text(
+                    '{"type":"speech.dropped","turn_id":7,"reason":"stt_empty"}')
+
+            worker = asyncio.create_task(late_terminal_signal())
+            try:
+                message = await socket.receive()
+                self.assertEqual(message['type'], 'websocket.disconnect')
+                self.assertTrue(
+                    worker.done(),
+                    'the bench disconnected while the turn still lacked a terminal signal',
+                )
+            finally:
+                await worker
+
+        asyncio.run(run())
+
     def test_bench_waits_for_the_last_provider_failure_before_disconnect(self) -> None:
         bench = load_bench()
         bench.SPEED = 100.0
@@ -43,15 +72,17 @@ class ListeningBenchTests(unittest.TestCase):
             session = bench.make_session(clock)
             session.detector.state = TurnState.PROCESSING
             socket = bench.BenchSocket(bench.Script(), session, clock)
+            await socket.send_text('{"type":"speech.start","turn_id":8}')
             async def late_provider_failure():
                 await asyncio.sleep(.06)
-                await socket.send_text('{"type":"speech.dropped","reason":"stt_failed"}')
+                await socket.send_text(
+                    '{"type":"speech.dropped","turn_id":8,"reason":"stt_failed"}')
                 session.detector.state = TurnState.IDLE
             worker = asyncio.create_task(late_provider_failure())
             message = await socket.receive()
             self.assertEqual(message['type'], 'websocket.disconnect')
             self.assertTrue(worker.done(), 'the bench disconnected before the pending STT result')
-            self.assertEqual(len(socket.sent), 1)
+            self.assertEqual(len(socket.sent), 2)
             await worker
         asyncio.run(run())
 
