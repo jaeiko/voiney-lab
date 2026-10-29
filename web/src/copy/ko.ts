@@ -748,7 +748,7 @@ export const records = {
   plateLayout: '플레이트 배치·well 위치', sampleRecords: '셀·시료 번호별 기록', sampleRecordHeads: ['셀·시료 번호', '기록 그대로'],
   methodsInventory: 'Methods 조건표', inventoryHeads: ['시약·장비 (원문)', '종류', '구매처', '카탈로그 번호', 'Lot 번호', '입력 시점'],
   inventoryStages: { before: '실험 전', after: '실험 후', source: '원문', blank: '' } as Record<string, string>, inventoryItem: '원문 시약·장비', vendor: '구매처', catalog: '카탈로그 번호', lot: 'Lot 번호', inputStage: '입력 시점', inventorySave: 'Methods 정보 기록하기',
-  comparison: '같은 프로토콜 기록 비교', comparisonWhy: '같은 연구실에서 기록별 공유에 동의한 실행만 사실 그대로 나란히 봐요.', comparisonFailed: '비교 기록을 불러오지 못했어요.', shareOn: '이 기록 비교 공유 켜기', shareOff: '이 기록 비교 공유 끄기', comparisonRule: '다른 사람 기록은 비교 화면에서만 읽을 수 있어요. 어느 실행이 낫다는 판정이나 추천은 하지 않아요.', compareValueHeads: ['단계·항목', '원문', '실제'], compareMethodHeads: ['단계', '원문 → 실제', '실제 시각·타이머'],
+  comparison: '같은 프로토콜 기록 비교', comparisonWhy: '같은 연구실에서 기록별 공유에 동의한 실행만 사실 그대로 나란히 봐요.', comparisonShareWarning: '작은 연구실에서는 누구 기록인지 알아볼 수 있어요. 말한 특이사항은 그대로 보여요.', comparisonFailed: '비교 기록을 불러오지 못했어요.', shareOn: '이 기록 비교 공유 켜기', shareOff: '이 기록 비교 공유 끄기', comparisonRule: '다른 사람 기록은 비교 화면에서만 읽을 수 있어요. 어느 실행이 낫다는 판정이나 추천은 하지 않아요.', compareValueHeads: ['단계·항목', '원문', '실제'], compareMethodHeads: ['단계', '원문 → 실제', '실제 시각·타이머'],
   template: '연구실 노트 양식', templateWhy: '고정된 절은 그대로 두고 이름과 순서만 정해요.', templateName: '노트 절 이름', moveUp: (name: string) => `${name} 위로`, moveDown: (name: string) => `${name} 아래로`, templateSave: '연구실 노트 양식 저장',
   legacy: '이전 화면에서 더 보기', legacyWhy: '원하면 이전 화면에서도 같은 기록을 볼 수 있어요.',
 } as const;

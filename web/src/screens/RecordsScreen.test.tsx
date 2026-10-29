@@ -198,6 +198,7 @@ it('shows the grounded notebook skeleton, deterministic visuals, Methods fields 
   expect(zeroValueBar.querySelectorAll('i')[0]).toHaveStyle({ width: '0%' });
   expect(screen.queryByText('5단계부터 이어서 한다 (원문의 다음 단계)')).not.toBeInTheDocument();
   expect(await screen.findByText((_, node) => node?.tagName === 'P' && Boolean(node.textContent?.includes('A1 well 침전 있음')))).toBeInTheDocument();
+  expect(screen.getByText('작은 연구실에서는 누구 기록인지 알아볼 수 있어요. 말한 특이사항은 그대로 보여요.')).toBeInTheDocument();
   await userEvent.click(await screen.findByRole('button', { name: '이 기록 비교 공유 켜기' }));
   const share = calls.find(call => call.path.endsWith('/sharing') && call.init?.method === 'POST');
   expect(JSON.parse(share!.init!.body as string)).toEqual({ shared: true });
