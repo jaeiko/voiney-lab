@@ -34,6 +34,21 @@ def load_bench():
 
 
 class ListeningBenchTests(unittest.TestCase):
+    def test_a_new_started_turn_supersedes_the_previous_pending_turn(self) -> None:
+        bench = load_bench()
+
+        async def run():
+            clock = bench.AudioClock()
+            session = bench.make_session(clock)
+            socket = bench.BenchSocket(bench.Script(), session, clock)
+
+            await socket.send_text('{"type":"speech.start","turn_id":4}')
+            await socket.send_text('{"type":"speech.start","turn_id":5}')
+
+            self.assertEqual(socket.pending_turns, {5})
+
+        asyncio.run(run())
+
     def test_bench_completion_wait_does_not_use_a_wall_clock_deadline(self) -> None:
         bench = load_bench()
 

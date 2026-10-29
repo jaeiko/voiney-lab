@@ -252,6 +252,10 @@ class BenchSocket:
         turn_id = message.get("turn_id")
         if kind == "speech.start" and isinstance(turn_id, int):
             self.saw_started_turn = True
+            # The production socket cancels its one previous turn task when
+            # it announces a new primary speech start.  That supersession has
+            # no separate terminal event when the worker was still pending.
+            self.pending_turns.clear()
             self.pending_turns.add(turn_id)
         elif isinstance(turn_id, int) and (
             kind in {"speech.dropped", "speech.ignored"}
