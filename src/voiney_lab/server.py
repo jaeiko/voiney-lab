@@ -8797,6 +8797,83 @@ class ListenerSession:
         return turn_id
 
 
+STT_KOREAN_COMMAND_KEYTERMS:tuple[str,...]=(
+    "다음","타이머","일시정지","다시 시작","종료",
+    "특이사항","메모","기록해 줘","화면 크게",
+)
+STT_EXISTING_WORKFLOW_KEYTERMS:tuple[str,...]=(
+    "아니","네","현재 단계","이번 단계","완료","완료했어",
+    "시작","다음 단계","다시 알려줘",*STT_CONTROL_KEYTERMS,
+)
+STT_KEYTERM_LIMIT=100
+STT_KEYTERM_MAX_CHARS=49
+STT_KEYTERM_MAX_WORDS=5
+_STT_HANGUL=re.compile(r"[가-힣]")
+
+
+def _stored_korean_stt_keyterms(curated:Any)->tuple[str,...]:
+    """Checked Korean names stored with this revision's translations."""
+
+    fixture=getattr(curated,"fixture",None)
+    if isinstance(fixture,CuratedProtocolFixture):
+        values=(
+            name for name,_entity
+            in curated._protocol_vocabulary().korean_names
+        )
+    else:
+        raw=[]
+        for pair in getattr(fixture,"translation_glossary",()) or ():
+            if not isinstance(pair,(tuple,list)) or len(pair)!=2:
+                continue
+            korean=pair[1]
+            if not isinstance(korean,str):
+                continue
+            raw.append(re.sub(r"\([^()]*\)"," ",korean))
+            raw.extend(re.findall(r"\(([^()]*)\)",korean))
+        values=iter(raw)
+    return tuple(dict.fromkeys(
+        term for value in values
+        if isinstance(value,str)
+        and (term:=" ".join(value.split()))
+        and _STT_HANGUL.search(term)
+        and len(term)<=STT_KEYTERM_MAX_CHARS
+        and len(term.split())<=STT_KEYTERM_MAX_WORDS
+    ))
+
+
+def _cascade_stt_keyterms(curated:Any)->tuple[str,...]:
+    try:
+        source=curated.stt_keyterms(include_control_terms=True)
+    except TypeError:
+        source=curated.stt_keyterms()
+    step_tokens=()
+    fixture=getattr(curated,"fixture",None)
+    index=getattr(curated,"current_index",None)
+    if (getattr(curated,"active",False)
+            and isinstance(index,int)
+            and 0<=index<len(getattr(fixture,"steps",()))):
+        label=getattr(fixture.steps[index],"source_label",None)
+        if isinstance(label,str) and label:
+            step_tokens=(
+                f"{label}단계",f"{label} 단계",
+                f"현재 {label}단계",f"이번 {label}단계",
+            )
+    ordered=(
+        *STT_KOREAN_COMMAND_KEYTERMS,
+        *_stored_korean_stt_keyterms(curated),
+        *step_tokens,
+        *STT_EXISTING_WORKFLOW_KEYTERMS,
+        *source,
+    )
+    return tuple(dict.fromkeys(
+        term for value in ordered
+        if isinstance(value,str)
+        and (term:=" ".join(value.split()))
+        and len(term)<=STT_KEYTERM_MAX_CHARS
+        and len(term.split())<=STT_KEYTERM_MAX_WORDS
+    ))[:STT_KEYTERM_LIMIT]
+
+
 def cascade_transcription_context(
     session:ListenerSession,
     *,
@@ -8809,10 +8886,7 @@ def cascade_transcription_context(
     pending_frame=None
     keyterms:tuple[str,...]=()
     if curated is not None:
-        try:
-            keyterms = curated.stt_keyterms(include_control_terms=True)
-        except TypeError:
-            keyterms = curated.stt_keyterms()
+        keyterms=_cascade_stt_keyterms(curated)
         if curated.active:
             step_id=curated.fixture.steps[curated.current_index].step_id
         if curated.pending_observation_confirmation is not None:
@@ -8854,7 +8928,8 @@ def keyterm_dump_terms(keyterms:tuple[str,...])->tuple[str,...]:
     is a researcher, not the provider reading back its prompt.
     """
 
-    return tuple(term for term in keyterms if term not in STT_CONTROL_KEYTERMS)
+    control_terms=frozenset(STT_CONTROL_KEYTERMS+STT_KOREAN_COMMAND_KEYTERMS)
+    return tuple(term for term in keyterms if term not in control_terms)
 
 
 def transcribe_cascade_audio(

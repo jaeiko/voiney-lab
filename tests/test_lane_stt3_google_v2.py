@@ -15,11 +15,13 @@ from fastapi.testclient import TestClient
 from tests.test_voice_providers import FakeResponse, PCM
 from voiney_lab import server, voice_providers as vp
 from voiney_lab.configuration import ConfigurationError
+from voiney_lab.setting_names import BY_NAME
 
 PROJECT = 'VOINEY_LAB_GOOGLE_STT_V2_PROJECT'
 CREDENTIALS = 'VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE'
 LOCATION = 'VOINEY_LAB_GOOGLE_STT_V2_LOCATION'
 DENOISE = 'VOINEY_LAB_GOOGLE_STT_V2_DENOISE'
+ADAPTATION = 'VOINEY_LAB_GOOGLE_STT_V2_ADAPTATION_ENABLED'
 TOKEN = 'fake-private-bearer-token'
 SECRET = 'fake-private-key-content'
 
@@ -29,7 +31,10 @@ def v2_env(tmp_path, monkeypatch):
     path = tmp_path / 'service-account.json'
     path.write_text(json.dumps({'private_key': SECRET}))
     path.chmod(0o600)
-    values = {vp.STT_PROVIDER_ENV: 'google_cloud_v2', PROJECT: 'test-project', CREDENTIALS: str(path)}
+    values = {
+        vp.STT_PROVIDER_ENV: 'google_cloud_v2', PROJECT: 'test-project',
+        CREDENTIALS: str(path), ADAPTATION: 'true',
+    }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv(vp.STT_MODEL_ENV, raising=False)
@@ -69,6 +74,26 @@ def test_server_transcribe_sends_inline_v2_config_and_reads_offsets(v2_env):
     assert result.duration_seconds == 1.0 and result.response_status == 200
     assert post.call_count == 1
     assert server.stt_endpoint_label() == 'google_cloud_v2:/v2/recognizers/_:recognize'
+
+
+def test_chirp_3_us_omits_adaptation_from_the_first_request_by_default(
+    v2_env, monkeypatch,
+):
+    monkeypatch.delenv(ADAPTATION, raising=False)
+    with patch.object(vp, '_google_v2_token', return_value=TOKEN), patch.object(
+        vp.requests, 'post', return_value=FakeResponse({})
+    ) as post:
+        server.transcribe(PCM, language='ko', keyterms=('타이머', 'lysozyme'))
+
+    assert post.call_count == 1
+    assert 'adaptation' not in post.call_args.kwargs['json']['config']
+
+
+def test_adaptation_switch_is_listed_and_off_in_the_example():
+    assert BY_NAME[ADAPTATION].default == 'false'
+    example = (Path(__file__).resolve().parents[1] / '.env.example').read_text(
+        encoding='utf-8')
+    assert f'{ADAPTATION}=false' in example
 
 
 @pytest.mark.parametrize('language,locale', [('en', 'en-US'), ('vi', 'vi-VN'), (None, 'ko-KR')])
@@ -127,6 +152,7 @@ def test_transport_failures_are_sanitized_without_fallback(v2_env, failure, code
 
 @pytest.mark.parametrize('field,value', [(PROJECT, ''), (PROJECT, '../bad'), (CREDENTIALS, ''),
     (CREDENTIALS, '/missing/private.json'), (LOCATION, 'https://bad'), (DENOISE, 'perhaps'),
+    (ADAPTATION, 'perhaps'),
     (vp.STT_LANGUAGE_ENV, 'bad-language'), (vp.STT_TIMEOUT_ENV, 'bad-timeout')])
 def test_configuration_errors_expose_only_names_in_readiness(v2_env, monkeypatch, field, value):
     monkeypatch.setenv(field, value)

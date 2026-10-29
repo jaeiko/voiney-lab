@@ -31,6 +31,7 @@ GOOGLE_STT_V2_PROJECT_ENV = "VOINEY_LAB_GOOGLE_STT_V2_PROJECT"
 GOOGLE_STT_V2_CREDENTIALS_ENV = "VOINEY_LAB_GOOGLE_STT_V2_CREDENTIALS_FILE"
 GOOGLE_STT_V2_LOCATION_ENV = "VOINEY_LAB_GOOGLE_STT_V2_LOCATION"
 GOOGLE_STT_V2_DENOISE_ENV = "VOINEY_LAB_GOOGLE_STT_V2_DENOISE"
+GOOGLE_STT_V2_ADAPTATION_ENV = "VOINEY_LAB_GOOGLE_STT_V2_ADAPTATION_ENABLED"
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class GoogleSttV2Settings:
     credentials_file: Path = field(repr=False)
     location: str = "us"
     denoise: bool = True
+    adaptation_enabled: bool = False
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> "GoogleSttV2Settings":
@@ -53,6 +55,11 @@ class GoogleSttV2Settings:
             denoise = boolean_setting(environment, GOOGLE_STT_V2_DENOISE_ENV, default=True)
         except ConfigurationError:
             raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_DENOISE_ENV) from None
+        try:
+            adaptation_enabled = boolean_setting(
+                environment, GOOGLE_STT_V2_ADAPTATION_ENV, default=False)
+        except ConfigurationError:
+            raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_ADAPTATION_ENV) from None
         raw = environment.get(GOOGLE_STT_V2_CREDENTIALS_ENV, "").strip()
         try:
             if not raw:
@@ -72,7 +79,13 @@ class GoogleSttV2Settings:
                 raise ValueError
         except (OSError, ValueError, RuntimeError):
             raise GoogleSttV2ConfigurationError(GOOGLE_STT_V2_CREDENTIALS_ENV) from None
-        return cls(project=project, credentials_file=resolved, location=location, denoise=denoise)
+        return cls(
+            project=project,
+            credentials_file=resolved,
+            location=location,
+            denoise=denoise,
+            adaptation_enabled=adaptation_enabled,
+        )
 
 
 def boolean_setting(environment:Mapping[str,str],name:str,*,default:bool)->bool:

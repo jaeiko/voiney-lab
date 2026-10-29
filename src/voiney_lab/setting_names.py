@@ -89,6 +89,8 @@ SETTINGS: tuple[Setting, ...] = (
             "Google STT V2 지역 (chirp_3 지원 지역을 사람이 확인)"),
     Setting("VOINEY_LAB_GOOGLE_STT_V2_DENOISE", MODELS, "true",
             "Google STT V2 내장 잡음 제거 (사람 음성 시험 뒤 확정)"),
+    Setting("VOINEY_LAB_GOOGLE_STT_V2_ADAPTATION_ENABLED", MODELS, "false",
+            "Google STT V2 인라인 용어 힌트 (chirp_3 us·eu 실측 404라 기본 끔)"),
     Setting("ELEVENLABS_API_KEY", KEYS, _NONE,
             "ElevenLabs API 키 (음성 공급자 elevenlabs)",
             kept_because="공급자 SDK 표준 이름 (사람 결정 2)"),
