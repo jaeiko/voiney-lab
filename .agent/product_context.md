@@ -11,9 +11,9 @@ decided is in `docs/DECISIONS.md`.
 protocol. Chemistry and biology wet-lab researchers wearing gloves follow
 their protocol without touching a screen:
 
-1. bring a protocol in — PDF, Word or a photo, or a public Google Drive file
-   or Docs link on the upload screen (Sheets links attach reagent tables
-   through the server API only);
+1. bring a protocol in — PDF, Word, a photo or a pasted Methods paragraph, or
+   a public Google Drive file or Docs link on the upload screen (Sheets links
+   attach reagent tables through the server API only);
 2. the server analyses it and checks every value against the source, and asks
    only what it must, as confirmation cards;
 3. the experimenter starts it (the start wizard's last button);
@@ -76,7 +76,7 @@ records belong to the owner named in `docs/GIT_WORKFLOW.md`).
 | Voice tests | Development server, in-gel protocol, last 2026-10-10. A café test the same day with borrowed earphones picked up bystanders and could not be completed | Voice calibration and loudness filter |
 | Report evaluation, 2026-10-19 | The report read as a voice-test log and did not help a researcher | The lab-notebook report |
 | Synthetic benches | Voice level, noise endpoint and speaker-verification measurements on synthetic voices and noise only | Thresholds marked "to re-measure" |
-| Pilot candidate withdrawal, 2026-10-24/25 (e-mail) | A chemistry lab that was to join the pilot (one master's researcher) withdrew. Reason: the lab follows published methods but changes conditions and the **procedure itself** as its research needs, so writing a separate protocol to use the product, beside its existing experiment record, is extra work. Three comments: (1) people move around the lab a lot — use it on a tablet; (2) terms such as "HPLC water" are known before the run; what is needed is expert answers to problems and questions that arise during it; (3) the burden of writing a separate protocol | The target-lab decision below; the exploratory-run design `docs/ADAPTED_RUN_PLAN.md` (not built) |
+| Pilot candidate withdrawal, 2026-10-24/25 (e-mail) | A chemistry lab that was to join the pilot (one master's researcher) withdrew. Reason: the lab follows published methods but changes conditions and the **procedure itself** as its research needs, so writing a separate protocol to use the product, beside its existing experiment record, is extra work. Three comments: (1) people move around the lab a lot — use it on a tablet; (2) terms such as "HPLC water" are known before the run; what is needed is expert answers to problems and questions that arise during it; (3) the burden of writing a separate protocol | The target-lab decision below; pasted Methods and reusable condition-only revisions are built, while procedure editing in the broader exploratory-run design `docs/ADAPTED_RUN_PLAN.md` is not built |
 
 The initial-customer profile below is a hypothesis, not evidence.
 

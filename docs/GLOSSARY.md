@@ -31,6 +31,7 @@
 | 분석할 쪽 | 분석할 쪽 (선택) · 분석한 쪽 | page range — `page_range` (요청 장부), `checked_page_range`, `review()` 의 `analysis_page_range` | 문서 일부만 분석할 때 고른 처음·끝 쪽 |
 | 오늘 바꾼 값 | 오늘 원문과 다르게 할 값 · 20분(오늘 바꾼 값 · 원문 15분) | run change — `RunChange`, `RunChanges`, `protocol_run_changes_chosen`, `run_value_changed` | 이번 실험에만 원문 대신 쓰는 값. 사람이 고르거나 말한 값만 |
 | 지난번처럼 | 지난번처럼 (n개) | `ExperimentReportStore.last_run_values`, `RunChanges.last_time` | 같은 계정의 지난 실험이 바꾼 값을 다시 고르기 |
+| 연구실판 | 연구실판 vN · 이 조건을 연구실판으로 저장 | condition-only lab-adapted revision — `LabAdaptedRevision`, `lab_adapted_revision` | 한 사람이 같은 원문 리비전과 시작 대상에서 다시 쓰도록 명시적으로 저장한 확인 조건 묶음. 원문·분석·검토본·단계는 바꾸지 않고 승인도 아니다 |
 | 개발용 예시 | 개발용 큐레이션 분석 | curated fixture — `VOINEY_LAB_CURATED_PROTOCOL_FIXTURE` | 개발 실행기가 넣는 in-gel 프로토콜 |
 
 ## 2. 확인 카드와 시작

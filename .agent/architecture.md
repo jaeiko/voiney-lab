@@ -284,6 +284,12 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   and image boxes; the bounded child-process timeout is unchanged (default
   30 seconds). Launchers show the effective limit; long-document success is
   still conditional on completing within it.
+- A pasted UTF-8 Methods paragraph is an immutable source too. The ingress
+  accepts bounded `text/plain`, rejects empty text and control characters,
+  records the text checksum, and uses the same bounded PDF-engine child to
+  make a born-digital PDF (`write_text_document_in_process`) without splitting ordinary scientific tokens. From
+  registration onward it takes the same analysis, source-evidence and review
+  path as another source; pasted text is not a model-created protocol.
 - HTTP callers cannot choose an OCR provider; the server injects one
   (`_install_protocol_ocr_provider`). OCR results must match the source's
   SHA-256 and cover every page once, in order.
@@ -325,6 +331,12 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   none is refused `run_changes_required`, and a choice that is another
   person's, used, or no longer the fixture's is refused `run_changes_stale`.
   Nothing chosen earlier applies on its own.
+  The owner may explicitly save a non-empty, checked condition set as a
+  `LabAdaptedRevision` for that exact immutable source revision and start
+  target. It is nested in the same append-only `protocol_run_changes_chosen`
+  event and never rewrites the source, analysis or review version; another
+  account or a changed target cannot load it. This condition-only revision is
+  not a second workflow authority and cannot add, remove or reorder steps.
   During the run `CuratedProtocolSession` changes or puts back a value
   (confirm_mode readback; asked first in 바로 확인 or noisy mode, and in
   every mode for a large value), runs the
@@ -332,7 +344,10 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   `state()["current_step_run_changes"]`. The record (`run_value_changed`,
   `run_value_reverted`, `session_started.run_changes`) feeds the notebook's
   "원문 → 실제"; the workspace events feed a recovery; "지난번처럼" reads the
-  owner's last record (`ExperimentReportStore.last_run_values`).
+  owner's last record (`ExperimentReportStore.last_run_values`). The same
+  front rule may apply a person-confirmed value while the one state machine is
+  `ready` and still before its first step; it does not start or advance the
+  workflow and preview or ended sessions still reject it.
 
 ### Page evidence segments and known analysis limits
 
