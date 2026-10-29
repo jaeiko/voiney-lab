@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, TypeVar
-from urllib.parse import quote, unquote_plus, urlsplit
+from urllib.parse import quote, unquote_plus, unquote_to_bytes, urlsplit
 from xml.sax.saxutils import escape as xml_escape
 import requests
 from dotenv import load_dotenv
@@ -143,6 +143,8 @@ from voiney_lab.protocol_catalog import (
     ProtocolCatalogNotFoundError,
     ProtocolCatalogUnavailableError,
     ProtocolRegistrationError,
+    ProtocolSourceDisclosure,
+    ProtocolSourceStatus,
     ProtocolReviewError,
     ProtocolReviewTargetChangedError,
     REAGENT_TABLE_MEDIA_TYPE,
@@ -255,7 +257,12 @@ from voiney_lab.vad import (
 )
 from voiney_lab import voice_providers
 from voiney_lab import accounts as accounts_module
-from voiney_lab.voice_providers import SpeechProviderError, SttProviderSettings, TtsProviderSettings
+from voiney_lab.voice_providers import (
+    SpeechProviderError,
+    SttAdaptationFallback,
+    SttProviderSettings,
+    TtsProviderSettings,
+)
 from voiney_lab.start_check import (
     RunChange,
     RunChangeError,
@@ -1087,7 +1094,12 @@ async def commercial_identity_boundary(request:Request,call_next):
 # of the screen's files. With VOINEY_LAB_APP_ORIGINS empty nothing is added.
 _APP_CORS_PATHS=frozenset({"/readyz","/healthz"})
 _APP_CORS_METHODS="GET, POST, PUT, PATCH, DELETE"
-_APP_CORS_HEADERS="Authorization, Content-Type, Accept"
+_SOURCE_STATUS_HEADER="x-voiney-source-status"
+_SOURCE_NOTE_HEADER="x-voiney-source-note"
+_APP_CORS_HEADERS=(
+    "Authorization, Content-Type, Accept, "
+    f"{_SOURCE_STATUS_HEADER}, {_SOURCE_NOTE_HEADER}"
+)
 _APP_CORS_EXPOSE="Retry-After, Content-Disposition"
 _APP_CORS_MAX_AGE_SECONDS=600
 
@@ -2248,10 +2260,28 @@ def _source_basis_from(fixture_filename:Any,entry:Mapping[str,Any]|None)->dict[s
 
     entry=entry or {}
     text=lambda value: value if isinstance(value,str) and value.strip() else None  # noqa: E731
-    return {
+    basis={
         "filename":text(entry.get("source_filename")) or text(fixture_filename),
         "uploaded_at":text(entry.get("created_at")),
     }
+    disclosure=entry.get("source_disclosure")
+    if isinstance(disclosure,Mapping):
+        if disclosure.get("recorded") is False:
+            basis["source_disclosure"]={
+                "recorded":False,"status":None,"status_ko":"확인 기록 없음",
+                "note":"","recorded_at":None,
+            }
+        elif disclosure.get("recorded") is True:
+            try:
+                parsed=ProtocolSourceDisclosure(
+                    status=ProtocolSourceStatus(disclosure.get("status")),
+                    note=disclosure.get("note"),
+                    recorded_at=disclosure.get("recorded_at"),
+                )
+                basis["source_disclosure"]=parsed.public_dict()
+            except (ProtocolRegistrationError,TypeError,ValueError):
+                pass
+    return basis
 
 
 def _note_readback(plan:Any,language:str,confirm_mode:str="readback")->Any:
@@ -3037,6 +3067,7 @@ class CascadeTranscriptionContext:
     audio_origin:str
     vad_threshold:float=0.5
     filler_words:bool=False
+    google_v2_adaptation_disabled:bool=False
 
     def __post_init__(self)->None:
         if self.audio_origin not in {"ordinary","barge_in"}:
@@ -3047,6 +3078,8 @@ class CascadeTranscriptionContext:
             raise ValueError("STT vad_threshold is outside bounds")
         if not isinstance(self.filler_words,bool):
             raise ValueError("STT filler_words is invalid")
+        if not isinstance(self.google_v2_adaptation_disabled,bool):
+            raise ValueError("Google V2 adaptation state is invalid")
 
     def request_policy(self)->dict[str,object]:
         fields=["format"]
@@ -3151,6 +3184,7 @@ def transcribe(
     keyterms:tuple[str,...]=(),
     vad_threshold:float=0.5,
     filler_words:bool=False,
+    disable_google_v2_adaptation:bool=False,
 )->Transcription:
     """Send one utterance to the configured STT provider (xAI by default).
 
@@ -3162,8 +3196,14 @@ def transcribe(
     settings=SttProviderSettings.from_environment()
     language=voice_providers.stt_language(settings,language)
     if settings.provider!=voice_providers.XAI:
+        provider_keyterms=(
+            ()
+            if settings.provider==voice_providers.GOOGLE_CLOUD_V2
+            and disable_google_v2_adaptation
+            else keyterms
+        )
         return voice_providers.transcribe(
-            pcm,settings,language=language,keyterms=keyterms)
+            pcm,settings,language=language,keyterms=provider_keyterms)
     multipart,_,_= _stt_multipart(
         pcm,language=language,keyterms=keyterms,vad_threshold=vad_threshold,
         filler_words=filler_words)
@@ -3774,6 +3814,10 @@ def _candidate_catalog_dict(fixture:CuratedProtocolFixture)->dict[str,object]:
         "lifecycle_state":(
             "ready" if execution["available_for_execution"] else "blocked"),
         "execution_blocked_reason":execution["blocked_reason"],
+        "source_disclosure":{
+            "recorded":False,"status":None,"status_ko":"확인 기록 없음",
+            "note":"","recorded_at":None,
+        },
     }
 
 
@@ -4889,6 +4933,69 @@ async def _spool_protocol_pdf_upload(
     return byte_size
 
 
+PUBLIC_SOURCE_ONLY_ENV="VOINEY_LAB_PUBLIC_SOURCE_ONLY"
+
+
+def _source_disclosure_error(code:str)->HTTPException:
+    return HTTPException(status_code=422,detail={"code":code})
+
+
+def _decoded_source_note(value:str)->str:
+    """Decode the browser's UTF-8 URI-component header without guessing."""
+
+    try:
+        value.encode("ascii")
+        if re.search(r"%(?![0-9A-Fa-f]{2})",value):
+            raise ValueError
+        return unquote_to_bytes(value).decode("utf-8","strict")
+    except (UnicodeDecodeError,UnicodeEncodeError,ValueError) as exc:
+        raise _source_disclosure_error("source_disclosure_invalid") from exc
+
+
+def _source_disclosure_from_values(
+    status_value:object,
+    note_value:object,
+)->ProtocolSourceDisclosure|None:
+    missing=status_value is None or (
+        isinstance(status_value,str) and not status_value.strip())
+    if missing:
+        if note_value is not None and note_value != "":
+            raise _source_disclosure_error("source_disclosure_invalid")
+        return None
+    if not isinstance(status_value,str) or not isinstance(note_value,(str,type(None))):
+        raise _source_disclosure_error("source_disclosure_invalid")
+    try:
+        return ProtocolSourceDisclosure(
+            status=ProtocolSourceStatus(status_value.strip().casefold()),
+            note=note_value or "",
+        )
+    except (ProtocolRegistrationError,ValueError) as exc:
+        raise _source_disclosure_error("source_disclosure_invalid") from exc
+
+
+def _source_disclosure_from_headers(request:Request)->ProtocolSourceDisclosure|None:
+    encoded_note=request.headers.get(_SOURCE_NOTE_HEADER)
+    note=_decoded_source_note(encoded_note) if encoded_note is not None else None
+    return _source_disclosure_from_values(
+        request.headers.get(_SOURCE_STATUS_HEADER),note)
+
+
+def _enforce_public_source_policy(
+    disclosure:ProtocolSourceDisclosure|None,
+)->None:
+    try:
+        enabled=boolean_setting(os.environ,PUBLIC_SOURCE_ONLY_ENV,default=False)
+    except ConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code":"configuration_invalid","setting":PUBLIC_SOURCE_ONLY_ENV},
+        ) from exc
+    if enabled and (
+        disclosure is None or disclosure.status is not ProtocolSourceStatus.YES
+    ):
+        raise _source_disclosure_error("public_source_required")
+
+
 @app.get("/api/protocols")
 def list_protocol_catalog()->dict[str,object]:
     """Read catalog metadata only; never trigger automated analysis."""
@@ -4939,6 +5046,21 @@ async def register_protocol_pdf(
     request of a text PDF itself).
     """
 
+    disclosure=_source_disclosure_from_headers(request)
+    _enforce_public_source_policy(disclosure)
+    return await _register_protocol_pdf(
+        request,filename=filename,first_page=first_page,last_page=last_page,
+        source_disclosure=disclosure)
+
+
+async def _register_protocol_pdf(
+    request:Request,
+    *,
+    filename:str,
+    first_page:int|None=None,
+    last_page:int|None=None,
+    source_disclosure:ProtocolSourceDisclosure|None,
+)->dict[str,object]:
     page_range=_requested_page_range(first_page,last_page)
     media_type=source_media_type(request.headers.get("content-type",""))
     if media_type not in SOURCE_MEDIA_TYPES:
@@ -4991,6 +5113,13 @@ async def register_protocol_pdf(
                         media_type=PDF_MEDIA_TYPE,
                         converted_from=converted,
                         **registration_scope,
+                    )
+                if source_disclosure is not None:
+                    catalog.record_source_disclosure(
+                        result.entry.protocol_id,source_disclosure)
+                    result=replace(
+                        result,
+                        entry=catalog.get_entry(result.entry.protocol_id),
                     )
                 _scope_catalog_resource(result.entry.protocol_id,bind=True)
                 catalog.check_page_range(result.entry.protocol_id,page_range)
@@ -5094,6 +5223,11 @@ async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
             raise LinkImportError("link_not_a_reagent_table")
         if link.kind=="spreadsheet" and not reagent_table:
             raise LinkImportError("link_sheet_needs_protocol")
+        source_disclosure=None
+        if not reagent_table:
+            source_disclosure=_source_disclosure_from_values(
+                body.get("public_source_status"),body.get("source_note"))
+            _enforce_public_source_policy(source_disclosure)
         if reagent_table:
             # The protocol is there before anything is downloaded for it.
             try:
@@ -5114,9 +5248,10 @@ async def import_protocol_link(body:dict[str,Any]=Body(...))->dict[str,object]:
                 table_id=str(response["reagent_table"]["table_id"])
             else:
                 # Lane EASY, decision 1: the pages to analyse, as for an upload.
-                response=await register_protocol_pdf(
+                response=await _register_protocol_pdf(
                     upload_request(fetched,"/api/protocols"),filename=fetched.filename,
-                    first_page=body.get("first_page"),last_page=body.get("last_page"))
+                    first_page=body.get("first_page"),last_page=body.get("last_page"),
+                    source_disclosure=source_disclosure)
                 target=str(response["protocol"]["protocol_id"])
                 table_id=None
         try:
@@ -6661,6 +6796,274 @@ def get_experiment_report_notebook(report_id:str)->Response:
         raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
 
 
+def _notebook_input(value:Any,field:str,maximum:int)->str:
+    if not isinstance(value,str):
+        raise HTTPException(status_code=422,detail=f"{field} is invalid")
+    cleaned=" ".join(value.split())
+    if len(cleaned)>maximum:
+        raise HTTPException(status_code=422,detail=f"{field} is invalid")
+    return cleaned
+
+
+def _notebook_event_key(
+    report_id:str,event_type:str,payload:Mapping[str,Any],*,sequence:int,
+)->str:
+    encoded=json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"))
+    return "note1-"+hashlib.sha256(
+        f"{report_id}\x1f{event_type}\x1f{sequence}\x1f{encoded}".encode("utf-8")
+    ).hexdigest()[:32]
+
+
+def _notebook_template_scope()->tuple[Any,ExperimentReportStore]:
+    principal,workspace=_commercial_workspace()
+    workspace.close()
+    settings=ExperimentReportSettings.from_environment()
+    if not settings.enabled or settings.database_path is None:
+        raise HTTPException(status_code=404,detail="experiment report unavailable")
+    return principal,ExperimentReportStore(settings.database_path)
+
+
+@app.get("/api/notebook-template")
+def get_notebook_template()->Response:
+    principal,store=_notebook_template_scope()
+    template=store.notebook_template(principal.organization_id)
+    return JSONResponse(content=jsonable_encoder(template),headers={"Cache-Control":"private, no-store"})
+
+
+@app.put("/api/notebook-template")
+async def put_notebook_template(request:Request)->Response:
+    if not _account_is_admin():
+        raise HTTPException(status_code=403,detail="administrator required")
+    principal,store=_notebook_template_scope()
+    body=await _json_object(request)
+    sections=body.get("sections")
+    if not isinstance(sections,list) or not all(isinstance(item,dict) for item in sections):
+        raise HTTPException(status_code=422,detail="notebook template is invalid")
+    canonical=[{"id":str(item.get("id") or ""),"name":" ".join(str(item.get("name") or "").split())}
+               for item in sections]
+    try:
+        current=store.notebook_template(principal.organization_id)
+        if current["sections"]==canonical:
+            saved=current
+        else:
+            encoded=json.dumps(canonical,ensure_ascii=False,separators=(",",":"))
+            event_key="template-"+hashlib.sha256(
+                f"{current['version']}\x1f{encoded}".encode("utf-8")
+            ).hexdigest()[:32]
+            saved=store.save_notebook_template(
+                organization_id=principal.organization_id,
+                actor_principal_id=principal.principal_id,
+                sections=canonical,event_key=event_key,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422,detail="notebook template is invalid") from exc
+    return JSONResponse(content=jsonable_encoder(saved),headers={"Cache-Control":"private, no-store"})
+
+
+@app.post("/api/experiment-reports/{report_id}/notebook/domain")
+async def select_experiment_notebook_domain(report_id:str,request:Request)->Response:
+    """Append the owner's explicit notebook field profile; workflow is unchanged."""
+
+    body=await _json_object(request)
+    domain=str(body.get("domain") or "")
+    if domain not in {"general","biology","chemistry","battery_materials"}:
+        raise HTTPException(status_code=422,detail="notebook domain is invalid")
+    store=_report_prose_store(report_id,write=True)
+    payload={"domain":domain}
+    try:
+        report=store.get_report(report_id)
+        domain_events=[event for event in report["events"]
+                       if event["event_type"]=="notebook_domain_selected"]
+        latest=(domain_events[-1].get("payload") or {}).get("domain") if domain_events else None
+        if latest!=domain:
+            report=store.append_event(
+                report_id,event_key=_notebook_event_key(
+                    report_id,"notebook_domain_selected",payload,
+                    sequence=len(domain_events)+1,
+                ),
+                event_type="notebook_domain_selected",source_tier="operator",payload=payload)
+        narrative=store._narrative(report_id,None,None)
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(status_code=200,content=jsonable_encoder({
+        "report_id":report_id,"domain":narrative.facts.notebook.domain,
+        "event_inserted":bool(report.get("event_inserted")),
+    }),headers={"Cache-Control":"private, no-store"})
+
+
+@app.post("/api/experiment-reports/{report_id}/notebook/inventory")
+async def record_experiment_notebook_inventory(report_id:str,request:Request)->Response:
+    """Append optional vendor/catalog/Lot facts for a source-listed item."""
+
+    body=await _json_object(request)
+    item_name=_notebook_input(body.get("item_name"),"item_name",400)
+    stage=str(body.get("stage") or "")
+    if stage not in {"before","after"}:
+        raise HTTPException(status_code=422,detail="inventory stage is invalid")
+    values={field:_notebook_input(body.get(field,""),field,200)
+            for field in ("vendor","catalog_number","lot_number")}
+    if not any(values.values()):
+        raise HTTPException(status_code=422,detail="an inventory value is required")
+    store=_report_prose_store(report_id,write=True)
+    try:
+        narrative=store._narrative(report_id,None,None)
+        facts=narrative.facts
+        assert facts is not None
+        item=next((entry for entry in facts.items
+                   if item_name in {entry.listed or entry.name,entry.name}),None)
+        projected=next((entry for entry in facts.notebook.inventory
+                        if entry.name==item_name),None)
+        if item is None and projected is None:
+            raise HTTPException(status_code=422,detail="inventory item is not in the source")
+        payload={
+            "item_kind":item.kind if item is not None else projected.kind,
+            "item_name":((item.listed or item.name) if item is not None else projected.name),
+            **values,"stage":stage,
+        }
+        report=store.get_report(report_id)
+        inventory_events=[event for event in report["events"]
+                          if event["event_type"]=="notebook_inventory_recorded"]
+        unchanged=(projected is not None and projected.stage==stage and all(
+            not value or getattr(projected,field_name)==value
+            for field_name,value in values.items()
+        ))
+        if not unchanged:
+            report=store.append_event(
+                report_id,event_key=_notebook_event_key(
+                    report_id,"notebook_inventory_recorded",payload,
+                    sequence=len(inventory_events)+1,
+                ),
+                event_type="notebook_inventory_recorded",source_tier="operator",payload=payload)
+        notebook=store._narrative(report_id,None,None).facts.notebook
+    except HTTPException:
+        raise
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(status_code=201,content=jsonable_encoder({
+        "report_id":report_id,"inventory":notebook.inventory,
+        "event_inserted":bool(report.get("event_inserted")),
+    }),headers={"Cache-Control":"private, no-store"})
+
+
+def _notebook_sharing_response(report:Mapping[str,Any],*,inserted:bool=False)->dict[str,Any]:
+    sharing=ExperimentReportStore.notebook_sharing(report)
+    return {
+        "report_id":report["report_id"],"shared":sharing["shared"],
+        "changed_at":sharing["changed_at"],"event_inserted":inserted,
+    }
+
+
+@app.get("/api/experiment-reports/{report_id}/sharing")
+def get_experiment_notebook_sharing(report_id:str)->Response:
+    """The owner's current record-level comparison consent."""
+
+    store=_report_prose_store(report_id,write=True)
+    try:
+        report=store.get_report(report_id)
+        content=_notebook_sharing_response(report)
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(content=jsonable_encoder(content),headers={"Cache-Control":"private, no-store"})
+
+
+@app.post("/api/experiment-reports/{report_id}/sharing")
+async def change_experiment_notebook_sharing(report_id:str,request:Request)->Response:
+    """Append the owner's opt-in or withdrawal; never changes workflow state."""
+
+    body=await _json_object(request)
+    if not isinstance(body.get("shared"),bool):
+        raise HTTPException(status_code=422,detail="sharing choice is invalid")
+    requested=bool(body["shared"])
+    store=_report_prose_store(report_id,write=True)
+    try:
+        report=store.get_report(report_id)
+        current=store.notebook_sharing(report)
+        inserted=False
+        if current["shared"]!=requested:
+            payload={"shared":requested}
+            event_key="note-share-"+hashlib.sha256(
+                f"{report_id}\x1f{current['changes']+1}\x1f{int(requested)}".encode("utf-8")
+            ).hexdigest()[:32]
+            report=store.append_event(
+                report_id,event_key=event_key,event_type="notebook_share_changed",
+                source_tier="operator",payload=payload,
+            )
+            inserted=bool(report.get("event_inserted"))
+        content=_notebook_sharing_response(report,inserted=inserted)
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(content=jsonable_encoder(content),headers={"Cache-Control":"private, no-store"})
+
+
+def _comparison_record(
+    store:ExperimentReportStore,report:Mapping[str,Any],*,mine:bool,shared_number:int,
+)->dict[str,Any]:
+    """A fact-only comparison projection; no owner identity or model prose."""
+
+    narrative=store._narrative(str(report["report_id"]),None,None)
+    book=narrative.facts.notebook
+    started=str(report.get("started_at") or "")
+    when=started.replace("T"," ")[:16]
+    label=("내 기록" if mine else f"공유 기록 {shared_number}")+(f" · {when}" if when else "")
+    result={
+        "record_scope":"mine" if mine else "shared",
+        "label":label,"started_at":started,"ended_at":report.get("ended_at"),
+        "protocol_revision":report.get("protocol_revision"),
+        "value_rows":[{
+            "step_label":row.label,"kind":row.kind,"source":row.source,
+            "actual":row.actual,"unit":row.unit,
+            "source_unit":row.source_unit,"actual_unit":row.actual_unit,
+        } for row in book.value_bars],
+        "method_rows":[{
+            "step_label":row.label,"source_text":row.source_text,
+            "actual_values":row.actual_values,"started_at":row.started_at,
+            "ended_at":row.ended_at,"timer":row.timer,
+        } for row in book.method_rows],
+        "timeline":[{
+            "at":row.at,"step_label":row.step_label,"kind":row.kind,"text":row.text,
+        } for row in book.timeline],
+        "notes":[{
+            "step_label":row.label,"at":row.at,"kind":row.kind,"text":row.shown,
+        } for row in book.observations],
+    }
+    if mine:
+        result["report_id"]=report["report_id"]
+    return result
+
+
+@app.get("/api/experiment-reports/{report_id}/comparisons")
+def compare_experiment_notebooks(report_id:str)->Response:
+    """Owner-only anchor; other records are opt-in, fact-only and read-only."""
+
+    principal,_workspace=_commercial_workspace()
+    _workspace.close()
+    store=_report_prose_store(report_id,write=True)
+    try:
+        reports=store.notebook_comparison_reports(
+            report_id,requester_principal_id=principal.principal_id,
+        )
+        records=[]
+        shared_number=0
+        for report in reports:
+            mine=report.get("owner_principal_id")==principal.principal_id
+            if not mine:
+                shared_number+=1
+            records.append(_comparison_record(
+                store,report,mine=mine,shared_number=shared_number,
+            ))
+    except (ValueError,KeyError,RuntimeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="experiment report unavailable") from exc
+    return JSONResponse(content=jsonable_encoder({
+        "anchor_report_id":report_id,"records":records,
+        "permission":{
+            "scope":"same_organization_same_protocol",
+            "other_records":"opt_in_read_only",
+            "withdrawal":"latest_append_only_event",
+            "judgment":"none",
+        },
+    }),headers={"Cache-Control":"private, no-store"})
+
+
 @app.get("/api/experiment-reports/{report_id}/review")
 def get_experiment_report_review(report_id:str):
     """The report's values and which the researcher confirmed (lane N, decision 3)."""
@@ -6884,6 +7287,23 @@ def post_protocol_review_version_pi_confirmation(
         raise _catalog_http_error(exc) from exc
 
 
+def _report_photo_resolver(report:Mapping[str,Any])->Callable[[Any],tuple[bytes,str]|None]:
+    """Resolve only this report's authenticated workspace image evidence."""
+
+    session_id=str(report.get("session_id") or "")
+
+    def resolve(image:Any)->tuple[bytes,str]|None:
+        if getattr(image,"kind","")!="photo" or not getattr(image,"asset_id",""):
+            return None
+        response=download_workspace_experiment_evidence(session_id,str(image.asset_id))
+        media_type=str(response.media_type or "")
+        if not media_type.startswith("image/"):
+            return None
+        return bytes(response.body),media_type
+
+    return resolve
+
+
 @app.get("/api/experiment-reports/{report_id}.{format_name}")
 def export_experiment_report(report_id:str,format_name:str):
     """Export one configured report without exposing its database location."""
@@ -6894,6 +7314,7 @@ def export_experiment_report(report_id:str,format_name:str):
         if not settings.enabled or settings.database_path is None:
             raise HTTPException(status_code=404,detail="experiment report unavailable")
         store=ExperimentReportStore(settings.database_path)
+        photo_resolver=_report_photo_resolver(store.get_report(report_id))
         if format_name=="json":
             content=store.export_json(report_id)
             media_type="application/json"
@@ -6908,14 +7329,14 @@ def export_experiment_report(report_id:str,format_name:str):
             media_type="text/csv; charset=utf-8"
         elif format_name=="docx":
             _prepared_report_prose(store,report_id)
-            content=store.export_docx(report_id)
+            content=store.export_docx(report_id,image_resolver=photo_resolver)
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         elif format_name=="pdf":
             # Lane RP2, decision 2: the Word report printed by the server's
             # LibreOffice; without it (or when it fails) the format is refused by name.
             _prepared_report_prose(store,report_id)
             try:
-                content=store.export_pdf(report_id)
+                content=store.export_pdf(report_id,image_resolver=photo_resolver)
             except ReportPdfError as exc:
                 raise HTTPException(status_code=503,detail=exc.code) from exc
             media_type="application/pdf"
@@ -7385,6 +7806,9 @@ class ListenerSession:
         #: Lane HEAR2: whether the provider outage under way was said aloud;
         #: a response that comes back ends the outage.
         self.stt_failure_said:bool=False
+        #: Lane STT4: a 400/404 from Google V2 inline adaptation disables
+        #: hints for the rest of this voice session only.
+        self.google_v2_adaptation_disabled:bool=False
         #: Lane HEAR, decision 4: the last committed turn's audio (for a
         #: continuation to join) and events of a turn opened between chunks.
         self._joinable_turn:dict[str,Any]|None=None
@@ -7647,6 +8071,13 @@ class ListenerSession:
         """The provider answered: the outage, if one was under way, is over."""
 
         self.stt_failure_said=False
+    def note_stt_adaptation_fallback(self)->bool:
+        """Remember Google V2's rejected hints; True only on the transition."""
+
+        if self.google_v2_adaptation_disabled:
+            return False
+        self.google_v2_adaptation_disabled=True
+        return True
     def note_heard(self)->None:
         """Words reached routing: the drops before them no longer count."""
 
@@ -7736,6 +8167,7 @@ class ListenerSession:
         self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
         self.history.reset()
         self.last_confirmed_language=None
+        self.google_v2_adaptation_disabled=False
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
         self._reset_turn_identity()
         self.session_id=experiment_session_id or new_session_id()
@@ -7752,6 +8184,7 @@ class ListenerSession:
         self.framer=FrameBuffer(); self._restore_primary_detector(TurnState.IDLE)
         self.history.reset()
         self.last_confirmed_language=None
+        self.google_v2_adaptation_disabled=False
         self.turn_committed_at.clear(); self.playback_completion_metrics.clear()
         self.accepted_configuration_id=None; self.accepted_mode=None
         self.accepted_language=None; self.accepted_protocol_id=None
@@ -8398,6 +8831,8 @@ def cascade_transcription_context(
         pending_frame=pending_frame,
         keyterms=keyterms,
         audio_origin=audio_origin,
+        google_v2_adaptation_disabled=(
+            session.google_v2_adaptation_disabled),
         filler_words=bool(getattr(
             getattr(session,"stt_settings",None),"filler_words",False)),
         vad_threshold=getattr(
@@ -8428,13 +8863,15 @@ def transcribe_cascade_audio(
     """
 
     try:
-        return transcribe(
-            clean_path(pcm),
-            language=context.language,
-            keyterms=context.keyterms,
-            vad_threshold=getattr(context, "vad_threshold", 0.5),
-            filler_words=bool(getattr(context, "filler_words", False)),
-        )
+        options={
+            "language":context.language,
+            "keyterms":context.keyterms,
+            "vad_threshold":getattr(context,"vad_threshold",0.5),
+            "filler_words":bool(getattr(context,"filler_words",False)),
+        }
+        if context.google_v2_adaptation_disabled:
+            options["disable_google_v2_adaptation"]=True
+        return transcribe(clean_path(pcm),**options)
     except requests.Timeout as exc:
         raise SpeechProviderError("STT timed out",code="timeout") from exc
     except requests.RequestException as exc:
@@ -10075,6 +10512,7 @@ def _open_experiment_report(
                     "filename":basis.get("filename"),
                     "uploaded_at":basis.get("uploaded_at"),
                     "words":basis.get("words"),
+                    "source_disclosure":basis.get("source_disclosure"),
                 },
             )
     return store.get_report(session.experiment_report_id)
@@ -12006,6 +12444,7 @@ def drop_reason_words(reason:str)->str:
 #: 주세요" (the words would fail again), never the provider's own text.
 STT_FAILURE_SCREEN_WORDS="받아쓰기 서비스가 답하지 않아요"
 STT_FAILURE_WORDS="받아쓰기 서비스가 답하지 않아요. 관리자에게 알려 주세요."
+STT_ADAPTATION_FALLBACK_REASON="stt_adaptation_disabled"
 STT_FAILURE_REASON_WORDS={
     "quota_exceeded":"받아쓰기 서비스의 한도가 다 됐어요",
     "unauthorized":"받아쓰기 서비스의 키에 문제가 있어요",
@@ -12145,6 +12584,7 @@ async def _report_stt_failure(
     await sender.text(
         "speech.dropped",configuration_id=session.accepted_configuration_id,
         turn_id=turn_id,generation=generation,reason="stt_failed",code=code,
+        status=status if isinstance(status,int) else None,
         duration_ms=duration_ms,level_db=level,paused=paused,
         during_playback=during_playback,
         notice=None if paused else STT_FAILURE_SCREEN_WORDS,
@@ -12155,6 +12595,29 @@ async def _report_stt_failure(
     if session.note_stt_failure():
         session.track_visual_task(asyncio.create_task(_say_server_words(
             session,sender,STT_FAILURE_WORDS,kind="stt_failure")))
+
+
+def _note_stt_adaptation_fallback(
+    session:ListenerSession,transcription:Transcription,
+)->SttAdaptationFallback|None:
+    """Record one privacy-safe session transition after a hint rejection."""
+
+    fallback=getattr(transcription,"adaptation_fallback",None)
+    if not isinstance(fallback,SttAdaptationFallback):
+        return None
+    if session.note_stt_adaptation_fallback():
+        log.warning(
+            "stt.adaptation_fallback status=%s code=%s",
+            fallback.status,fallback.code)
+        _record_workspace_metric(
+            category="voice",metric_name="stt_adaptation_fallback",
+            dimensions={
+                "status":"recovered",
+                "reason_code":STT_ADAPTATION_FALLBACK_REASON,
+                "event_kind":fallback.code,
+            },
+        )
+    return fallback
 
 
 async def _report_level_drop(
@@ -12651,11 +13114,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                    accepted_stt_context:CascadeTranscriptionContext|None=None,
                    voiced_level_db:float|None=None)->None:
     sender=sender or LockedSender(websocket); endpoint=session.endpoint_at or clock(); timings={}; generation=session.generation
+    stt_reason_code:str|None=None
     async def current_text(kind:str,**fields)->bool:
         if not session.is_current(turn_id,generation): return False
         fields.setdefault("generation",generation)
         if session.accepted_configuration_id is not None:
             fields.setdefault("configuration_id",session.accepted_configuration_id)
+        if kind=="turn.done" and stt_reason_code is not None:
+            fields.setdefault("reason_code",stt_reason_code)
         await sender.text(kind,**fields)
         _pilot_turn_event(session,turn_id,kind,fields); return True
 
@@ -12741,6 +13207,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         accepted_stt_context
         or cascade_transcription_context(session,audio_origin="ordinary")
     )
+    if transcription_context.google_v2_adaptation_disabled:
+        stt_reason_code=STT_ADAPTATION_FALLBACK_REASON
     stt_language=transcription_context.language
     stt_keyterms=transcription_context.keyterms
     if accepted_transcription is None:
@@ -12771,10 +13239,14 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     duration_ms=input_frames*20,level_db=voiced_level_db)
             return
         timings["stt"]=round((clock()-started)*1000)
+        if _note_stt_adaptation_fallback(session,transcription) is not None:
+            stt_reason_code=STT_ADAPTATION_FALLBACK_REASON
         session.note_stt_ok()
     else:
         transcription=accepted_transcription
         timings["stt"]=max(0,accepted_stt_ms or 0)
+        if _note_stt_adaptation_fallback(session,transcription) is not None:
+            stt_reason_code=STT_ADAPTATION_FALLBACK_REASON
     # Keep test/custom adapters written to the pre-Phase-3 text-only boundary
     # working in manual mode while production returns structured metadata.
     if isinstance(transcription,str):
@@ -13795,6 +14267,11 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                         speech_text=f"{plan.speech_text}{unsaved}",
                     )
                 await current_text("experimenter.settings",turn_id=turn_id,settings=saved)
+            if getattr(plan,"display_mode",None) in {"far","normal"}:
+                # HOOD1: this is a configuration-fenced instruction to the
+                # browser, not durable experimenter or workflow state.
+                await current_text(
+                    "screen.display_mode",turn_id=turn_id,mode=plan.display_mode)
             if (
                 plan.action is CuratedProtocolAction.RECORD_CORRECTION
                 and plan.record_fix is not None
@@ -14342,6 +14819,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             CuratedProtocolAction.STOP:"protocol_stop",
             CuratedProtocolAction.INACTIVE:"inactive_session_guard",
             CuratedProtocolAction.AGENT_META:"agent_meta_information",
+            CuratedProtocolAction.DISPLAY_MODE:"display_mode_changed",
             CuratedProtocolAction.PAUSE:"workflow_paused",
             CuratedProtocolAction.RESUME:"workflow_resumed",
             CuratedProtocolAction.START_TIMER:"step_timer_started",
@@ -15545,6 +16023,7 @@ async def voice_socket(websocket:WebSocket):
                         transcription=await asyncio.to_thread(
                             transcribe_cascade_audio,
                             item.result.utterance or b"",stt_context)
+                        _note_stt_adaptation_fallback(session,transcription)
                         if isinstance(transcription,str):
                             transcription=Transcription(transcription,None)
                     except Exception as exc:

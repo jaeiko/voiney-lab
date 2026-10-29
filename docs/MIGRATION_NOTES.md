@@ -144,6 +144,20 @@ prose regeneration require the owner. The administrator may append only PI
 confirmation to another person's notebook. Unavailable records return 404
 (socket: `report_not_found`), including records from another lab.
 
+## Experiment record schema 2 → 3
+
+The report store adds `experiment_notebook_templates`, an append-only table of
+research-lab notebook section names and order. Existing reports, events and
+generated prose are not rewritten. A schema-2 store creates the empty table on
+open and then reads the built-in eight-section default until a lab administrator
+saves a version. Every saved version contains each fixed section id exactly
+once; only its display name and position can change.
+
+Back up `experiment_reports.sqlite` together with its WAL/SHM files before
+upgrading. The migration is idempotent and a fixture verifies that existing
+event rows stay byte-for-byte unchanged. Older servers refuse schema 3; restore
+the pre-migration backup to roll back.
+
 Protocol registration now scopes checksum deduplication to the server's lab.
 Existing bound protocol ids stay valid. A newly registered lab/source pair uses
 a deterministic scoped id and its own registration event; the original PDF

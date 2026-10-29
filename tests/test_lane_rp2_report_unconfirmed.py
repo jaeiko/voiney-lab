@@ -46,7 +46,8 @@ class TopLineTests(_Case):
         self.assertEqual(lines[4], f"> **확인 안 된 값 2개** — 실험자가 아직 확인하지 않은 값이다. "
                                    f"표에 {er.UNCONFIRMED_MARK}로 표시했다. 화면의 확인 목록에서 확인하면 빠진다.")
         self.assertEqual(lines[6:8], ["- 2단계 측정: 세척액 450 µL", "- 4단계 측정: acetonitrile 180 µL 넣음"])
-        self.assertEqual(lines[9], "| 항목 | 내용 |")
+        self.assertEqual(lines[9], "## 실험 정보")
+        self.assertEqual(lines[11], "| 항목 | 내용 |")
 
     def test_no_line_when_every_value_was_confirmed(self) -> None:
         text = self.markdown(deviation_run(self.temporary.name))

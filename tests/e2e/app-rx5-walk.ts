@@ -13,6 +13,7 @@ export async function mockParity(page: Page, owner = true) {
   if (path === '/api/auth/session') return route.fulfill({ json: { mode: 'dev', signed_in: true, account: { account_id: 'me', name: '가짜 사용자', organization_id: 'synthetic', admin: true } } });
   if (path === '/api/workspace/session') return route.fulfill({ json: { principal_id: 'me' } });
   if (path === '/api/protocols') return route.fulfill({ json: { protocols: PARITY_DOCUMENTS.map((_, i) => parityReview(i)) } });
+  if (path === '/api/notebook-template') return route.fulfill({ json: { version: 0, sections: [] } });
   if (path === '/api/voice/voices') return route.fulfill({ json: { voices: [] } });
   if (path === '/api/experimenter/settings') { if (req.method() === 'PUT') settings = { ...settings, ...req.postDataJSON() }; return route.fulfill({ json: { settings } }); }
   const match = /^\/api\/protocols\/([^/]+)(.*)$/.exec(path);
@@ -41,6 +42,8 @@ export async function mockParity(page: Page, owner = true) {
    if (req.method() === 'POST') prepared.add(report[1]);
    return route.fulfill({ json: { state: 'ready', label: prepared.has(report[1]) ? '문장을 다시 준비했어요.' : '문장이 준비됐어요.', new_records: 0 } });
   }
+  if (/^\/api\/experiment-reports\/report-(cells|solution|battery)\/sharing$/.test(path)) return route.fulfill({ json: { shared: false, changed_at: null } });
+  if (/^\/api\/experiment-reports\/report-(cells|solution|battery)\/comparisons$/.test(path)) return route.fulfill({ json: { records: [], permission: { judgment: 'none' } } });
   return route.fulfill({ status: 404, json: { detail: 'not_found' } });
  });
  return writes;

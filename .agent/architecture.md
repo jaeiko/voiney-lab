@@ -495,7 +495,11 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   explicit ADC JSON outside git: service account, AWS WIF or developer user;
   in-memory OAuth token). The ADC loader does no project discovery or ambient
   fallback; AWS IMDS/Google STS/impersonation and recognition share one deadline,
-  with fixed endpoint allowlists and no redirect/retry. OCR: `clova`,
+  with fixed endpoint allowlists and no redirect. A Google V2 inline-adaptation
+  400/404 gets one same-provider/model request with adaptation removed; success
+  disables adaptation for the rest of that voice session and records the
+  content-free reason `stt_adaptation_disabled`. No other STT failure retries or
+  changes provider. OCR: `clova`,
   `google`. Background roles (`analysis`, `translation`, `report`) retry
   429/5xx and carry the Gemini safety setting; voice-turn roles do neither.
 
@@ -505,7 +509,7 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
 |---|---|---|---|---|
 | Protocol catalog | `<protocol dir>/protocol_workspace.sqlite` + `objects/sha256/…` | 1 | `experiment_protocol_store`, `protocol_catalog` | events: yes; sources immutable |
 | Workspace | `<workspace>/commercial_workspace.sqlite` + `evidence/…` | 13 | `workspace_store` | session events, completed steps, observations, evidence, sentence translations and glossaries (each with its translation `style_version`) — SQL triggers refuse UPDATE/DELETE |
-| Experiment record | `<protocol dir>/experiment_reports.sqlite` | 2 | `experiment_reports` | events by stable key (`INSERT OR IGNORE`); no triggers — enforced by code; prose is replaceable |
+| Experiment record | `<protocol dir>/experiment_reports.sqlite` | 3 | `experiment_reports` | events and notebook-template versions append by stable key; no triggers — enforced by code; prose is replaceable |
 | Accounts | `<workspace>/accounts.sqlite` | 1 | `accounts` | no (sessions end; only hashes stored) |
 | Pilot metrics | `<workspace>/pilot_metrics.sqlite` | — | `pilot_metrics` | rows of numbers, codes and times |
 | Safety catalog | path in `VOINEY_LAB_SAFETY_CATALOG` | 2 | `scripts/ingest_safety_documents.py` | read-only at runtime |
@@ -517,12 +521,13 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   ownership first, then read metadata, analyses and ledger summaries without
   extracting PDFs. Verified immutable analysis records are cached by source,
   revision and actual record bytes; changed bytes are validated again.
-- Report schema 1 migrates to 2 on open; startup/access backfills ownership
+- Report schema 1 migrates to 2 and then 3 on open; startup/access backfills ownership
   from the exact workspace session. A lab-only legacy record allows same-lab
   administrators to read/export and append PI confirmation, with no owner
   write permission; an unscoped one stays inaccessible. Historical events and prose are
-  preserved. Rollback requires the matching pre-migration backup (migration
-  details in `docs/MIGRATION_NOTES.md`).
+  preserved. Schema 3 adds only append-only lab notebook heading/order versions;
+  older rows are not rewritten. Rollback requires the matching pre-migration
+  backup (migration details in `docs/MIGRATION_NOTES.md`).
 - Observations are `observation_only` and evidence files `not_interpreted`:
   neither becomes protocol knowledge.
 - The workspace keeps tables that nothing writes any more (approvals,
@@ -660,7 +665,32 @@ build fails. It keeps the old hash routes (`#/home`, `#/protocols`) and has its 
 `GET /api/experiment-reports/{report}/notebook` returns the existing
 export notebook projection, review items and ledger events without preparing
 prose. The experiment list adds only the last owner rating of an accessible
-report. Existing experiment/report/evidence read gates apply. Its experiment screen does not reimplement the voice: it
+report. The notebook projection is the renderer-neutral authority shared by
+the screen and Word/Markdown/PDF: eight complete sections, source step to
+actual value/time rows, deterministic timeline/value bars, recorded photos,
+source-PDF figure crops, one source-selected/person-overridable domain profile,
+and the source inventory plus optional vendor/catalog/Lot facts. Purpose and
+result are person-authored only and interpretation is blank; model-prepared
+prose is not added to this notebook body. `audit_notebook_number_provenance`
+can reproduce every displayed number from source inventory/steps, ledger
+events or the bounded calculations named by the projection. DOCX/PDF image
+resolution reuses the authenticated workspace evidence reader and the
+content-addressed source-figure cache; a missing image leaves its grounded
+caption rather than creating a replacement.
+
+Notebook presentation and comparison mutations are append-only and never
+touch workflow state. A same-organization admin may append a complete
+eight-id heading/order version through `/api/notebook-template`; content and
+grounding are fixed. An owner may append optional inventory/domain choices
+and `notebook_share_changed`. `/sharing` is owner-only. `/comparisons` first
+requires ownership of its anchor, then returns at most 20 completed records
+for the same organization and protocol: the requester's records plus other
+owners whose latest share event is true. Other-owner rows omit owner and
+report identifiers and are read-only projections of source/actual values,
+method times/timers and
+verbatim notes; no report id, owner, purpose, result, interpretation,
+recommendation or verdict crosses that boundary. A later false share event
+removes the row on the next query. Existing experiment/report/evidence read gates apply. Its experiment screen does not reimplement the voice: it
 loads `/voice-core.js` and `/connection.js` as classic scripts and
 `web/src/voice/engine.ts` defines the names they call
 (`VOICE_CORE_HOST_NAMES`, connection.js's per-turn maps and renderers), reads
@@ -716,6 +746,7 @@ Everything fails closed and visibly, and none of it mutates workflow state:
 | Condition | Result |
 |---|---|
 | A model role, STT or TTS provider not set | `RoleNotConfiguredError` / `ConfigurationError` naming the missing setting; no fallback provider |
+| Google V2 inline adaptation returns HTTP 400/404 | Retry once with only adaptation removed; on success record `stt_adaptation_disabled` and omit hints for that voice session; never choose another provider |
 | Router enabled without its provider/model | Router off, reason in `ready.research_capabilities.llm_router`; turns take the rules |
 | `VOINEY_LAB_ROUTER_FIRST` without the router | `/ws` refuses the configuration |
 | Outside-PDF, web or drawing switched on without its key or role | `/ws` refuses at connect |

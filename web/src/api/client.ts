@@ -98,10 +98,10 @@ export function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 /** A file's bytes as the body, typed by its media type (the upload route reads the type, not the name). */
-export function postFile<T>(path: string, file: Blob, mediaType: string): Promise<T> {
+export function postFile<T>(path: string, file: Blob, mediaType: string, headers: Record<string, string> = {}): Promise<T> {
   return apiFetch<T>(path, {
     method: "POST",
-    headers: { "Content-Type": mediaType },
+    headers: { "Content-Type": mediaType, ...headers },
     body: file,
   });
 }

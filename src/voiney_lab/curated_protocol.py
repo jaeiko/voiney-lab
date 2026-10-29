@@ -136,6 +136,7 @@ class CuratedProtocolAction(str, Enum):
     STOP = "stop"
     INACTIVE = "inactive"
     AGENT_META = "agent_meta"
+    DISPLAY_MODE = "display_mode"
     PAUSE = "pause"
     RESUME = "resume"
     START_TIMER = "start_timer"
@@ -585,6 +586,9 @@ class CuratedProtocolTurnPlan:
     #: A setting the experimenter changed by voice (lane CF, decision 1):
     #: {"confirm_mode": "quiet"}; the server keeps it for the next session.
     setting_change: dict[str, str] | None = None
+    #: HOOD1 (2026-10-28): a device-local experiment-screen preference.  The
+    #: server emits the requested mode, but stores no workflow or account state.
+    display_mode: Literal["far", "normal"] | None = None
     #: Lane RP3, decision ②: what the turn said for the notebook -- the
     #: purpose and samples, an observation at a completed step, the result
     #: and the change for next time, or a correction of one of these. The
@@ -4301,6 +4305,9 @@ FRONT_RULES: dict[str, str] = {
                     "return does, a no moves on and is recorded as done "
                     "differently; with no count, '한 번 더 하시나요?' after each "
                     "round (lane CB, decision 3)",
+    "display_mode": "'화면 크게' or '보통 화면': emit a device display request "
+                    "without changing, clearing or renewing any workflow "
+                    "checkpoint (lane HOOD1, 2026-10-28)",
     "experimenter_setting": "'확인 질문 켜 줘', '조용히 모드', '되읽기 모드로 해 줘', "
                             "'질문은 실험 중에 물어봐 줘': the experimenter's way of "
                             "confirming values or the time the source's questions "
@@ -4896,6 +4903,13 @@ _NOTE_CONTENT_FIRST = re.compile(
 _NOTE_BARE = re.compile(
     rf"^(?:{_NOTE_PLACE}\s*{_NOTE_VERB_PLACED}|{_NOTE_VERB}){_NOTE_POLITE}\s*[.!。]?$"
 )
+# At the bench, researchers also use a heading as the whole command
+# ("특이사항, ...", "메모 ...").  The heading is not part of the recorded
+# words.  Keep this narrower than the noun-first command above so ordinary
+# sentences that merely mention a memo are not captured.
+_NOTE_BENCH_PREFIX = re.compile(
+    r"^(?P<noun>특이사항|메모)\s*(?:[,：:]\s*|\s+)(?P<content>\S.*)$"
+)
 #: A quotative ending of content said before the command ("…라고 적어 줘").
 _NOTE_QUOTATIVE = re.compile(r"(?:\s*(?:이)?라고|(?<=다)고)$")
 #: "pH 7.2로 기록해 줘": the "(으)로" after a value is the command's, not the note's.
@@ -4921,13 +4935,28 @@ _MEASURE = re.compile(
     rf"(?:\s*(?:{_MEASURE_UNIT}))?"
     rf"|(?<![\w.]){_MEASURE_NUMBER}\s*(?:{_MEASURE_UNIT})"
 )
+# A bare measurement is a note only when its short form anchors both a
+# concrete bench identifier and a named measured quantity.  This admits
+# "2번 셀 질량 12.3 mg" without turning every number heard near the
+# microphone into a record.
+_NOTE_LOCATION_ID = (
+    r"(?:\d+\s*번|[A-Ha-h]\s*(?:[1-9]|1[0-2])|[A-Za-z]+[-_]\d+)"
+)
+_NOTE_LOCATION_ENTITY = r"(?:well|웰|튜브|tube|셀|cell|시료|샘플|sample)"
+_NOTE_IDENTIFIED_MEASUREMENT = re.compile(
+    rf"^(?=.*(?:{_NOTE_LOCATION_ID})\s*(?:{_NOTE_LOCATION_ENTITY})|"
+    rf"(?=.*(?:{_NOTE_LOCATION_ENTITY})\s*(?:{_NOTE_LOCATION_ID})))"
+    rf"(?=.*(?:{_MEASURE_NAME})\s*(?:은|는|이|가|값은|값이|:)?\s*"
+    rf"(?:{_MEASURE_NUMBER}|{_KOREAN_DECIMAL})).+$",
+    re.I,
+)
 _DEVIATION_WORDS = re.compile(
     r"(?:원문|프로토콜)(?:과|이랑|하고|이란|보다)?\s*(?:다르게|달리|다른\s*(?:방법|조건))"
     r"|대신|더\s*(?:넣|많이|오래|길게|했|돌렸|추가|기다렸)|덜\s*(?:넣|했|돌렸|기다렸)"
     r"|적게\s*넣|많이\s*넣|바꿔서|바꿨|변경했|빼고|생략|건너뛰|안\s*넣었|못\s*넣었"
 )
 _OBSERVATION_WORDS = re.compile(
-    r"색|투명|맑|탁해|탁하|흐려|흐릿|뿌옇|침전|녹았|녹아|안\s*녹|덩어리|보여|보인|보이|"
+    r"색|투명|맑|탁해|탁하|탁함|흐려|흐릿|뿌옇|침전|녹았|녹아|안\s*녹|덩어리|보여|보인|보이|"
     r"변했|바뀌었|거품|냄새|층이|분리됐|굳었|굳어|응고|탈색|염색|밴드|형광|끓|증발|"
     r"줄었|늘었|부풀|갈라|노랗|파랗|빨갛|하얗|노란|파란|빨간|하얀|점성|끈적|결정이|가루|입자"
 )
@@ -4992,6 +5021,12 @@ def note_request(transcript: str) -> tuple[str | None, str | None] | None:
             return None
         content = _note_content(match.group("content") or "")
         return (content or None), noun
+    match = _NOTE_BENCH_PREFIX.fullmatch(said)
+    if match is not None:
+        content = _note_content(match.group("content"))
+        return (content or None), match.group("noun")
+    if _NOTE_IDENTIFIED_MEASUREMENT.fullmatch(said):
+        return said, None
     match = _NOTE_COMMAND_FIRST.fullmatch(said)
     if match is None:
         match = _NOTE_CONTENT_FIRST.fullmatch(said)
@@ -5503,6 +5538,34 @@ def experimenter_setting_request(transcript: str) -> dict[str, str] | None:
     for pattern, setting in _SETTING_PATTERNS:
         if pattern.fullmatch(said):
             return dict(setting)
+    return None
+
+
+_DISPLAY_MODE_PATTERNS: tuple[tuple[re.Pattern[str], Literal["far", "normal"]], ...] = (
+    (
+        re.compile(r"^화면\s*크게(?:\s*(?:해|해\s*줘|해주세요))?$"),
+        "far",
+    ),
+    (
+        re.compile(r"^보통\s*화면(?:으로)?(?:\s*(?:해|해\s*줘|해주세요))?$"),
+        "normal",
+    ),
+)
+
+
+def display_mode_request(transcript: str) -> Literal["far", "normal"] | None:
+    """Return the requested device display mode for one narrow whole command.
+
+    A question or a sentence merely containing these words does not change
+    the screen.  This is a deterministic front rule, not a workflow setting.
+    """
+
+    said = " ".join(transcript.split()).strip(" .!。")
+    if not said or "?" in said or "？" in said:
+        return None
+    for pattern, mode in _DISPLAY_MODE_PATTERNS:
+        if pattern.fullmatch(said):
+            return mode
     return None
 
 
@@ -19797,6 +19860,27 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        if language == "ko" and transcript_quality is None:
+            display_mode = display_mode_request(transcript)
+            if display_mode is not None:
+                # A view preference is read before any open-question reader.
+                # It therefore cannot consume, clear or renew a workflow gate.
+                words = (
+                    "화면을 멀리 보기로 바꿨어요."
+                    if display_mode == "far"
+                    else "화면을 보통 보기로 바꿨어요."
+                )
+                planned = replace(
+                    self._words_plan(
+                        words,
+                        intent_kind="display_mode_changed",
+                        action=CuratedProtocolAction.DISPLAY_MODE,
+                    ),
+                    display_mode=display_mode,
+                )
+                self._last_front_rule = "display_mode"
+                self._replay[turn_id] = planned
+                return planned
         arbitration = arbitration or arbitrate_request(transcript)
         if (
             language == "ko" and transcript_quality is None

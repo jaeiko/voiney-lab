@@ -27,6 +27,8 @@ it('retains the saved value when a preference write is refused and resolves a ro
  renderWithClient(<SettingsScreen session={{ ...SESSION_DEV, mode: 'dev' }} />);
  await screen.findByRole('option', { name: '견본 마이크' });
  expect(screen.getByLabelText('쓸 마이크')).toHaveValue('new-device');
+ expect(screen.getByTestId('microphone-choice')).toHaveTextContent('지금 고른 마이크 · 견본 마이크');
+ expect(screen.getByTestId('settings-advanced')).toHaveTextContent('Bluetooth 이어셋이나 목걸이형 마이크');
  await userEvent.selectOptions(screen.getByLabelText('원문이 "경우에 따라" 할 때'), 'during');
  expect(await screen.findByText('저장하지 못했어요. 다시 골라 주세요.')).toBeInTheDocument();
  expect(screen.getByLabelText('원문이 "경우에 따라" 할 때')).toHaveValue('before_start');

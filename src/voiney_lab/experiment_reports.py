@@ -18,10 +18,12 @@ import secrets
 import sqlite3
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace as _replace_dataclass
+from dataclasses import dataclass, field, fields as _dataclass_fields, is_dataclass, replace as _replace_dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from voiney_lab.experiment_protocol_analysis import program_address_shape
@@ -116,14 +118,16 @@ EVENT_NAMES_KO: dict[str, str] = {
     # Lane RP3 (decisions ②, ④): what the experimenter says at the start and
     # the end of a run, and a PI's confirmation of the notebook.
     "purpose_recorded": "목적·시료 기록", "result_recorded": "결과·다음 할 일 기록",
-    "pi_confirmed": "PI 확인",
+    "pi_confirmed": "PI 확인", "notebook_domain_selected": "실험 노트 분야 양식 변경",
+    "notebook_inventory_recorded": "Methods 정보 기록",
+    "notebook_share_changed": "실험 노트 비교 공유 변경",
 }
 
 
 class ExperimentReportStore:
     """Small SQLite store with one report per procedure session."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -187,6 +191,17 @@ class ExperimentReportStore:
               event_count INTEGER NOT NULL,
               prepared_at TEXT NOT NULL
             );
+            -- Organisation notebook headings/order are append-only versions.
+            -- They change projections only, never experiment state.
+            CREATE TABLE IF NOT EXISTS experiment_notebook_templates (
+              id INTEGER PRIMARY KEY,
+              organization_id TEXT NOT NULL,
+              event_key TEXT NOT NULL,
+              sections TEXT NOT NULL,
+              actor_principal_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              UNIQUE(organization_id,event_key)
+            );
             """
         )
         connection.execute("BEGIN IMMEDIATE")
@@ -204,6 +219,9 @@ class ExperimentReportStore:
                            "ownership_migrated INTEGER NOT NULL DEFAULT 0"):
                 connection.execute(f"ALTER TABLE experiment_reports ADD COLUMN {column}")
             connection.execute("UPDATE experiment_report_metadata SET schema_version=?", (self.SCHEMA_VERSION,))
+        elif len(rows) == 1 and rows[0][0] == 2:
+            # Version 3 only adds append-only notebook presentation settings.
+            connection.execute("UPDATE experiment_report_metadata SET schema_version=?", (self.SCHEMA_VERSION,))
         elif len(rows) != 1 or rows[0][0] != self.SCHEMA_VERSION:
             connection.close()
             raise RuntimeError("experiment report schema is unsupported")
@@ -214,6 +232,8 @@ class ExperimentReportStore:
             connection.execute("ALTER TABLE experiment_reports ADD COLUMN ownership_migrated INTEGER NOT NULL DEFAULT 0")
         connection.execute("CREATE INDEX IF NOT EXISTS experiment_report_owner_history "
                            "ON experiment_reports(organization_id,owner_principal_id,protocol_id,started_at,report_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS experiment_notebook_template_history "
+                           "ON experiment_notebook_templates(organization_id,id)")
         connection.commit()
         return connection
 
@@ -248,6 +268,120 @@ class ExperimentReportStore:
         if (row is None or row["organization_id"] != organization_id
                 or (not every_owner and row["owner_principal_id"] != owner_principal_id)):
             raise KeyError("experiment report not found")
+
+    @staticmethod
+    def notebook_sharing(report: Mapping[str, Any]) -> dict[str, Any]:
+        """Current opt-in state, derived from the latest append-only event."""
+
+        shared = False
+        changed_at = None
+        changes = 0
+        if report.get("owner_principal_id") is None:
+            return {"shared": False, "changed_at": None, "changes": 0}
+        for event in report.get("events") or ():
+            if str(event.get("event_type") or "") != "notebook_share_changed":
+                continue
+            payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+            if not isinstance(payload.get("shared"), bool):
+                continue
+            shared = bool(payload["shared"])
+            changed_at = event.get("created_at")
+            changes += 1
+        return {"shared": shared, "changed_at": changed_at, "changes": changes}
+
+    def notebook_comparison_reports(
+        self, report_id: str, *, requester_principal_id: str, limit: int = 20,
+    ) -> tuple[dict[str, Any], ...]:
+        """Own and explicitly shared records for one lab/protocol.
+
+        This method does not grant report access.  Its caller must first prove
+        ownership of the anchor and must expose only a bounded read projection.
+        """
+
+        anchor = self.get_report(report_id)
+        requester_principal_id = _clean_identifier(requester_principal_id, "requester_principal_id")
+        if (anchor.get("owner_principal_id") != requester_principal_id
+                or anchor.get("organization_id") is None):
+            raise KeyError("experiment report not found")
+        bounded = max(1, min(int(limit), 20))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT candidate.report_id FROM experiment_reports AS candidate
+                 WHERE candidate.organization_id=? AND candidate.protocol_id=?
+                   AND candidate.owner_principal_id IS NOT NULL AND candidate.ended_at IS NOT NULL
+                   AND (candidate.owner_principal_id=? OR COALESCE((
+                       SELECT json_extract(event.payload,'$.shared')
+                         FROM experiment_report_events AS event
+                        WHERE event.report_id=candidate.report_id
+                          AND event.event_type='notebook_share_changed'
+                        ORDER BY event.id DESC LIMIT 1
+                   ),0)=1)
+                 ORDER BY candidate.started_at,candidate.report_id
+                 LIMIT ?
+                """,
+                (anchor["organization_id"], anchor["protocol_id"], requester_principal_id, bounded),
+            ).fetchall()
+        visible = []
+        for row in rows:
+            report = self.get_report(str(row["report_id"]))
+            if (report.get("owner_principal_id") == requester_principal_id
+                    or self.notebook_sharing(report)["shared"]):
+                visible.append(report)
+        return tuple(visible)
+
+    def notebook_template(self, organization_id: str | None) -> dict[str, Any]:
+        """Latest lab notebook presentation version, or the product default."""
+
+        if organization_id is None:
+            return {
+                "version": 0,
+                "sections": [{"id": item.id, "name": item.name} for item in DEFAULT_NOTEBOOK_TEMPLATE],
+                "created_at": None,
+            }
+        _clean_identifier(organization_id, "organization_id")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id,sections,created_at FROM experiment_notebook_templates "
+                "WHERE organization_id=? ORDER BY id DESC LIMIT 1",
+                (organization_id,),
+            ).fetchone()
+        if row is None:
+            return {
+                "version": 0,
+                "sections": [{"id": item.id, "name": item.name} for item in DEFAULT_NOTEBOOK_TEMPLATE],
+                "created_at": None,
+            }
+        return {"version": int(row["id"]), "sections": json.loads(row["sections"]),
+                "created_at": row["created_at"]}
+
+    def save_notebook_template(
+        self, *, organization_id: str, actor_principal_id: str,
+        sections: Sequence[Mapping[str, Any]], event_key: str,
+    ) -> dict[str, Any]:
+        """Append one validated heading/order version for a lab."""
+
+        organization_id = _clean_identifier(organization_id, "organization_id")
+        actor_principal_id = _clean_identifier(actor_principal_id, "actor_principal_id")
+        event_key = _clean_identifier(event_key, "event_key")
+        normalized = []
+        for item in sections:
+            section_id = str(item.get("id") or "") if isinstance(item, Mapping) else ""
+            name = " ".join(str(item.get("name") or "").split()) if isinstance(item, Mapping) else ""
+            if section_id not in NOTEBOOK_SECTION_IDS or not name or len(name) > 60:
+                raise ValueError("notebook template section is invalid")
+            normalized.append({"id": section_id, "name": name})
+        if len(normalized) != len(NOTEBOOK_SECTION_IDS) or {item["id"] for item in normalized} != set(
+                NOTEBOOK_SECTION_IDS):
+            raise ValueError("notebook template must contain every section once")
+        encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO experiment_notebook_templates("
+                "organization_id,event_key,sections,actor_principal_id,created_at) VALUES(?,?,?,?,?)",
+                (organization_id, event_key, encoded, actor_principal_id, _now()),
+            )
+        return self.notebook_template(organization_id)
 
     def open_report(
         self,
@@ -709,9 +843,10 @@ class ExperimentReportStore:
         photo or note added after it was written still appears in the tables.
         """
 
-        if narrative is not None and narrative.facts is not None:
-            return narrative
         report = self.get_report(report_id)
+        if narrative is not None and narrative.facts is not None:
+            prepared = narrative
+            return self._with_notebook_template(prepared, report)
         if start_check is _FROM_LEDGER:
             start_check = (
                 report_start_check_answers(report, since=self._previous_start(report))
@@ -732,11 +867,26 @@ class ExperimentReportStore:
             start_check=start_check, previous=previous)
         prose = self.get_prose(report_id)
         if prose is None or prose["writer"] == SERVER_WRITER:
-            return narrative_from_sections(facts)
-        return narrative_from_reply(
-            facts, prose["reply"], failure=prose["failure"], writer=prose["writer"],
-            written_at=prose["prepared_at"],
-        )
+            prepared = narrative_from_sections(facts)
+        else:
+            prepared = narrative_from_reply(
+                facts, prose["reply"], failure=prose["failure"], writer=prose["writer"],
+                written_at=prose["prepared_at"],
+            )
+        return self._with_notebook_template(prepared, report)
+
+    def _with_notebook_template(
+        self, narrative: ReportNarrative, report: Mapping[str, Any],
+    ) -> ReportNarrative:
+        facts = narrative.facts
+        if facts is None or facts.notebook is None:
+            return narrative
+        stored = self.notebook_template(
+            str(report.get("organization_id")) if report.get("organization_id") else None)
+        template = tuple(NotebookSection(str(item["id"]), str(item["name"]))
+                         for item in stored["sections"])
+        book = _replace_dataclass(facts.notebook, section_template=template)
+        return _replace_dataclass(narrative, facts=_replace_dataclass(facts, notebook=book))
 
     def _previous_start(self, report: Mapping[str, Any]) -> str | None:
         """When the run of the same protocol before this one started, or None.
@@ -905,6 +1055,7 @@ class ExperimentReportStore:
     def export_docx(
         self, report_id: str, narrative: ReportNarrative | None = None,
         *, fixture: Any = None, start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
+        image_resolver: Callable[["NotebookImage"], tuple[bytes, str] | None] | None = None,
     ) -> bytes:
         """The researcher's notebook as .docx (same structure as the Markdown).
 
@@ -912,19 +1063,42 @@ class ExperimentReportStore:
         derived, human-readable projection of it.
         """
 
-        return render_docx(self._narrative(report_id, narrative, fixture, start_check, previous))
+        prepared = self._narrative(report_id, narrative, fixture, start_check, previous)
+        source_fixture = fixture
+        if source_fixture is None:
+            source_fixture, _ = report_protocol_fixture(self.get_report(report_id))
+
+        def resolve(image: NotebookImage) -> tuple[bytes, str] | None:
+            if image_resolver is not None:
+                found = image_resolver(image)
+                if found is not None:
+                    return found
+            if image.kind != "source_figure" or source_fixture is None:
+                return None
+            from voiney_lab import source_figures
+            found = source_figures.figure_content(
+                getattr(source_fixture, "source_pdf_path", None),
+                getattr(source_fixture, "source_pdf_sha256", None), image.asset_id,
+            )
+            return None if found is None else (found[1], found[0].mime_type)
+
+        return render_docx(prepared, image_resolver=resolve)
 
     def export_pdf(
         self, report_id: str, narrative: ReportNarrative | None = None,
         *, fixture: Any = None, start_check: Any = _FROM_LEDGER, previous: Any = _FROM_LEDGER,
         converter: str | None = None, run: Any = None,
+        image_resolver: Callable[["NotebookImage"], tuple[bytes, str] | None] | None = None,
     ) -> bytes:
         """The researcher's notebook as PDF: the .docx above, printed by the
         server's LibreOffice (lane RP2, decision 2). ``ReportPdfError`` when
         it cannot be printed."""
 
         return report_docx_to_pdf(
-            self.export_docx(report_id, narrative, fixture=fixture, start_check=start_check, previous=previous),
+            self.export_docx(
+                report_id, narrative, fixture=fixture, start_check=start_check, previous=previous,
+                image_resolver=image_resolver,
+            ),
             converter=converter, run=run)
 
     def export_meeting_docx(
@@ -2197,6 +2371,8 @@ def build_report_facts(
     # Lane CF, decision 3: reverts; decision 5: the file the run followed.
     reverts: list[ReportRevert] = []
     basis_words = ""
+    source_disclosure_words = ""
+    source_note = ""
     # Lane CB, decision 5.
     branch_answers: list[ReportBranchAnswer] = []
     repetitions: list[ReportRepetition] = []
@@ -2322,10 +2498,24 @@ def build_report_facts(
                 in_repeat=(pair[0], pair[-1]) if pair else None,
                 at=at.strftime("%H:%M") if at else "", key=str(event.get("event_key") or ""),
             ))
-        elif kind == "protocol_basis_recorded" and not basis_words:
-            filename = " ".join(str(payload.get("filename") or "").split())
-            words = " ".join(str(payload.get("words") or "").split())
-            basis_words = words.removeprefix("지금 기준:").strip() or filename
+        elif kind == "protocol_basis_recorded":
+            if not basis_words:
+                filename = " ".join(str(payload.get("filename") or "").split())
+                words = " ".join(str(payload.get("words") or "").split())
+                basis_words = words.removeprefix("지금 기준:").strip() or filename
+            disclosure = payload.get("source_disclosure")
+            if not source_disclosure_words and isinstance(disclosure, Mapping):
+                if disclosure.get("recorded") is False:
+                    source_disclosure_words = "확인 기록 없음"
+                elif disclosure.get("recorded") is True:
+                    source_disclosure_words = {
+                        "yes": "예 — 공개·시판 원문",
+                        "no": "아니요 — 공개·시판 아님",
+                        "unknown": "모름 — 확인 필요",
+                    }.get(str(disclosure.get("status") or ""), "")
+                    source_note = " ".join(
+                        str(disclosure.get("note") or "").split()
+                    )
         elif kind == "branch_answered":
             record = step_record(payload)
             branch_answers.append(ReportBranchAnswer(
@@ -2615,6 +2805,11 @@ def build_report_facts(
         # Lane CF, decision 5: "{파일 이름} · {올린 날짜}".
         (("기준 파일", basis_words),) if basis_words else ()
     ) + (
+        (("원문 공개 범위", source_disclosure_words),)
+        if source_disclosure_words else ()
+    ) + (
+        (("출처 메모", source_note),) if source_note else ()
+    ) + (
         (("안전 주의 확인", (
             f"시작 전 화면에서 원문 안전 주의 {safety_notices_acknowledged}건을 보고 시작함"
             if safety_notices_acknowledged
@@ -2667,9 +2862,11 @@ def build_report_facts(
     facts = _replace_dataclass(facts, glance=build_report_glance(
         facts, events, source_steps=source_steps, zone=zone, reviewer=reviewer,
         start_check=start_check))
-    return _replace_dataclass(facts, notebook=build_lab_notebook(
+    facts = _replace_dataclass(facts, notebook=build_lab_notebook(
         facts, events, source_steps=source_steps, zone=zone, previous=previous,
-        protocol_problem=protocol_problem if fixture is None else ""))
+        protocol_problem=protocol_problem if fixture is None else "",
+        session_id=str(report_data.get("session_id") or "")))
+    return _with_notebook_source_images(facts, fixture, report_data)
 
 
 # --- The report's first pages (lane RP2, decision 1, 2026-10-19) -------------
@@ -3138,8 +3335,11 @@ def build_report_glance(
 # gone from the body.
 
 NOTEBOOK_SECTIONS = (
-    "1. 시료와 조건", "2. 실제로 한 조건", "3. 관찰과 결과", "4. 원문과 다르게 한 점·문제",
-    "5. 지난번과 다른 점", "6. 다음에 바꿀 점·다음 할 일", "7. 확인", "8. 부록",
+    "실험 정보", "목적", "방법", "관찰·특이사항", "결과", "해석·다음 할 일", "분야별 기록", "부록",
+)
+NOTEBOOK_SECTION_IDS = (
+    "experiment_info", "purpose", "methods", "observations", "results",
+    "interpretation_next", "domain", "appendix",
 )
 NOTEBOOK_HEADINGS = tuple(f"## {name}" for name in NOTEBOOK_SECTIONS)
 #: Decision ②'s events (written by the voice rules in that decision; read
@@ -3155,6 +3355,12 @@ OBSERVATION_HEADER = ("과정", "시료", "관찰·측정 (기록 그대로)", "
 CONFIRM_HEADER = ("확인", "이름", "날짜·시각", "서명·한 줄 의견")
 APPENDIX_STEP_HEADER = ("단계", "시작", "끝", "소요", "타이머 (원문 / 실제)")
 APPENDIX_RECORD_HEADER = ("시각", "단계", "종류", "말한 그대로")
+METHOD_HEADER = ("단계", "원문 단계", "원문 값 → 실제", "실제 시각·타이머")
+TIMELINE_HEADER = ("시각", "단계", "사건", "기록")
+VALUE_BAR_HEADER = ("단계·항목", "원문", "실제")
+DOMAIN_HEADER = ("항목", "원문·기록에서 찾은 내용", "근거")
+SAMPLE_RECORD_HEADER = ("셀·시료 번호", "기록 그대로")
+INVENTORY_HEADER = ("시약·장비 (원문)", "종류", "구매처", "카탈로그 번호", "Lot 번호", "입력 시점")
 NOT_SAID_WORDS = "말하지 않음."
 FIRST_RUN_WORDS = "처음 실험 — 같은 프로토콜의 앞선 기록이 없다."
 SAME_AS_LAST_WORDS = "지난번과 조건·관찰이 같다."
@@ -3250,6 +3456,111 @@ class NotebookDifference:
 
 
 @dataclass(frozen=True)
+class NotebookMethodRow:
+    """One source step beside the execution facts recorded for this run."""
+
+    label: str
+    source_text: str
+    actual_values: str
+    started_at: str
+    ended_at: str
+    timer: str
+    source_page: int | None = None
+
+
+@dataclass(frozen=True)
+class NotebookTimelineItem:
+    at: str
+    step_label: str
+    kind: str
+    text: str
+    source_key: str
+
+
+@dataclass(frozen=True)
+class NotebookValueBar:
+    """Raw source/actual measures.  Renderers scale these values visually."""
+
+    label: str
+    kind: str
+    source: str
+    actual: str
+    source_number: str
+    actual_number: str
+    unit: str
+    source_unit: str
+    actual_unit: str
+    source_key: str
+
+
+@dataclass(frozen=True)
+class NotebookPlatePosition:
+    label: str
+    step_label: str
+    words: str
+
+
+@dataclass(frozen=True)
+class NotebookSampleRow:
+    identifier: str
+    records: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class NotebookDomainField:
+    label: str
+    value: str
+    origin: str  # source | record | calculated | blank
+    source_keys: tuple[str, ...] = ()
+    formula: str = ""
+
+
+@dataclass(frozen=True)
+class NotebookDomain:
+    code: str
+    label: str
+    selected_by: str  # source_analysis | person
+    fields: tuple[NotebookDomainField, ...]
+
+
+@dataclass(frozen=True)
+class NotebookInventoryItem:
+    kind: str
+    name: str
+    vendor: str
+    catalog_number: str
+    lot_number: str
+    stage: str  # before | after | source | blank
+    source_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class NotebookSection:
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class NotebookImage:
+    """A recorded photo or an exact crop from the source PDF."""
+
+    kind: str  # photo | source_figure
+    step_label: str
+    caption: str
+    url: str
+    media_type: str
+    asset_id: str
+    source_page: int | None = None
+    interpretation_status: str = ""
+
+
+DEFAULT_NOTEBOOK_TEMPLATE = tuple(
+    NotebookSection(section_id, name)
+    for section_id, name in zip(NOTEBOOK_SECTION_IDS, NOTEBOOK_SECTIONS)
+)
+
+
+@dataclass(frozen=True)
 class LabNotebook:
     """The notebook the exports render (decision ①), from the record alone."""
 
@@ -3281,6 +3592,18 @@ class LabNotebook:
     #: Decision ③: each step's condition in short ("원문대로 — 100 µL",
     #: "온도 37°C → 40°C"), for the results table.
     condition_by_label: Mapping[str, str] = field(default_factory=dict)
+    method_rows: tuple[NotebookMethodRow, ...] = ()
+    timeline: tuple[NotebookTimelineItem, ...] = ()
+    value_bars: tuple[NotebookValueBar, ...] = ()
+    plate_positions: tuple[NotebookPlatePosition, ...] = ()
+    sample_rows: tuple[NotebookSampleRow, ...] = ()
+    domain: NotebookDomain = field(default_factory=lambda: NotebookDomain(
+        "general", "공통", "source_analysis", (),
+    ))
+    interpretation_words: str = ""
+    inventory: tuple[NotebookInventoryItem, ...] = ()
+    section_template: tuple[NotebookSection, ...] = DEFAULT_NOTEBOOK_TEMPLATE
+    images: tuple[NotebookImage, ...] = ()
 
 
 # Samples named in words (decision ② a-b): "3번 샘플", "샘플 2번", "S2", "대조군",
@@ -3626,6 +3949,451 @@ def _clock_words(moment: datetime | None) -> str:
     return f"{moment.year}년 {moment.month}월 {moment.day}일 {moment:%H:%M}" if moment else ""
 
 
+_DOMAIN_LABELS = {
+    "general": "공통",
+    "biology": "바이오",
+    "chemistry": "화학 합성",
+    "battery_materials": "배터리·소재",
+}
+_DOMAIN_FIELD_PATTERNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "biology": (
+        ("세포주", r"\b[A-Za-z][A-Za-z0-9-]{1,24}\s+cells?\b|세포주"),
+        ("계대 수", r"passage\s*(?:number|no\.?|#)?\s*\d+|계대\s*(?:수)?\s*\d+"),
+        ("플레이트 배치·well 위치", r"\bwell\b|\b\d+\s*[- ]?well\b|웰|plate"),
+    ),
+    "chemistry": (
+        ("반응식", r"reaction\s+scheme|반응식|(?:->|→)"),
+        ("시약(몰·질량·당량)", r"\b(?:mmol|mol|equiv(?:alent)?s?|mg|µg|μg|kg)\b|\b(?:TEOS|HCl|ethanol)\b|시약|당량"),
+        ("수득량·수율", r"yield|수득|수율"),
+        ("TLC Rf", r"\bTLC\b|\bRf\b"),
+        ("정제 조건", r"purif|chromatograph|column|recrystalli|정제"),
+    ),
+    "battery_materials": (
+        ("셀·시료 번호", r"\b(?:cell|sample|electrode)\s*[A-Za-z]+[-_]?\d+\b|\b[A-Za-z]+[-_]\d+\b|셀\s*[A-Za-z0-9_-]+|시료\s*[A-Za-z0-9_-]+"),
+        ("전극 로딩", r"electrode\s+loading|전극\s*로딩"),
+        ("전해액 양", r"electrolyte|전해액"),
+        ("조립 환경(수분·산소)", r"glovebox|H2O|O2|수분|산소"),
+        ("크림핑·소성 조건", r"crimp|calcina|sinter|크림핑|소성"),
+        ("사이클 조건", r"cycl(?:e|ing)|사이클"),
+    ),
+}
+
+_YIELD_NUMBER_UNIT = r"(\d+(?:\.\d+)?)\s*(mmol|[µμu]mol|mol|mg|[µμu]g|ng|g)\b"
+_ACTUAL_YIELD = re.compile(
+    r"(?:실제\s*수득량|actual\s+yield)\s*[:：=]?\s*" + _YIELD_NUMBER_UNIT,
+    re.I,
+)
+_THEORETICAL_YIELD = re.compile(
+    r"(?:이론(?:적)?\s*수득량|theoretical\s+yield)\s*[:：=]?\s*" + _YIELD_NUMBER_UNIT,
+    re.I,
+)
+_YIELD_UNIT = {
+    "ng": ("mass", Decimal("0.000000001")),
+    "µg": ("mass", Decimal("0.000001")),
+    "mg": ("mass", Decimal("0.001")),
+    "g": ("mass", Decimal("1")),
+    "µmol": ("amount", Decimal("0.000001")),
+    "mmol": ("amount", Decimal("0.001")),
+    "mol": ("amount", Decimal("1")),
+}
+
+
+def _yield_unit(unit: str) -> str:
+    return unit.replace("μ", "µ").replace("u", "µ").casefold().replace("µ", "µ")
+
+
+def _decimal_words(value: Decimal) -> str:
+    shown = format(value, "f")
+    return shown.rstrip("0").rstrip(".") if "." in shown else shown
+
+
+def _calculated_yield(
+    record_evidence: Sequence[tuple[str, str, str]],
+) -> NotebookDomainField | None:
+    """Calculate yield only when a person's records contain both raw values."""
+
+    actual: tuple[Decimal, str, str, str] | None = None
+    theoretical: tuple[Decimal, str, str, str] | None = None
+    for origin, key, text in record_evidence:
+        if origin != "record":
+            continue
+        actual_match = _ACTUAL_YIELD.search(text)
+        theoretical_match = _THEORETICAL_YIELD.search(text)
+        try:
+            if actual_match:
+                actual = (Decimal(actual_match.group(1)), _yield_unit(actual_match.group(2)),
+                          actual_match.group(1), key)
+            if theoretical_match:
+                theoretical = (Decimal(theoretical_match.group(1)), _yield_unit(theoretical_match.group(2)),
+                               theoretical_match.group(1), key)
+        except InvalidOperation:
+            continue
+    if actual is None or theoretical is None or theoretical[0] <= 0:
+        return None
+    actual_unit = _YIELD_UNIT.get(actual[1])
+    theoretical_unit = _YIELD_UNIT.get(theoretical[1])
+    if actual_unit is None or theoretical_unit is None or actual_unit[0] != theoretical_unit[0]:
+        return None
+    percent = (
+        actual[0] * actual_unit[1] / (theoretical[0] * theoretical_unit[1]) * Decimal("100")
+    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    percent_words = _decimal_words(percent)
+    actual_words = f"{actual[2]} {actual[1]}"
+    theoretical_words = f"{theoretical[2]} {theoretical[1]}"
+    return NotebookDomainField(
+        label="수득량·수율",
+        value=f"실제 {actual_words} · 이론 {theoretical_words} · 수율 {percent_words}%",
+        origin="calculated",
+        source_keys=tuple(dict.fromkeys((actual[3], theoretical[3]))),
+        formula=f"{actual_words} ÷ {theoretical_words} × 100 = {percent_words}%",
+    )
+
+
+def _select_notebook_domain(
+    facts: ReportFacts,
+    events: Sequence[Mapping[str, Any]],
+    source_steps: Sequence[Mapping[str, Any]],
+) -> tuple[str, str]:
+    """Select a field profile from analysed source text; the latest person
+    override in the append-only report ledger wins."""
+
+    allowed = set(_DOMAIN_LABELS)
+    for event in reversed(events):
+        if str(event.get("event_type") or "") != "notebook_domain_selected":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        code = str(payload.get("domain") or "")
+        if code in allowed:
+            return code, "person"
+    source = "\n".join(
+        [str(step.get("source_text") or "") for step in source_steps]
+        + list(facts.materials) + list(facts.equipment)
+    ).casefold()
+    scores = {
+        "biology": sum(1 for word in (
+            "cell culture", " cells", "a549", "well plate", "96-well", "mtt", "passage", "세포", "계대",
+        ) if word in source),
+        "chemistry": sum(1 for word in (
+            "reaction", "synthesis", "teos", "hcl", "ethanol", "reagent", "mmol", "equiv", "tlc", "purif", "sol-gel",
+        ) if word in source),
+        "battery_materials": sum(1 for word in (
+            "coin cell", "cr2032", "electrode", "electrolyte", "glovebox", "crimp", "cathode", "anode", "cycl", "battery",
+        ) if word in source),
+    }
+    selected = max(scores, key=scores.get)
+    return (selected, "source_analysis") if scores[selected] else ("general", "source_analysis")
+
+
+def _notebook_domain(
+    facts: ReportFacts,
+    events: Sequence[Mapping[str, Any]],
+    source_steps: Sequence[Mapping[str, Any]],
+) -> NotebookDomain:
+    code, selected_by = _select_notebook_domain(facts, events, source_steps)
+    source_evidence = [
+        ("source", str(step.get("step_id") or step.get("label") or ""),
+         " ".join(str(step.get("source_text") or "").split()))
+        for step in source_steps
+    ]
+    record_evidence = [
+        ("record", str(event.get("event_key") or ""),
+         " ".join(str(event.get("user_wording") or "").split()))
+        for event in events if str(event.get("user_wording") or "").strip()
+    ]
+    evidence = record_evidence + source_evidence
+    calculated_yield = _calculated_yield(record_evidence) if code == "chemistry" else None
+    fields: list[NotebookDomainField] = []
+    for label, pattern in _DOMAIN_FIELD_PATTERNS.get(code, ()):
+        if label == "수득량·수율" and calculated_yield is not None:
+            fields.append(calculated_yield)
+            continue
+        matches = [(origin, key, text) for origin, key, text in evidence
+                   if text and re.search(pattern, text, re.I)]
+        values = tuple(dict.fromkeys(text for _, _, text in matches))
+        origins = {origin for origin, _, _ in matches}
+        origin = "record" if "record" in origins else "source" if origins else "blank"
+        fields.append(NotebookDomainField(
+            label=label,
+            value=" · ".join(values[:6]),
+            origin=origin,
+            source_keys=tuple(dict.fromkeys(key for _, key, _ in matches if key)),
+        ))
+    return NotebookDomain(code, _DOMAIN_LABELS[code], selected_by, tuple(fields))
+
+
+_CATALOG_VALUE = re.compile(
+    r"(?:\bcatalog(?:ue)?(?:\s*(?:number|no\.?|#))?|\bcat\.?\s*(?:no\.?)?|카탈로그\s*(?:번호)?)"
+    r"\s*[:：#]?\s*([A-Za-z0-9._/-]+)", re.I,
+)
+_LOT_VALUE = re.compile(
+    r"(?:lot(?:\s*(?:number|no\.?|#|번호))?|로트\s*(?:번호)?)"
+    r"\s*[:：#]?\s*([A-Za-z0-9._/-]+)",
+    re.I,
+)
+_VENDOR_VALUE = re.compile(
+    r"(?:구매처|공급사|vendor)\s*[:：]?\s*(.+?)(?=\s+(?:catalog|cat\.?|카탈로그|lot|로트)\b|[,;]|$)",
+    re.I,
+)
+
+
+def _notebook_inventory(
+    facts: ReportFacts,
+    events: Sequence[Mapping[str, Any]],
+) -> tuple[NotebookInventoryItem, ...]:
+    """The source inventory plus optional person-entered Methods fields."""
+
+    rows: dict[str, dict[str, Any]] = {}
+    aliases: dict[str, str] = {}
+    for item in facts.items:
+        listed = item.listed or item.name
+        short = _short_item_name(item.name)
+        catalog = (_CATALOG_VALUE.search(listed).group(1) if _CATALOG_VALUE.search(listed) else "")
+        vendor = ""
+        before_catalog = re.split(r"\b(?:Catalog|Cat\.?)\s*#?", listed, maxsplit=1, flags=re.I)[0].strip()
+        if catalog and before_catalog.casefold().startswith(short.casefold()):
+            vendor = before_catalog[len(short):].strip(" ,;")
+        rows[listed] = {
+            # Keep the already-normalised source item name in the name
+            # column; vendor/catalog source text belongs in its own columns.
+            "kind": item.kind, "name": short, "vendor": vendor,
+            "catalog_number": catalog, "lot_number": "",
+            "stage": "source" if vendor or catalog else "blank", "source_keys": [],
+        }
+        for alias in {listed, item.name, short}:
+            if alias:
+                aliases[" ".join(alias.casefold().split())] = listed
+
+    completed_index = next((index for index, event in enumerate(events)
+                            if str(event.get("event_type") or "") == "workflow_completed"), len(events))
+    for index, event in enumerate(events):
+        event_type = str(event.get("event_type") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        key = str(event.get("event_key") or "")
+        if event_type == "notebook_inventory_recorded":
+            named = " ".join(str(payload.get("item_name") or "").casefold().split())
+            listed = aliases.get(named)
+            if listed is None:
+                continue
+            row = rows[listed]
+            for field_name in ("vendor", "catalog_number", "lot_number"):
+                value = " ".join(str(payload.get(field_name) or "").split())
+                if value:
+                    row[field_name] = value
+            stage = str(payload.get("stage") or "")
+            if stage in {"before", "after"}:
+                row["stage"] = stage
+            row["source_keys"].append(key)
+            continue
+        if event_type != "observation":
+            continue
+        words = " ".join(str(event.get("user_wording") or "").split())
+        if not words:
+            continue
+        listed = next((target for alias, target in aliases.items() if alias and alias in words.casefold()), None)
+        if listed is None:
+            continue
+        vendor = _VENDOR_VALUE.search(words)
+        catalog = _CATALOG_VALUE.search(words)
+        lot = _LOT_VALUE.search(words)
+        if not any((vendor, catalog, lot)):
+            continue
+        row = rows[listed]
+        if vendor:
+            row["vendor"] = " ".join(vendor.group(1).split())
+        if catalog:
+            row["catalog_number"] = catalog.group(1)
+        if lot:
+            row["lot_number"] = lot.group(1)
+        row["stage"] = "before" if index < completed_index else "after"
+        row["source_keys"].append(key)
+    return tuple(NotebookInventoryItem(
+        kind=str(row["kind"]), name=str(row["name"]), vendor=str(row["vendor"]),
+        catalog_number=str(row["catalog_number"]), lot_number=str(row["lot_number"]),
+        stage=str(row["stage"]), source_keys=tuple(row["source_keys"]),
+    ) for row in rows.values())
+
+
+def _notebook_photos(
+    events: Sequence[Mapping[str, Any]], session_id: str,
+) -> tuple[NotebookImage, ...]:
+    """Recorded image metadata; the image bytes remain in workspace evidence."""
+
+    images = []
+    for event in events:
+        if str(event.get("event_type") or "") != "photo_attached":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        evidence_id = str(payload.get("evidence_id") or "")
+        media_type = str(payload.get("media_type") or "image/*")
+        url = ""
+        if session_id and evidence_id:
+            url = (
+                f"/api/workspace/experiments/{quote(session_id, safe='')}/evidence/"
+                f"{quote(evidence_id, safe='')}"
+            )
+        images.append(NotebookImage(
+            kind="photo", step_label=str(event.get("step_label") or ""),
+            caption=" ".join(str(event.get("user_wording") or "사진 첨부").split()),
+            url=url, media_type=media_type, asset_id=evidence_id,
+            interpretation_status=str(payload.get("interpretation_status") or "not_interpreted"),
+        ))
+    return tuple(images)
+
+
+def _with_notebook_source_images(
+    facts: ReportFacts, fixture: Any, report_data: Mapping[str, Any], *, maximum: int = 24,
+) -> ReportFacts:
+    """Attach only deterministic crops of completed steps' source pages."""
+
+    if facts.notebook is None or fixture is None:
+        return facts
+    try:
+        from voiney_lab import source_figures
+
+        steps = tuple(getattr(fixture, "steps", ()) or ())
+        protocol_id = str(report_data.get("protocol_id") or getattr(fixture, "protocol_id", ""))
+        revision_id = str(report_data.get("protocol_revision") or getattr(fixture, "revision_id", ""))
+        completed = set(facts.completed_labels)
+        found: list[NotebookImage] = []
+        for index, step in enumerate(steps):
+            label = str(getattr(step, "source_label", "") or (
+                facts.steps[index].label if index < len(facts.steps) else index + 1
+            ))
+            if label not in completed:
+                continue
+            for figure in source_figures.figures_for_step(fixture, index):
+                found.append(NotebookImage(
+                    kind="source_figure", step_label=label,
+                    caption=figure.caption or f"원문 그림 · PDF p.{figure.source_page}",
+                    url=(
+                        f"/api/protocols/{quote(protocol_id, safe='')}/revisions/"
+                        f"{quote(revision_id, safe='')}/figures/{quote(figure.figure_id, safe='')}"
+                    ),
+                    media_type=figure.mime_type, asset_id=figure.figure_id,
+                    source_page=figure.source_page,
+                ))
+                if len(found) >= maximum:
+                    break
+            if len(found) >= maximum:
+                break
+    except Exception as exc:  # noqa: BLE001 - a visual never fails the notebook
+        log.warning("notebook source figures unavailable error=%s", type(exc).__name__)
+        return facts
+    book = _replace_dataclass(
+        facts.notebook, images=facts.notebook.images + tuple(found),
+    )
+    return _replace_dataclass(facts, notebook=book)
+
+
+_PLATE_POSITION = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Ha-h](?:[1-9]|1[0-2])|\d+\s*번)\s*(?:well|웰)(?![A-Za-z])",
+    re.I,
+)
+_MATERIAL_IDENTIFIER = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"[A-Za-z]{1,8}[-_]\d{1,6}"
+    r"|\d+\s*번\s*(?:셀|cell|시료|샘플|sample)"
+    r"|(?:셀|cell|시료|샘플|sample)\s*\d+\s*번"
+    r")(?![A-Za-z0-9])",
+    re.I,
+)
+
+
+def _notebook_visual_facts(
+    facts: ReportFacts,
+    events: Sequence[Mapping[str, Any]],
+    values: Sequence[NotebookValue],
+) -> tuple[
+    tuple[NotebookTimelineItem, ...], tuple[NotebookValueBar, ...],
+    tuple[NotebookPlatePosition, ...], tuple[NotebookSampleRow, ...],
+]:
+    timeline: list[NotebookTimelineItem] = []
+    timeline_kinds = {
+        "session_started": ("start", "실험 시작"),
+        "step_completed": ("step_end", "단계 끝"),
+        "timer_started": ("timer_start", "타이머 시작"),
+        "timer_paused": ("timer_pause", "타이머 일시정지"),
+        "timer_resumed": ("timer_resume", "타이머 다시 시작"),
+        "timer_cancelled": ("timer_cancel", "타이머 취소"),
+        "timer_restarted": ("timer_restart", "타이머 처음부터"),
+        "timer_end_notice": ("timer_end", "타이머 끝"),
+        "workflow_paused": ("pause", "실험 일시정지"),
+        "workflow_resumed": ("resume", "실험 다시 시작"),
+        "observation": ("observation", "관찰·특이사항"),
+        "photo_attached": ("photo", "사진"),
+    }
+    positions: list[NotebookPlatePosition] = []
+    sample_records: dict[str, list[str]] = {}
+    for event in events:
+        event_type = str(event.get("event_type") or "")
+        words = " ".join(str(event.get("user_wording") or "").split())
+        if event_type in timeline_kinds:
+            kind, fallback = timeline_kinds[event_type]
+            timeline.append(NotebookTimelineItem(
+                at=_clock(_local(event.get("created_at"), facts.zone)),
+                step_label=str(event.get("step_label") or ""),
+                kind=kind,
+                text=words or fallback,
+                source_key=str(event.get("event_key") or ""),
+            ))
+        for match in _PLATE_POSITION.finditer(words):
+            label = " ".join(match.group(0).split())
+            positions.append(NotebookPlatePosition(
+                label=label, step_label=str(event.get("step_label") or ""), words=words,
+            ))
+        for match in _MATERIAL_IDENTIFIER.finditer(words):
+            sample_records.setdefault(match.group(0), []).append(words)
+    bars: list[NotebookValueBar] = []
+    for value in values:
+        if not value.actual:
+            continue
+        source = _condition_measures(value.written)
+        actual = _condition_measures(value.actual)
+        pair = next(((left, right) for left in source for right in actual
+                     if left.family == right.family), None)
+        if pair is None:
+            continue
+        left, right = pair
+        bars.append(NotebookValueBar(
+            label=f"{value.label}단계 · {value.kind}", kind=value.kind,
+            source=left.written, actual=right.written,
+            source_number=left.number, actual_number=right.number,
+            unit=left.unit, source_unit=left.unit, actual_unit=right.unit,
+            source_key=value.key,
+        ))
+    sample_rows = tuple(NotebookSampleRow(identifier, tuple(dict.fromkeys(records)))
+                        for identifier, records in sample_records.items())
+    return tuple(timeline), tuple(bars), tuple(positions), sample_rows
+
+
+def _notebook_method_rows(
+    facts: ReportFacts,
+    source_steps: Sequence[Mapping[str, Any]],
+    condition_by_label: Mapping[str, str],
+) -> tuple[NotebookMethodRow, ...]:
+    glance = {str(row[0]).split(" ", 1)[0]: row for row in (
+        facts.glance.step_rows if facts.glance is not None else ()
+    )}
+    by_label = {step.label: step for step in facts.steps}
+    rows: list[NotebookMethodRow] = []
+    for source in source_steps:
+        label = str(source.get("label") or "")
+        step = by_label.get(label)
+        if step is None or not step.completed:
+            continue
+        timing = glance.get(label, ())
+        rows.append(NotebookMethodRow(
+            label=label,
+            source_text=str(source.get("source_text") or ""),
+            actual_values=condition_by_label.get(label, AS_SOURCE_WORDS),
+            started_at=str(timing[1]) if len(timing) > 1 else "",
+            ended_at=str(timing[2]) if len(timing) > 2 else step.completed_at,
+            timer=step.timer_note,
+            source_page=(int(source["page"]) if isinstance(source.get("page"), int) else None),
+        ))
+    return tuple(rows)
+
+
 def build_lab_notebook(
     facts: ReportFacts,
     events: Sequence[Mapping[str, Any]],
@@ -3634,6 +4402,7 @@ def build_lab_notebook(
     zone: ZoneInfo,
     previous: ReportFacts | None = None,
     protocol_problem: str = "",
+    session_id: str = "",
 ) -> LabNotebook:
     """The notebook from the record, the source and the run before (decision ①)."""
 
@@ -3739,6 +4508,10 @@ def build_lab_notebook(
         header.append(("출처", " ".join(part for part in (reference.title, reference.url) if part)))
     if run.get("기준 파일"):
         header.append(("기준 파일", run["기준 파일"]))
+    if run.get("원문 공개 범위"):
+        header.append(("원문 공개 범위", run["원문 공개 범위"]))
+    if run.get("출처 메모"):
+        header.append(("출처 메모", run["출처 메모"]))
     if run.get("프로토콜 상태"):
         header.append(("프로토콜 상태", run["프로토콜 상태"]))
     header.append(("진행", progress))
@@ -4081,8 +4854,6 @@ def build_lab_notebook(
     next_lines: list[str] = []
     if next_change:
         next_lines.append(f"{next_change} (실험자가 말함)")
-    if facts.outcome == "stopped" and facts.stop_label:
-        next_lines.append(f"{facts.stop_label}단계부터 이어서 한다 (원문의 다음 단계)")
 
     # The confirmation box (decisions ① 8, ④).
     pi_rows: list[tuple[str, str, str, str]] = []
@@ -4155,6 +4926,13 @@ def build_lab_notebook(
     run_words = " · ".join(part for part in (
         f"{run.get('날짜', '')} {run.get('시작', '')}".strip(), run.get("실험자", ""),
         f"{run.get('결과', '')} ({done}단계)") if part)
+    method_rows = _notebook_method_rows(facts, source_steps, condition_by_label)
+    timeline, value_bars, plate_positions, sample_rows = _notebook_visual_facts(
+        facts, events, values,
+    )
+    domain = _notebook_domain(facts, events, source_steps)
+    inventory = _notebook_inventory(facts, events)
+    images = _notebook_photos(events, session_id)
     return LabNotebook(
         title=title, subtitle=subtitle, header_rows=tuple(header), purpose=purpose, purpose_words=purpose_words,
         samples=tuple(samples), values=tuple(values), condition_rows=tuple(rows), condition_note=condition_note,
@@ -4164,7 +4942,103 @@ def build_lab_notebook(
         pi_rows=tuple(pi_rows), appendix_step_rows=tuple(step_rows), appendix_record_rows=tuple(record_rows),
         system_words="시스템 사건: " + " · ".join(system), source_words=source_words, performed=performed,
         run_words=run_words, condition_by_label=condition_by_label,
+        method_rows=method_rows, timeline=timeline, value_bars=value_bars,
+        plate_positions=plate_positions, sample_rows=sample_rows, domain=domain,
+        interpretation_words="", inventory=inventory, images=images,
     )
+
+
+def audit_notebook_number_provenance(
+    notebook: LabNotebook,
+    *,
+    source_steps: Sequence[Mapping[str, Any]],
+    source_inventory: Sequence[str] = (),
+    events: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """Return displayed numbers that cannot be reproduced from source or ledger.
+
+    Besides verbatim values, the notebook displays deterministic event counts
+    and elapsed times.  Those are admitted only when recomputable from the
+    supplied ledger timestamps.  Identifiers used solely to link records are
+    not notebook prose and are excluded from this display audit.
+    """
+
+    def normalized(value: str) -> str:
+        try:
+            number = float(value.replace(",", ""))
+        except ValueError:
+            return value
+        return str(int(number)) if number.is_integer() else format(number, ".12g")
+
+    source_blob = json.dumps(
+        {"steps": list(source_steps), "inventory": list(source_inventory)},
+        ensure_ascii=False, default=str,
+    )
+    event_blob = json.dumps(list(events), ensure_ascii=False, default=str)
+    admitted = {normalized(value) for value in _NUMBER.findall(source_blob + "\n" + event_blob)}
+    # Source identity (citation/DOI and protocol title) is loaded from the
+    # immutable protocol revision but is not repeated in ``source_steps``.
+    admitted.update(normalized(value) for value in _NUMBER.findall(
+        "\n".join((notebook.title, notebook.subtitle, notebook.source_words))
+    ))
+    # A displayed yield is admitted only when the same deterministic
+    # calculation can be rebuilt from person-recorded raw values.
+    rebuilt_yield = _calculated_yield([
+        ("record", str(event.get("event_key") or ""),
+         " ".join(str(event.get("user_wording") or "").split()))
+        for event in events if str(event.get("user_wording") or "").strip()
+    ])
+    shown_yield = next((field for field in notebook.domain.fields
+                        if field.label == "수득량·수율"), None)
+    if rebuilt_yield is not None and shown_yield == rebuilt_yield:
+        admitted.update(normalized(value) for value in _NUMBER.findall(
+            rebuilt_yield.value + "\n" + rebuilt_yield.formula
+        ))
+    moments = []
+    for event in events:
+        try:
+            moment = datetime.fromisoformat(str(event.get("created_at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        moments.append(moment)
+        admitted.update(str(value) for value in (
+            moment.year, moment.month, moment.day, moment.hour, moment.minute, moment.second,
+        ))
+    for left in moments:
+        for right in moments:
+            seconds = abs(int((right - left).total_seconds()))
+            admitted.add(str(seconds))
+            if seconds % 60 == 0:
+                admitted.add(str(seconds // 60))
+            if seconds % 3600 == 0:
+                admitted.add(str(seconds // 3600))
+
+    fragments: list[tuple[str, str]] = []
+
+    def visit(value: Any, path: str = "notebook") -> None:
+        if is_dataclass(value):
+            for item in _dataclass_fields(value):
+                if item.name in {"source_key", "source_keys"}:
+                    continue
+                visit(getattr(value, item.name), f"{path}.{item.name}")
+        elif isinstance(value, Mapping):
+            for key, item in value.items():
+                visit(item, f"{path}.{key}")
+        elif isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                visit(item, f"{path}[{index}]")
+        elif isinstance(value, str):
+            fragments.append((path, value))
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            fragments.append((path, str(value)))
+
+    visit(notebook)
+    problems = []
+    for path, text in fragments:
+        for value in _NUMBER.findall(text):
+            if normalized(value) not in admitted:
+                problems.append(f"{path}: {value}")
+    return tuple(dict.fromkeys(problems))
 
 
 # --- The server's checks on model sections (decision 5) ------------------------
@@ -4923,8 +5797,7 @@ REPORT_PROSE = ReportProsePreparer()
 
 
 def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
-    """The notebook as blocks (lane RP3, decision ①): ("title"|"subtitle"|
-    "h1"|"h2"|"p"|"list"|"table"|"sign"|"note"|"alert"|"appendix", content)."""
+    """The grounded handoff notebook as renderer-neutral blocks."""
 
     facts = narrative.facts
     assert facts is not None and facts.notebook is not None
@@ -4936,60 +5809,110 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
         # are not confirmed and which; the notebook is still made.
         blocks += [("alert", (f"확인 안 된 값 {len(glance.unconfirmed)}개", UNCONFIRMED_WORDS)),
                    ("list", glance.unconfirmed)]
-    blocks.append(_table(("항목", "내용"), book.header_rows))
-
     blocks.append(("h1", NOTEBOOK_SECTIONS[0]))
+    blocks.append(_table(("항목", "내용"), book.header_rows))
     if book.samples:
         blocks.append(_table(SAMPLE_HEADER, tuple(
             (sample.name, sample.condition, "예" if sample.control else "") for sample in book.samples)))
-        blocks.append(("note", f"말한 그대로: “{book.purpose_words}”"))
-    elif book.purpose_words:
-        blocks.append(("note", f"시료는 말하지 않음. 말한 그대로: “{book.purpose_words}”"))
-    else:
-        blocks.append(("note", NOT_SAID_WORDS))
 
     blocks.append(("h1", NOTEBOOK_SECTIONS[1]))
-    if book.condition_rows:
-        blocks.append(_table(CONDITION_HEADER, book.condition_rows))
-    else:
-        blocks.append(("note", book.condition_note or NO_VALUED_STEPS_WORDS))
-    if book.materials_words:
-        blocks.append(("note", book.materials_words))
+    blocks.append(("p", book.purpose_words))
 
     blocks.append(("h1", NOTEBOOK_SECTIONS[2]))
+    if book.method_rows:
+        blocks.append(_table(METHOD_HEADER, tuple((
+            f"{row.label}단계" + (f" · PDF p.{row.source_page}" if row.source_page else ""),
+            row.source_text,
+            row.actual_values,
+            " · ".join(part for part in (
+                f"{row.started_at}–{row.ended_at}" if row.started_at or row.ended_at else "",
+                row.timer,
+            ) if part),
+        ) for row in book.method_rows)))
+    if book.condition_note:
+        blocks.append(("note", book.condition_note))
+    if book.condition_rows:
+        blocks += [("h2", "원문 값 → 실제 요약"), _table(CONDITION_HEADER, book.condition_rows)]
+    if book.value_bars:
+        blocks += [("h2", "원문 → 실제 값 비교"), _table(VALUE_BAR_HEADER, tuple(
+            (item.label, item.source, item.actual) for item in book.value_bars
+        ))]
+        blocks.extend(("bar", (item.label, *_notebook_bar_lines(item))) for item in book.value_bars)
+    if book.timeline:
+        timeline_words = {
+            "start": "실험 시작", "step_end": "단계 끝", "timer_start": "타이머 시작",
+            "timer_pause": "타이머 일시정지", "timer_resume": "타이머 다시 시작",
+            "timer_cancel": "타이머 취소", "timer_restart": "타이머 처음부터",
+            "timer_end": "타이머 끝", "pause": "실험 일시정지", "resume": "실험 다시 시작",
+            "observation": "관찰·특이사항", "photo": "사진",
+        }
+        blocks += [("h2", "단계별 타임라인"), _table(TIMELINE_HEADER, tuple(
+            (item.at, item.step_label or "—", timeline_words.get(item.kind, item.kind), item.text)
+            for item in book.timeline
+        ))]
+    if book.images:
+        blocks.append(("h2", "단계 사진·원문 그림"))
+        blocks.extend(("image", image) for image in sorted(
+            book.images, key=lambda item: (_label_order(item.step_label), item.kind, item.asset_id)
+        ))
+    if book.differences:
+        blocks += [("h2", "원문과 다르게 한 점·문제"), ("list", book.differences)]
+
+    blocks.append(("h1", NOTEBOOK_SECTIONS[3]))
     if book.observations:
         blocks.append(_table(OBSERVATION_HEADER, tuple(
             (item.process, item.sample, item.shown, item.at) for item in book.observations)))
     else:
-        blocks.append(("note", NO_OBSERVATION_WORDS))
-    for note in narrative.ai_notes:
-        # Decision ③: an AI-written sentence that passed its check, marked.
-        where = f"{note.step_label}단계" + (f" · {note.sample}" if note.sample else "")
-        blocks.append(("note", f"{AI_NOTE_LABEL} — {where}: {note.text}"))
-    blocks.append(("note", f"결과 (실험자가 말함): “{book.result}”" if book.result else f"결과: {NOT_SAID_WORDS}"))
-    if narrative.ai_result:
-        blocks.append(("note", f"결과 ({AI_NOTE_LABEL}): {narrative.ai_result}"))
-
-    blocks.append(("h1", NOTEBOOK_SECTIONS[3]))
-    blocks.append(("list", book.differences) if book.differences else ("note", NO_DIFFERENCE_WORDS))
+        blocks.append(("p", ""))
 
     blocks.append(("h1", NOTEBOOK_SECTIONS[4]))
+    blocks.append(("p", book.result))
+
+    blocks.append(("h1", NOTEBOOK_SECTIONS[5]))
+    blocks.append(_table(("항목", "내용"), (
+        ("해석", book.interpretation_words),
+        ("다음 할 일", book.next_change),
+    )))
+
+    blocks.append(("h1", NOTEBOOK_SECTIONS[6]))
+    blocks.append(("h2", book.domain.label))
+    if book.domain.fields:
+        blocks.append(_table(DOMAIN_HEADER, tuple(
+            (item.label, item.value + (f"\n계산식: {item.formula}" if item.formula else ""),
+             {"source": "원문", "record": "기록", "calculated": "계산", "blank": ""}.get(item.origin, ""))
+            for item in book.domain.fields
+        )))
+    if book.plate_positions:
+        blocks += [("h2", "플레이트 위치"), ("list", tuple(
+            f"{item.label} · {item.step_label}단계 · {item.words}" for item in book.plate_positions
+        ))]
+    if book.domain.code == "battery_materials" and book.sample_rows:
+        blocks += [("h2", "셀·시료 번호별 기록"), _table(SAMPLE_RECORD_HEADER, tuple(
+            (item.identifier, " · ".join(item.records)) for item in book.sample_rows
+        ))]
+
+    blocks.append(("h1", NOTEBOOK_SECTIONS[7]))
+    blocks.append(("appendix", None))
+    if book.materials_words:
+        blocks.append(("note", book.materials_words))
+    if book.inventory:
+        stage_words = {"before": "실험 전", "after": "실험 후", "source": "원문", "blank": ""}
+        blocks += [("h2", "Methods 조건표"), _table(INVENTORY_HEADER, tuple(
+            (item.name, item.kind, item.vendor, item.catalog_number, item.lot_number,
+             stage_words.get(item.stage, "")) for item in book.inventory
+        ))]
+    blocks.append(("h2", "같은 프로토콜의 앞선 내 기록"))
     if book.previous_words:
         blocks.append(("note", book.previous_words))
         blocks.append(("list", book.previous_lines) if book.previous_lines else ("note", SAME_AS_LAST_WORDS))
     else:
         blocks.append(("note", FIRST_RUN_WORDS))
-
-    blocks.append(("h1", NOTEBOOK_SECTIONS[5]))
-    blocks.append(("list", book.next_lines) if book.next_lines else ("note", NOT_SAID_WORDS))
-
-    blocks.append(("h1", NOTEBOOK_SECTIONS[6]))
+    blocks.append(("h2", "확인 기록"))
     confirm_rows = (("실험자", "", "", ""),) + (book.pi_rows or (("PI", "", "", ""),))
     blocks.append(("sign", (CONFIRM_HEADER, confirm_rows, TABLE_WIDTHS[CONFIRM_HEADER])))
     if not book.pi_rows:
         blocks.append(("note", NO_PI_WORDS))
-
-    blocks += [("h1", NOTEBOOK_SECTIONS[7]), ("appendix", None), ("h2", "단계 시각표")]
+    blocks.append(("h2", "단계 시각표"))
     blocks.append(_table(APPENDIX_STEP_HEADER, book.appendix_step_rows) if book.appendix_step_rows
                   else ("note", "기록된 단계가 없다."))
     blocks.append(("h2", "말한 그대로의 기록"))
@@ -5008,7 +5931,55 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
             blocks.append(("note", "검토자가 원문에서 바꾼 값이 없다."))
     blocks += [("note", book.system_words), ("note", f"출처: {book.source_words}"),
                ("note", authorship_line(narrative))]
-    return blocks
+    # A lab template may rename/reorder only the eight complete sections.
+    # Content and grounding rules stay fixed in these chunks.
+    prefix: list[tuple[str, Any]] = []
+    chunks: dict[str, list[tuple[str, Any]]] = {}
+    current: str | None = None
+    id_by_name = dict(zip(NOTEBOOK_SECTIONS, NOTEBOOK_SECTION_IDS))
+    for block in blocks:
+        if block[0] == "h1" and str(block[1]) in id_by_name:
+            current = id_by_name[str(block[1])]
+            chunks[current] = [block]
+        elif current is None:
+            prefix.append(block)
+        else:
+            chunks[current].append(block)
+    ordered = list(prefix)
+    for section in book.section_template:
+        chunk = list(chunks.get(section.id, ()))
+        if not chunk:
+            continue
+        chunk[0] = ("h1", section.name)
+        ordered.extend(chunk)
+    return ordered
+
+
+def _label_order(label: str) -> tuple[int, str]:
+    match = re.match(r"\d+", str(label))
+    return (int(match.group()) if match else 10**9, str(label))
+
+
+def _notebook_bar_lines(row: NotebookValueBar) -> tuple[str, str]:
+    """Two deterministic text bars, scaled only from the displayed values."""
+
+    source = _condition_measures(row.source)
+    actual = _condition_measures(row.actual)
+    if not source or not actual or source[0].family != actual[0].family:
+        return (f"원문 {row.source}", f"실제 {row.actual}")
+    left, right = source[0], actual[0]
+    try:
+        left_value = float(left.number) * _CONDITION_BASE.get(left.unit, 1.0)
+        right_value = float(right.number) * _CONDITION_BASE.get(right.unit, 1.0)
+    except ValueError:
+        return (f"원문 {row.source}", f"실제 {row.actual}")
+    maximum = max(left_value, right_value)
+    if maximum <= 0:
+        return (f"원문 {row.source}", f"실제 {row.actual}")
+    width = 18
+    left_bar = "█" * (0 if left_value <= 0 else max(1, round(width * left_value / maximum)))
+    right_bar = "█" * (0 if right_value <= 0 else max(1, round(width * right_value / maximum)))
+    return (f"원문 {row.source} {left_bar}", f"실제 {row.actual} {right_bar}")
 
 
 def authorship_line(narrative: ReportNarrative) -> str:
@@ -5018,19 +5989,11 @@ def authorship_line(narrative: ReportNarrative) -> str:
     written = _local(narrative.written_at, facts.zone if facts is not None else report_timezone())
     when = f"{written.year}년 {written.month}월 {written.day}일 {written:%H:%M}" if written else "시각 기록 없음"
     base = "이 실험 노트의 문장은 서버가 실험 기록과 프로토콜 원문에서 만들었다."
-    count = len(narrative.ai_notes) + (1 if narrative.ai_result else 0)
-    dropped = len(narrative.ai_rejected)
-    if count:
-        # Decision ③: how many sentences the model wrote and that every number
-        # and unit in them was checked against the record and the source.
-        line = (f"{base} {AI_NOTE_LABEL} {count}문장({narrative.writer})은 ‘{AI_NOTE_LABEL}’로 표시했고 "
-                f"모든 숫자·단위가 기록이나 원문에 있는지 서버가 검사했다.")
-        if dropped:
-            line += f" 검사에서 버린 문장 {dropped}개."
-    elif dropped:
-        line = f"{base} AI 가 쓴 문장은 없다(검사에서 버린 문장 {dropped}개)."
-    else:
-        line = f"{base} AI 가 쓴 문장은 없다."
+    # Observations stay verbatim and results stay person-authored, while
+    # interpretation stays blank.  A separately prepared model suggestion is
+    # therefore never part of the notebook body, even when its grounding
+    # check passed.
+    line = f"{base} 모델이 쓴 문장은 포함하지 않았다."
     return f"{line} 작성 {when}."
 
 
@@ -5061,6 +6024,12 @@ TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {
     CONFIRM_HEADER: (0.14, 0.20, 0.26, 0.40),
     APPENDIX_STEP_HEADER: (0.10, 0.14, 0.14, 0.22, 0.40),
     APPENDIX_RECORD_HEADER: (0.10, 0.08, 0.14, 0.68),
+    METHOD_HEADER: (0.11, 0.42, 0.27, 0.20),
+    TIMELINE_HEADER: (0.12, 0.10, 0.18, 0.60),
+    VALUE_BAR_HEADER: (0.40, 0.30, 0.30),
+    DOMAIN_HEADER: (0.24, 0.62, 0.14),
+    SAMPLE_RECORD_HEADER: (0.22, 0.78),
+    INVENTORY_HEADER: (0.30, 0.09, 0.16, 0.18, 0.15, 0.12),
 }
 #: The report's one font, for Korean and Latin letters alike (lane RP2,
 #: decision 1): Word prints it as Malgun Gothic, and the server's LibreOffice
@@ -5104,6 +6073,16 @@ def render_markdown(narrative: ReportNarrative) -> str:
             lines += [f"> **{content[0]}** — {content[1]}", ""]
         elif kind == "list":
             lines += [f"- {item}" for item in content] + [""]
+        elif kind == "bar":
+            label, source_line, actual_line = content
+            lines += [f"**{label}**", f"- {source_line}", f"- {actual_line}", ""]
+        elif kind == "image":
+            caption = f"{content.step_label}단계 · {content.caption}" if content.step_label else content.caption
+            safe_caption = caption.replace("[", "(").replace("]", ")")
+            if content.url:
+                lines += [f"![{safe_caption}]({content.url})", ""]
+            else:
+                lines += [f"> {safe_caption}", ""]
         elif kind in {"table", "sign"}:
             header, rows, widths = content
             lines.append("| " + " | ".join(cell(h) for h in header) + " |")
@@ -5129,6 +6108,8 @@ DOCX_SPACING: dict[str, tuple[float, float, float]] = {
     "note": (2, 4, 1.15),
     "alert": (2, 2, 1.15),
     "list": (0, 1, 1.15),
+    "bar": (0, 2, 1.0),
+    "image": (0, 4, 1.0),
     "table": (0, 0, 1.0),
 }
 
@@ -5143,11 +6124,17 @@ def _space(paragraph: Any, kind: str, *, after: float | None = None) -> None:
     form.line_spacing = line
 
 
-def render_docx(narrative: ReportNarrative) -> bytes:
-    return _render_docx_blocks(report_blocks(narrative))
+def render_docx(
+    narrative: ReportNarrative,
+    image_resolver: Callable[[NotebookImage], tuple[bytes, str] | None] | None = None,
+) -> bytes:
+    return _render_docx_blocks(report_blocks(narrative), image_resolver=image_resolver)
 
 
-def _render_docx_blocks(blocks: Sequence[tuple[str, Any]]) -> bytes:
+def _render_docx_blocks(
+    blocks: Sequence[tuple[str, Any]],
+    *, image_resolver: Callable[[NotebookImage], tuple[bytes, str] | None] | None = None,
+) -> bytes:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
     from docx.oxml import OxmlElement
@@ -5232,6 +6219,41 @@ def _render_docx_blocks(blocks: Sequence[tuple[str, Any]]) -> bytes:
                     for run in paragraph.runs:
                         run.font.size = Pt(8.5)
                 _space(paragraph, "list", after=DOCX_SPACING["p"][1] if last else None)
+        elif kind == "bar":
+            label, source_line, actual_line = content
+            heading = document.add_paragraph()
+            heading.add_run(str(label)).bold = True
+            _space(heading, "bar")
+            for line, color in ((source_line, RGBColor(90, 110, 100)),
+                                (actual_line, RGBColor(32, 105, 72))):
+                paragraph = document.add_paragraph()
+                run = paragraph.add_run(str(line))
+                run.font.color.rgb = color
+                run.font.name = REPORT_FONT
+                _space(paragraph, "bar")
+        elif kind == "image":
+            caption = f"{content.step_label}단계 · {content.caption}" if content.step_label else content.caption
+            added = False
+            if image_resolver is not None:
+                try:
+                    resolved = image_resolver(content)
+                    if resolved is not None and resolved[0] and len(resolved[0]) <= 32 * 1024 * 1024:
+                        paragraph = document.add_paragraph()
+                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        paragraph.add_run().add_picture(io.BytesIO(resolved[0]), width=Cm(12.5))
+                        _space(paragraph, "image")
+                        added = True
+                except Exception as exc:  # noqa: BLE001 - caption still survives
+                    log.warning("notebook image not embedded error=%s", type(exc).__name__)
+            paragraph = document.add_paragraph(caption)
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in paragraph.runs:
+                run.italic = True
+                run.font.size = Pt(8.5 if small else 9)
+                run.font.color.rgb = RGBColor(90, 90, 90)
+            if not added and content.url:
+                paragraph.add_run(f" · {content.url}")
+            _space(paragraph, "image")
         elif kind == "pagebreak":
             # Lane RP2, decision 1: the sections start on the page after the first pages.
             paragraph = document.add_paragraph()

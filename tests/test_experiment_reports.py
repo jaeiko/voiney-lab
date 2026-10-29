@@ -168,10 +168,11 @@ class ExperimentReportStoreTests(unittest.TestCase):
         )
         self.assertIn("실험자", text)
         self.assertIn("(직접 적어 주세요)", text)
-        # Lane RP3, decision ① (2026-10-20): the notebook's sections.
-        self.assertIn("1. 시료와 조건", text)
-        self.assertIn("3. 관찰과 결과", text)
-        self.assertIn("7. 확인", text)
+        # The notebook uses the shared cross-domain skeleton; lab-specific
+        # names may replace these defaults without changing the facts.
+        self.assertIn("실험 정보", text)
+        self.assertIn("관찰·특이사항", text)
+        self.assertIn("해석·다음 할 일", text)
         # Lane RP, decision 6: the raw event list (with its timer values) is
         # no longer in the Word report; the ledger and JSON export keep it.
         self.assertIn("현재 단계를 완료했어요.", text)
@@ -251,7 +252,7 @@ class ExperimentReportStoreTests(unittest.TestCase):
         self.assertIn("젤 밴드를 1x1 mm 크기로 잘랐습니다.", text)
         self.assertIn("워시 완충액을 넣었습니다.", text)
         self.assertNotIn("모든 단계가 정상적으로 완료되었다", text)
-        self.assertIn("AI 가 쓴 문장은 없다", text)
+        self.assertIn("모델이 쓴 문장은 포함하지 않았다", text)
 
     def test_docx_export_contains_grounded_step_table(self):
         report = self.open()

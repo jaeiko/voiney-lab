@@ -22,13 +22,15 @@ it('owns the full detail route, source evidence, reagent cells, and append-only 
   window.location.hash = '#/protocols/p-ready';
   const { calls } = fakeFetch({
     '/api/auth/session': { json: SESSION_DEV },
-    '/api/protocols/p-ready/review': { json: { ...ENTRY_READY, review_pending: { needs_review_count: 2 }, source: { filename: 'sample.pdf', page_count: 2 }, materials: [{ name_source_text: 'NaCl', quantities: [{ source_text: '0.15 M' }] }], equipment: [{ name_source_text: 'balance' }], sections: [{ title_source_text: 'Preparation', steps: [{ step_id: 's1', source_label: '1', instruction_source_text: 'Add 0.15 M NaCl.', evidence: { source_page_number: 2, source_excerpt: 'Add 0.15 M NaCl.' }, sub_actions: [{ instruction_source_text: 'Mix.', conditions: [{ source_text: 'room temperature' }] }] }] }], review_versions: [{ version: 1, version_ko: '검토본 v1', reviewer_name: '견본' }] } },
+    '/api/protocols/p-ready/review': { json: { ...ENTRY_READY, source_disclosure: { recorded: true, status: 'yes', status_ko: '예 — 공개·시판 원문', note: '시판 제품 설명서', recorded_at: '2026-10-28T00:00:00Z' }, review_pending: { needs_review_count: 2 }, source: { filename: 'sample.pdf', page_count: 2 }, materials: [{ name_source_text: 'NaCl', quantities: [{ source_text: '0.15 M' }] }], equipment: [{ name_source_text: 'balance' }], sections: [{ title_source_text: 'Preparation', steps: [{ step_id: 's1', source_label: '1', instruction_source_text: 'Add 0.15 M NaCl.', evidence: { source_page_number: 2, source_excerpt: 'Add 0.15 M NaCl.' }, sub_actions: [{ instruction_source_text: 'Mix.', conditions: [{ source_text: 'room temperature' }] }] }] }], review_versions: [{ version: 1, version_ko: '검토본 v1', reviewer_name: '견본' }] } },
     '/api/protocols/p-ready/reagent-tables': { json: { reagent_tables: [{ table_id: 't1', filename: 'sample.xlsx', sheets: [{ name: 'Sheet1', cells: [{ row: 1, column: 1, display: '0.15 M', value: '0.15 M' }] }] }] } },
     '/api/protocols/p-ready/review-versions/1': { json: { version: 1, reviewer_name: '견본', changes: [{ kind_ko: '시간', original: '10 min', reviewed: '12 min', origin: 'reviewer_input', decided_by: '견본' }] } },
   });
   renderWithClient(<App />);
   expect(await screen.findByTestId('protocol-detail')).toBeInTheDocument();
   expect(await screen.findByText('NaCl')).toBeInTheDocument();
+  expect(screen.getByText('예 — 공개·시판 원문')).toBeInTheDocument();
+  expect(screen.getByText('시판 제품 설명서')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '이 프로토콜로 시작' })).toHaveAttribute('href', '#/start/p-ready');
   expect(screen.queryByText('아직 원문과 맞춰 확인할 분석 내용이 있어요. 확인 화면에서 원문과 함께 살펴봐 주세요.')).toBeNull();
   expect(screen.getByRole('link', { name: '확인 화면 열기' })).toHaveAttribute('href', '#/protocols/p-ready/review');

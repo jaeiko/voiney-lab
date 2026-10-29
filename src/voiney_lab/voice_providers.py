@@ -179,6 +179,21 @@ class SpeechProviderError(RuntimeError):
         self.code = code if code and _PROVIDER_CODE.fullmatch(code) else failure_code_for_status(status)
 
 
+@dataclass(frozen=True)
+class SttAdaptationFallback:
+    """The bounded reason an adaptation request was retried without hints."""
+
+    status: int
+    code: str
+
+
+@dataclass(frozen=True)
+class GoogleV2Transcription(Transcription):
+    """A Google V2 result that may disclose its content-free fallback reason."""
+
+    adaptation_fallback: SttAdaptationFallback | None = None
+
+
 def _choice(env: Mapping[str, str], name: str) -> str:
     """The provider written down, or "" when nobody wrote one (lane PL).
 
@@ -506,6 +521,7 @@ def _google_v2_token(settings: GoogleSttV2Settings, deadline: float, *,
 def transcribe_google_cloud_v2(
     pcm: bytes, settings: SttProviderSettings, *,
     language: str | None, keyterms: tuple[str, ...],
+    retry_without_adaptation: bool = True,
 ) -> Transcription:
     """Regional REST V2 Recognize with an implicit recognizer and inline config."""
 
@@ -531,12 +547,33 @@ def transcribe_google_cloud_v2(
             "phrases": [{"value": phrase} for phrase in phrases]}}]}
     url = (f"https://{v2.location}-speech.googleapis.com/v2/projects/{v2.project}"
            f"/locations/{v2.location}/recognizers/_:recognize")
-    response = requests.post(
-        url, headers=headers,
-        json={"config": config, "content": base64.b64encode(pcm).decode("ascii")},
-        timeout=_remaining(deadline), allow_redirects=False)
+    content = base64.b64encode(pcm).decode("ascii")
+
+    def recognize(request_config: dict[str, object]) -> requests.Response:
+        return requests.post(
+            url, headers=headers,
+            json={"config": request_config, "content": content},
+            timeout=_remaining(deadline), allow_redirects=False)
+
+    response = recognize(config)
+    adaptation_fallback: SttAdaptationFallback | None = None
     if not 200 <= response.status_code < 300:
-        raise _google_v2_failure(response)
+        failure = _google_v2_failure(response)
+        if (
+            not retry_without_adaptation
+            or "adaptation" not in config
+            or failure.status not in {400, 404}
+        ):
+            raise failure
+        retry_config = dict(config)
+        retry_config.pop("adaptation")
+        response = recognize(retry_config)
+        if not 200 <= response.status_code < 300:
+            raise _google_v2_failure(response)
+        adaptation_fallback = SttAdaptationFallback(
+            status=failure.status,
+            code=failure.code,
+        )
     try:
         payload = response.json()
         if not isinstance(payload, dict) or "error" in payload:
@@ -570,8 +607,19 @@ def transcribe_google_cloud_v2(
             detected = detected or normalize_provider_language(result.get("languageCode"))
     except (ValueError, TypeError, AttributeError):
         raise SpeechProviderError(f"{GOOGLE_CLOUD_V2} STT returned an invalid response") from None
-    return Transcription(" ".join(texts), detected, duration_seconds=_duration_seconds(pcm),
-                         words=tuple(words), response_status=response.status_code)
+    result = {
+        "text": " ".join(texts),
+        "detected_language": detected,
+        "duration_seconds": _duration_seconds(pcm),
+        "words": tuple(words),
+        "response_status": response.status_code,
+    }
+    if adaptation_fallback is not None:
+        return GoogleV2Transcription(
+            **result,
+            adaptation_fallback=adaptation_fallback,
+        )
+    return Transcription(**result)
 
 
 def _google_v2_seconds(value: object) -> float | None:

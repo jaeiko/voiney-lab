@@ -106,6 +106,11 @@ export const protocols = {
   emptyAction: "첫 프로토콜 올리기",
   steps: (count: number) => `${count}단계`,
   uploaded: (day: string) => `${day} 올림`,
+  sourceScope: (status: string | null, recorded: boolean) =>
+    recorded
+      ? `공개·시판 원문: ${{ yes: "예", no: "아니요", unknown: "모름" }[status ?? ""] ?? "확인 필요"}`
+      : "공개·시판 원문: 확인 기록 없음",
+  sourceNote: (note: string) => `출처: ${note}`,
   actions: {
     start: "시작하기",
     review: "확인하기",
@@ -232,6 +237,20 @@ export const run = {
   waiting: "시작하면 첫 단계가 여기에 나와요.",
   source: "원문 보기",
   nextLabel: "다음 단계",
+  voiceHint: '말로 진행: “다음” · “실험 일시정지” · “종료” · “화면 크게”',
+  micChanged: (name: string) => `마이크가 바뀌었어요 · ${name} 사용 중`,
+  far: {
+    step: "지금 단계",
+    next: "다음에 할 말",
+    continue: '끝났으면 "다음"이라고 말해 주세요.',
+    resume: '계속하려면 “다시 시작”이라고 말해 주세요.',
+    confirm: '맞으면 “네”, 아니면 “아니요”라고 말해 주세요.',
+    clarify: (choices: readonly string[] | string) => {
+      const names = typeof choices === "string" ? [choices] : choices;
+      return names.length ? `${names.map((choice) => `“${choice}”`).join(" 또는 ")}라고 말해 주세요.` : "한 번 더 말해 주세요.";
+    },
+    normal: '“보통 화면”이라고 말하면 돌아가요.',
+  },
   listening: {
     listening: "듣는 중",
     thinking: "생각하는 중",
@@ -369,6 +388,13 @@ export const settings = {
   saved: "저장했어요",
   saveFailed: "저장하지 못했어요. 다시 골라 주세요.",
   loadFailed: "설정을 불러오지 못했어요.",
+  display: {
+    title: "실험 화면 크기",
+    lead: "멀리 보기는 1.5–2 m 거리나 작업 공간 창 너머에서 읽도록 지금 단계와 타이머만 크게 보여요.",
+    normal: "보통 화면",
+    far: "멀리 보기",
+    voice: '실험 중에도 “화면 크게” 또는 “보통 화면”이라고 말해 바꿀 수 있어요.',
+  },
   voiceCheck: {
     title: "목소리 맞추기",
     lead: "옆 사람 말을 거르려면 문장 하나를 읽어 내 목소리 크기를 맞춰요. 실험 중에는 묻지 않아요.",
@@ -494,6 +520,12 @@ export const upload = {
   drop: "PDF · Word · 사진을 여기에 놓거나",
   pick: "파일 고르기",
   formats: "PDF · Word(.docx) · 사진(JPG · PNG · HEIC)",
+  sourceQuestion: "이 원문은 공개되었거나 시판 제품에 딸린 프로토콜인가요?",
+  sourceWhy: "고른 답과 출처 메모는 원문 정보와 실험 노트에 남아요.",
+  sourceOptions: { yes: "예", no: "아니요", unknown: "모름" },
+  sourceNote: "출처 메모",
+  sourceNoteHint: "공개 주소, DOI, 제품명처럼 나중에 확인할 단서를 적어 주세요. 선택 사항이에요.",
+  sourceRequired: "예·아니요·모름 중 하나를 골라 주세요.",
   linkLead: "공개 Google Drive · Docs 주소로도 올릴 수 있어요.",
   linkLabel: "공개 링크",
   linkButton: "링크로 가져오기",
@@ -528,6 +560,8 @@ export const upload = {
     heic_support_unavailable: "이 앱은 지금 HEIC 사진을 받지 못해요. JPG 나 PNG 로 바꿔 올려 주세요.",
     invalid_source_file: "파일을 읽을 수 없었어요. 원본을 다시 골라 주세요.",
     analysis_page_range_invalid: "고른 쪽이 이 문서에 없어요. 시작 쪽과 끝 쪽을 다시 골라 주세요.",
+    public_source_required: "이 파일럿에서는 ‘예’인 원문만 올릴 수 있어요. 원문 범위를 연구실 담당에게 확인해 주세요.",
+    source_disclosure_invalid: "원문 출처 확인을 읽지 못했어요. 답과 메모를 다시 확인해 주세요.",
     protocol_catalog_unavailable: "지금은 올릴 수 없어요. 잠시 뒤 다시 해 주세요.",
     network: "연결이 안 돼요. 인터넷을 확인한 뒤 다시 해 주세요.",
     unknown: "올리지 못했어요. 다시 해 주세요.",
@@ -702,6 +736,20 @@ export const records = {
   differences: '원문과 다르게 한 점·문제', previous: '지난번과 다른 점', next: '다음에 바꿀 점·다음 할 일',
   confirmation: '값 확인', unconfirmed: '[미확인]', confirmed: '확인함', confirm: '확인하기', edit: '고치기', correct: '고쳐서 확인하기', value: '고친 값', saved: '저장했어요.', saveFailed: '저장하지 못했어요. 다시 해 주세요.',
   appendix: '부록', source: '원문 출처', purpose: '실험 목적', pi: '관리자 확인', piWhy: '확인했다는 기록을 남겨요. 실험 시작 조건은 바뀌지 않아요.', piSave: '확인함 남기기', piComment: '확인 메모',
+  sectionExperiment: '실험 정보', sectionPurpose: '목적', sectionMethods: '방법', sectionObservations: '관찰·특이사항',
+  sectionResults: '결과', sectionInterpretation: '해석·다음 할 일', sectionDomain: '분야별 기록',
+  blank: '직접 채워 주세요.', methodHeads: ['단계', '원문 단계', '원문 → 실제', '실제 시각·타이머'],
+  interpretation: '해석', appendixRecords: '단계 시각과 말한 그대로의 기록',
+  valueBars: '원문 → 실제 값 막대', sourceValue: (value: string) => `원문 ${value}`, actualValue: (value: string) => `실제 ${value}`,
+  runTimeline: '단계별 타임라인', notebookTimelineKinds: { start: '실험 시작', step_end: '단계 끝', timer_start: '타이머 시작', timer_pause: '타이머 일시정지', timer_resume: '타이머 다시 시작', timer_cancel: '타이머 취소', timer_restart: '타이머 처음부터', timer_end: '타이머 끝', pause: '실험 일시정지', resume: '실험 다시 시작', observation: '관찰·특이사항', photo: '사진' } as Record<string, string>,
+  images: '단계 사진·원문 그림', imageMissing: '원본 이미지를 열 수 없어요.', sourceFigure: '원문 그림', photoUninterpreted: '사진은 자동으로 해석하지 않음',
+  domainProfile: '분야 양식', domainOptions: { general: '공통', biology: '바이오', chemistry: '화학 합성', battery_materials: '배터리·소재' } as Record<string, string>,
+  domainSave: '분야 양식 바꾸기', domainHeads: ['항목', '원문·기록에서 찾은 내용', '근거'], fieldOrigins: { source: '원문', record: '기록', calculated: '원값으로 계산', blank: '' } as Record<string, string>, formula: (value: string) => `계산식: ${value}`,
+  plateLayout: '플레이트 배치·well 위치', sampleRecords: '셀·시료 번호별 기록', sampleRecordHeads: ['셀·시료 번호', '기록 그대로'],
+  methodsInventory: 'Methods 조건표', inventoryHeads: ['시약·장비 (원문)', '종류', '구매처', '카탈로그 번호', 'Lot 번호', '입력 시점'],
+  inventoryStages: { before: '실험 전', after: '실험 후', source: '원문', blank: '' } as Record<string, string>, inventoryItem: '원문 시약·장비', vendor: '구매처', catalog: '카탈로그 번호', lot: 'Lot 번호', inputStage: '입력 시점', inventorySave: 'Methods 정보 기록하기',
+  comparison: '같은 프로토콜 기록 비교', comparisonWhy: '같은 연구실에서 기록별 공유에 동의한 실행만 사실 그대로 나란히 봐요.', comparisonShareWarning: '작은 연구실에서는 누구 기록인지 알아볼 수 있어요. 말한 특이사항은 그대로 보여요.', comparisonFailed: '비교 기록을 불러오지 못했어요.', shareOn: '이 기록 비교 공유 켜기', shareOff: '이 기록 비교 공유 끄기', comparisonRule: '다른 사람 기록은 비교 화면에서만 읽을 수 있어요. 어느 실행이 낫다는 판정이나 추천은 하지 않아요.', compareValueHeads: ['단계·항목', '원문', '실제'], compareMethodHeads: ['단계', '원문 → 실제', '실제 시각·타이머'],
+  template: '연구실 노트 양식', templateWhy: '고정된 절은 그대로 두고 이름과 순서만 정해요.', templateName: '노트 절 이름', moveUp: (name: string) => `${name} 위로`, moveDown: (name: string) => `${name} 아래로`, templateSave: '연구실 노트 양식 저장',
   legacy: '이전 화면에서 더 보기', legacyWhy: '원하면 이전 화면에서도 같은 기록을 볼 수 있어요.',
 } as const;
 
@@ -717,6 +765,7 @@ export const detail = {
   why: '전체 단계와 원문 근거를 살펴보고 실험할 프로토콜을 정해요.',
   back: '목록으로', reviewCards: '확인 화면 열기', analyse: '분석하기', timers: '원문에서 확인한 타이머', start: '이 프로토콜로 시작', review: '확인하기', summary: '시작 전에 볼 것',
   noContent: '표시할 내용이 없어요.', step: (label: string) => `${label}단계`, source: '원문과 맞춰 보기', steps: '전체 단계·조건', materials: '시약·재료', equipment: '장비',
+  sourceDisclosure: '원문 출처 확인', sourceDisclosureStatus: '공개·시판 원문', sourceNote: '출처 메모',
   before: '시작 전 준비', constructs: '분기·반복·함께 하는 일', history: '확인한 버전 기록',
   empty: '아직 분석한 내용이 없어요. 분석 뒤 다시 확인해 주세요.', failed: '상세를 불러오지 못했어요. 다시 불러와 주세요.',
   pendingAnalysis: '아직 원문과 맞춰 확인할 분석 내용이 있어요. 확인 화면에서 원문과 함께 살펴봐 주세요.',
@@ -774,7 +823,7 @@ export const advancedSettings = {
  web: '웹에서 찾아보기', webOptions: { on: '켜기(설명과 사진만, 출처와 함께)', off: '끄기(원문에서만)' }, webWhy: '값과 안전 주의는 원문만 따라요. 웹 찾기 기능이 꺼져 있으면 찾을 수 없어요.',
  sensitivity: '옆 사람 말 거르는 정도', sensitivityOptions: { high: '많이(이어버드에 맞아요)', normal: '보통', low: '조금' },
  language: '내가 말하는 언어', languageOptions: { ko: '한국어', auto: '자동으로 알아듣기', en: '영어' },
- microphone: '쓸 마이크', microphoneDefault: '기본 마이크 (기기 설정)', microphoneRefresh: '마이크 목록 다시 보기', microphoneMissing: '연결 안 됨 · 기본 마이크를 써요', microphoneUnknown: (index: number) => `마이크 ${index}`,
+ microphone: '쓸 마이크', microphoneLead: 'Bluetooth 이어셋이나 목걸이형 마이크를 먼저 연결한 뒤 브라우저가 찾은 목록에서 골라요.', microphoneDefault: '기본 마이크 (기기 설정)', microphoneRefresh: '마이크 목록 다시 보기', microphoneMissing: '연결 안 됨 · 기본 마이크를 써요', microphoneUnknown: (index: number) => `마이크 ${index}`, microphoneChosen: (name: string) => `지금 고른 마이크 · ${name}`,
  gain: '작은 소리 키우기', gainOptions: { calibrated: '목소리를 맞춘 뒤엔 끄기(추천)', on: '항상 켜기', off: '항상 끄기' },
  localFailed: '이 기기에 저장하지 못했어요. 브라우저의 저장 허용을 확인해 주세요.',
  calibrationLater: '실험을 마친 뒤 목소리를 다시 맞출 수 있어요.', settings: '설정 열기', close: '실험으로 돌아가기',

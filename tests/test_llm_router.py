@@ -440,7 +440,8 @@ class ApplyToolProposalTests(unittest.TestCase):
         self.assertEqual(plan.observation_outcome, "튜브 라벨 A-170")
         self.assertFalse(plan.state_changed)
         verdict, plan = _propose(
-            session, 3, "메모 튜브 라벨 A-170", _record("observation", "A-17", "메모 튜브 라벨 A-170")
+            session, 3, "튜브 라벨 A-170 남겨 줘",
+            _record("observation", "A-17", "튜브 라벨 A-170 남겨 줘"),
         )
         self.assertEqual(verdict.reason_code, "value_not_in_utterance")
         self.assertFalse(plan.reported_observation)

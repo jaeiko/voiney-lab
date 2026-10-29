@@ -32,6 +32,13 @@ class ExplicitNoteTests(unittest.TestCase):
                 self.assertIsNone(plan.note_record)
                 self.assertFalse(plan.reported_observation)
 
+    def test_only_a_bounded_identifier_measurement_is_a_bench_shortcut(self) -> None:
+        turns = self.started()
+        plan = turns.say("2번 셀 질량 12.3 mg")
+        self.assertIsNotNone(plan.note_record)
+        self.assertEqual(plan.observation_outcome, "2번 셀 질량 12.3 mg")
+        self.assertFalse(plan.state_changed)
+
     def test_the_explicit_words_record(self) -> None:
         for said in ("기록해 줘 0.5 mL 넣었어", "메모해 줘 0.5 mL 넣었어", "실험노트에 적어 줘 0.5 mL 넣었어",
                      "0.5 mL 넣었다고 기록해 줘"):

@@ -136,6 +136,7 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
         'error_codes':result.get('error_codes',[]), 'action': result['action'], 'intent_kind': result['intent_kind'], 'route': result['route'],
         'changed_fields': sorted(changed), 'invalid_state': result.get('invalid_state',[]), 'english_copy': english, 'duplicate_label': duplicate,
         'korean': korean, 'drops': result['drop_reasons'], 'interrupted': result.get('interrupted', False),
+        'stt_failures':result.get('stt_failures',[]),
         'cut_off': result.get('cut_off',False), 'incomplete': not result['terminal'], 'endpoints': result.get('endpoint_count', 0),
         'timings_ms': result['timings_ms'], 'stt_calls':result.get('stt_calls',0), 'stt_responses':result.get('stt_responses',0),
         'stt': stt_summary, 'stt_counts': counts,
@@ -189,6 +190,15 @@ def aggregate(rows: list[dict]) -> dict:
                 'timeout_rate': round(timeouts / model_calls, 4) if model_calls else None,
                 'usage': dict(usage),
             }
+        failure_counts=Counter(
+            (failure.get('status'),failure.get('code'))
+            for row in group for failure in row.get('stt_failures',[])
+        )
+        stt_failures=[
+            {'status':status,'code':code,'count':count}
+            for (status,code),count in sorted(
+                failure_counts.items(),key=lambda item:(str(item[0][0]),str(item[0][1])))
+        ]
         return {
             'stt':stt, 'cases': len(group), 'understood': sum(r['understood'] for r in group),
             'accuracy': round(sum(r['understood'] for r in group)/len(group), 4) if group else None,
@@ -199,11 +209,12 @@ def aggregate(rows: list[dict]) -> dict:
             'cut_off':sum(r.get('cut_off',False) for r in group), 'interrupted': sum(r['interrupted'] for r in group),
             'non_korean': sum(r['korean'] is False for r in group),
             'drops': dict(Counter(d for r in group for d in r['drops'])),
+            'stt_failures':stt_failures,
             'latency_ms': {k:percentiles(v) for k,v in timings.items()},
             'router': router,
         }
     tables = {}
-    for dimension in ('protocol', 'family', 'protocol_family', 'noise', 'snr', 'voice', 'speed'):
+    for dimension in ('protocol', 'family', 'protocol_family', 'noise', 'snr', 'effective_snr_db', 'distance_cm', 'denoise', 'voice', 'speed'):
         groups = defaultdict(list)
         for row in rows:
             key = f'{row.get("protocol")}/{row.get("family")}' if dimension == 'protocol_family' else str(row.get(dimension, 'not_measured'))

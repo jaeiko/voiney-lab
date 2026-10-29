@@ -100,9 +100,9 @@ Python을 확인하고, 파일럿 태그 전에는 조건 A 검사와 사람 음
    VOINEY_LAB_GOOGLE_STT_V2_DENOISE=true
    ```
 
-5. 서버를 다시 띄우고 `/readyz`를 확인한다. 잘못된 V2 설정은 503 `speech_configuration_invalid`와 **설정 이름만** 보인다. 이 점검은 로컬 설정·파일 위치·권한을 확인하며 Google 인증이나 음성 인식 성공을 뜻하지 않는다. 실제 확인은 사람이 `docs/TROUBLESHOOTING_GUIDE.md` 6절의 녹음 비교 명령을 실행한다. 최종 공급자는 녹음 비교 후 사람이 정한다.
+5. 서버를 다시 띄우고 `/readyz`를 확인한다. 잘못된 V2 설정은 503 `speech_configuration_invalid`와 **설정 이름만** 보인다. 이 점검은 로컬 설정·파일 위치·권한을 확인하며 Google 인증이나 음성 인식 성공을 뜻하지 않는다. 실제 확인은 사람이 `docs/TROUBLESHOOTING_GUIDE.md` 6절의 같은-WAV adaptation 명령과 녹음 비교 명령을 실행한다. 최종 공급자는 녹음 비교 후 사람이 정한다.
 
-V2는 받아쓰기만 바꾼다. 말하기 설정은 따로 둔다. 지정한 파일을 google-auth ADC 로더로 읽어 OAuth 토큰을 만들고, 토큰은 프로세스 메모리에만 둔다. AWS WIF는 EC2 역할로 짧은 토큰을 받고 서비스 계정을 사용한다. 파일이 없거나 틀리면 다른 자격을 찾지 않는다. `us`는 [공식 Chirp 3 지역 표](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3)에 명시된 기본 지역이다. 다른 지역은 `chirp_3`·한국어 지원을 확인한 뒤 넣는다. 자동 구두점·단어 시각을 요청하고, 잡음 제거는 기본으로 켠다(효과는 사람 시험 뒤 확정). 단어 시각은 인식 품질에 영향을 줄 수 있다. [공식 IAM 역할 안내](https://docs.cloud.google.com/speech-to-text/docs/iam)도 참고한다.
+V2는 받아쓰기만 바꾼다. 말하기 설정은 따로 둔다. 지정한 파일을 google-auth ADC 로더로 읽어 OAuth 토큰을 만들고, 토큰은 프로세스 메모리에만 둔다. AWS WIF는 EC2 역할로 짧은 토큰을 받고 서비스 계정을 사용한다. 파일이 없거나 틀리면 다른 자격을 찾지 않는다. `us`와 `eu`는 [공식 Chirp 3 지역 표](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3)에 명시돼 있고 한국어·adaptation 기능은 [지원표](https://docs.cloud.google.com/speech-to-text/docs/speech-to-text-supported-languages)에서 확인한다. 다른 지역은 모델·한국어·기능을 모두 확인한 뒤 넣는다. 용어 인라인 모양은 [REST V2 스키마](https://docs.cloud.google.com/speech-to-text/docs/reference/rest/v2/projects.locations.recognizers) 그대로이며 boost는 보내지 않는다. 자동 구두점·단어 시각을 요청하고, 잡음 제거는 기본으로 켠다. 2026-10-28 사람 실측에서는 잡음 제거와 무관하게 adaptation이 있는 `us` 요청만 404였다. 서버는 adaptation 400·404에서 같은 공급자·모델로 힌트만 뺀 요청을 한 번 보내고, 성공하면 그 세션에서 힌트를 끄며 `stt_adaptation_disabled`를 화면 진단·지표에 남긴다. 다른 공급자로 가지 않는다. 내부 404 원인은 확인 안 됨이며 `us` 지원을 끄는 추측 설정은 추가하지 않았다. 단어 시각은 인식 품질에 영향을 줄 수 있다. [공식 IAM 역할 안내](https://docs.cloud.google.com/speech-to-text/docs/iam)도 참고한다.
 
 ### systemd 로 두기 (예시, 이 줄에서 실행해 보지 않음)
 
