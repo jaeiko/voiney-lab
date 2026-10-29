@@ -11,8 +11,9 @@ more than the margin below the wearer ends it while the VAD keeps hearing a
 voice there. What the room's voice said before the
 wearer's first frame, beyond one prefix of lead-in, is dropped. The listener
 draws the line only while the room's noise floor sits well under it. A
-session that measured nothing ends utterances as before; so does a quiet
-room, and an utterance that never reached the wearer's level.
+A session that measured nothing instead uses HEAR2's turn-local relative
+room level; a quiet room and an utterance with an explicit wearer reference
+keep their existing paths.
 """
 
 from __future__ import annotations
@@ -342,13 +343,14 @@ class ListenerTests(unittest.TestCase):
         self.assertEqual(end.result.utterance, b"".join(QUIET[18:20] + LOUD[:6]))
         self.assertEqual(session.state, TurnState.PROCESSING)
 
-    def test_without_a_measurement_the_turn_still_waits_for_the_forced_bound(self) -> None:
+    def test_without_a_measurement_adapts_to_the_local_room_level(self) -> None:
         session = self.session(reference_db=None)
         events = self.feed(session, QUIET[:20] + LOUD[:6] + QUIET[:10])
         self.assertEqual([e.kind for e in events], ["speech.start"])
         events = self.feed(session, QUIET[10:40])
         self.assertEqual([e.kind for e in events], ["speech.end"])
-        self.assertTrue(events[0].result.forced)
+        self.assertFalse(events[0].result.forced)
+        self.assertEqual(events[0].result.endpoint, "silence")
 
     def test_while_the_sentence_is_awaited_the_turn_ends_as_before(self) -> None:
         session = self.session()
@@ -428,11 +430,12 @@ class SocketTests(unittest.TestCase):
         self.assertEqual(end["duration_ms"], (CONFIG.prefix_frames - 1 + 6) * 20)
         self.assertIn("endpoint=level", logs)
 
-    def test_a_session_that_measured_nothing_is_forced_as_before(self) -> None:
+    def test_a_session_that_measured_nothing_uses_the_local_room_level(self) -> None:
         sent, logs = self._run(self.session(None), QUIET[:20] + LOUD[:6] + QUIET[:40])
         end = next(m for m in sent if m["type"] == "speech.end")
-        self.assertTrue(end["forced"])
-        self.assertEqual(end["duration_ms"], CONFIG.maximum_utterance_frames * 20)
+        self.assertFalse(end["forced"])
+        self.assertLess(end["duration_ms"], CONFIG.maximum_utterance_frames * 20)
+        self.assertIn("endpoint=silence", logs)
         self.assertNotIn("endpoint=level", logs)
 
 

@@ -19,6 +19,13 @@ import socket
 import sys
 from pathlib import Path
 
+# A developer or pilot shell may export hundreds of runtime choices.  Tests
+# declare the few settings they need below or inside the owning test; none may
+# inherit a VOINEY_LAB_* value before test modules are imported.
+for _name in tuple(os.environ):
+    if _name.startswith("VOINEY_LAB_"):
+        os.environ.pop(_name, None)
+
 import pytest
 
 VOINEY_LAB_CANDIDATE_A_SOURCE_PDF = (Path(__file__).resolve().parents[1] / "data" / "runtime" / "candidate-a-source" / "in-gel-digestion.pdf")

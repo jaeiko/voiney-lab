@@ -42,6 +42,21 @@ from voiney_lab.configuration import (
 VAD_END_SILENCE_MS = 1000
 log = logging.getLogger("voiney_lab.vad")
 
+#: Lane HEAR2 (2026-10-29): WebRTC VAD can call a low fan-like room sound
+#: speech continuously, so neither its ordinary silence nor the calibrated
+#: wearer-level endpoint can help when the optional speaker filter is off.
+#: After one second in which the VAD called at least 60% of frames voiced, the
+#: listening detector takes the lower fifth of those voiced levels as the
+#: local room floor.  Only after a frame actually rises 6 dB over it does the
+#: relative gate arm; a steady wearer voice therefore cannot define and then
+#: cut itself off.  The PCM is unchanged; this only qualifies the VAD decision
+#: used for onset/end counting.  A fixed absolute dB line would discard a
+#: wearer who moved farther from the microphone.
+ADAPTIVE_NOISE_WINDOW_FRAMES = 50
+ADAPTIVE_NOISE_MIN_VOICED_SHARE = 0.6
+ADAPTIVE_NOISE_FLOOR_PERCENTILE = 20.0
+ADAPTIVE_NOISE_RISE_DB = 6.0
+
 #: The level of a frame with no signal at all, and of one that is all zeros.
 LEVEL_FLOOR_DB = -100.0
 _FULL_SCALE = 32768.0
@@ -422,6 +437,13 @@ class EndpointDetector:
         #: The VAD's verdicts on the utterance's last endpoint-silence frames.
         self._recent_voiced: deque[bool] = deque(maxlen=self.config.endpoint_silence_frames)
         self._recent_voiced_count = 0
+        #: Lane HEAR2: enabled by ``ListenerSession`` only when no explicit
+        #: wearer-level reference or calibration sentence owns the level.
+        self.adaptive_noise_gate = False
+        self._adaptive_noise_window: deque[tuple[bool, float]] = deque(
+            maxlen=ADAPTIVE_NOISE_WINDOW_FRAMES)
+        self._adaptive_noise_threshold_db: float | None = None
+        self._adaptive_noise_armed = False
 
     @property
     def buffered_frames(self) -> int:
@@ -441,6 +463,7 @@ class EndpointDetector:
         self._committed = False
         self._prefix_frames_retained = 0
         self._forget_level()
+        self._forget_adaptive_noise()
 
     def _forget_level(self) -> None:
         self._wearer_heard = False
@@ -449,6 +472,77 @@ class EndpointDetector:
         self._level_resume.clear()
         self._recent_voiced.clear()
         self._recent_voiced_count = 0
+
+    def _forget_adaptive_noise(self) -> None:
+        self._adaptive_noise_window.clear()
+        self._adaptive_noise_threshold_db = None
+        self._adaptive_noise_armed = False
+
+    def enable_adaptive_noise_gate(self, enabled: bool) -> None:
+        """Use the turn-local relative level gate, or remove all of its state.
+
+        A calibration sentence and a session with an explicit wearer level
+        keep their existing, separately measured behaviour.  The listener
+        calls this before frames are processed, including interruption frames.
+        """
+
+        enabled = bool(enabled)
+        if self.adaptive_noise_gate and not enabled:
+            self._forget_adaptive_noise()
+        self.adaptive_noise_gate = enabled
+
+    def _adaptive_endpoint_voiced(self, voiced: bool, level_db: float) -> bool:
+        """Qualify a VAD verdict against this turn's own low-level room sound."""
+
+        if not self.adaptive_noise_gate:
+            return voiced
+        if self._adaptive_noise_threshold_db is None:
+            self._adaptive_noise_window.append((voiced, level_db))
+            if len(self._adaptive_noise_window) == ADAPTIVE_NOISE_WINDOW_FRAMES:
+                levels = sorted(
+                    level for was_voiced, level in self._adaptive_noise_window
+                    if was_voiced
+                )
+                required = math.ceil(
+                    ADAPTIVE_NOISE_MIN_VOICED_SHARE
+                    * ADAPTIVE_NOISE_WINDOW_FRAMES)
+                if len(levels) >= required:
+                    rank = max(
+                        0,
+                        math.ceil(
+                            len(levels)
+                            * ADAPTIVE_NOISE_FLOOR_PERCENTILE / 100
+                        ) - 1,
+                    )
+                    self._adaptive_noise_threshold_db = (
+                        levels[rank] + ADAPTIVE_NOISE_RISE_DB)
+        if (
+            self._adaptive_noise_threshold_db is not None
+            and not self._adaptive_noise_armed
+        ):
+            observed_peak = max(
+                (
+                    level for was_voiced, level in self._adaptive_noise_window
+                    if was_voiced
+                ),
+                default=LEVEL_FLOOR_DB,
+            )
+            if voiced:
+                observed_peak = max(observed_peak, level_db)
+            if observed_peak >= self._adaptive_noise_threshold_db:
+                self._adaptive_noise_armed = True
+                log.info(
+                    "adaptive noise gate on threshold_db=%.1f window_ms=%d",
+                    self._adaptive_noise_threshold_db,
+                    ADAPTIVE_NOISE_WINDOW_FRAMES * FRAME_MS,
+                )
+        return (
+            voiced
+            and (
+                not self._adaptive_noise_armed
+                or level_db >= self._adaptive_noise_threshold_db
+            )
+        )
 
     def _loud(self, level: float | None) -> bool:
         """Whether a voiced frame of ``level`` is at the wearer's level (lane SP2)."""
@@ -530,10 +624,13 @@ class EndpointDetector:
         if self.state not in (TurnState.IDLE, TurnState.USER_SPEAKING):
             return EndpointResult()
 
-        voiced = bool(self.classifier(frame))
+        raw_voiced = bool(self.classifier(frame))
         frame_level = frame_level_db(frame)
         self.last_frame_level_db = frame_level
-        self.last_frame_voiced = voiced
+        # The room floor records the classifier's original verdict.  The
+        # adaptive gate changes only what may keep an utterance open.
+        self.last_frame_voiced = raw_voiced
+        voiced = self._adaptive_endpoint_voiced(raw_voiced, frame_level)
         level = frame_level if voiced else None
         if self.state == TurnState.IDLE:
             self._prefix.append((frame, voiced))
@@ -628,7 +725,15 @@ class EndpointDetector:
         for frame in frames:
             if len(frame) != FRAME_BYTES:
                 continue
-            before.append((frame, bool(self.classifier(frame))))
+            raw_voiced = bool(self.classifier(frame))
+            level = frame_level_db(frame)
+            before.append((
+                frame,
+                raw_voiced and (
+                    not self._adaptive_noise_armed
+                    or level >= self._adaptive_noise_threshold_db
+                ),
+            ))
         levels = [frame_level_db(frame) if voiced else None for frame, voiced in before]
         self._utterance[:0] = before
         self._utterance_levels[:0] = levels
