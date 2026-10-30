@@ -14,6 +14,12 @@ NOISES = (
     'fan_centrifuge', 'fan_adjacent_speech',
 )
 
+# LISTEN3 uses short procedural impact sounds, never recordings, to exercise
+# the endpoint separately from steady room noise.  The labels describe the
+# bench event being approximated; they are not acoustic measurements.
+IMPACT_NOISES = ('typing', 'glass', 'pipette')
+IMPACT_DISTANCES_CM = (30, 100)
+
 
 def read_wav(data: bytes) -> bytes:
     with wave.open(io.BytesIO(data), 'rb') as w:
@@ -63,6 +69,35 @@ def noise(kind: str, length: int, seed: int = 41) -> list[float]:
             v = .65*low + .10*math.sin(2*math.pi*92*t) + .55*voices
         out.append(v)
     return out
+
+
+def impact_pcm(kind: str, distance_cm: int, *, frames: int = 10) -> bytes:
+    """Return a bounded deterministic pulse train for an impact SIM axis."""
+    if kind not in IMPACT_NOISES:
+        raise ValueError('unknown impact kind')
+    if distance_cm not in IMPACT_DISTANCES_CM:
+        raise ValueError('unsupported impact distance')
+    if isinstance(frames, bool) or not isinstance(frames, int) or not 1 <= frames <= 100:
+        raise ValueError('impact frame count out of range')
+    rng = random.Random({'typing': 11, 'glass': 23, 'pipette': 37}[kind])
+    gain = distance_gain(distance_cm)
+    values = []
+    for index in range(frames * 320):
+        if kind == 'typing':
+            within = index % 960
+            value = rng.uniform(-1, 1) * math.exp(-within / 85)
+        elif kind == 'glass':
+            value = math.sin(2 * math.pi * 2550 * index / 16000) * math.exp(-index / 850)
+        else:
+            within = index % 1440
+            value = math.sin(2 * math.pi * 3600 * index / 16000) * math.exp(-within / 45)
+        values.append(round(32767 * .72 * gain * value))
+    return samples_to_pcm16(values)
+
+
+def append_impact(pcm: bytes, kind: str, distance_cm: int) -> bytes:
+    """Place an impact after a half-second pause following wearer audio."""
+    return pcm + bytes(16000) + impact_pcm(kind, distance_cm)
 
 
 def distance_gain(distance_cm: float) -> float:
@@ -115,5 +150,13 @@ def change_speed(pcm: bytes, rate: float) -> bytes:
 
 
 def oracle_audio(silent: bool = False) -> bytes:
-    # A carrier for deterministic VAD/STT fixtures, not synthetic spoken Korean.
-    return samples_to_pcm16(0 if silent else 4000*math.sin(2*math.pi*220*i/16000) for i in range(16000))
+    # A harmonic carrier for deterministic VAD/STT fixtures, not synthetic
+    # spoken Korean. Two harmonics keep acoustic endpoint tests from treating
+    # the old single-frequency test tone as a bench impact.
+    return samples_to_pcm16(
+        0 if silent else 4000 * (
+            math.sin(2 * math.pi * 220 * i / 16000)
+            + .35 * math.sin(2 * math.pi * 440 * i / 16000)
+        ) / 1.35
+        for i in range(16000)
+    )

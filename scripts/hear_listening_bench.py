@@ -44,13 +44,17 @@ every pause and window is measured in audio time.
 
 from __future__ import annotations
 
+import argparse
 import array
 import asyncio
+from collections import Counter
+from datetime import datetime, timezone
 import json
 import math
 import os
 import sys
 import time
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -494,11 +498,91 @@ def run_bench() -> tuple[dict[str, object], list[tuple[int, dict]]]:
     return measure(script, socket.sent), socket.sent
 
 
+def _utc_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("diagnostic timestamps need an explicit UTC offset")
+    return parsed.astimezone(timezone.utc)
+
+
+def replay_diagnostic_wavs(
+    directory: Path, *, started_at: datetime, ended_at: datetime,
+) -> dict[str, object]:
+    """Replay a bounded diagnostics window and return anonymous counts only."""
+    if started_at.tzinfo is None or ended_at.tzinfo is None or ended_at < started_at:
+        raise ValueError("invalid diagnostic interval")
+    selected: list[tuple[float, Path, bool]] = []
+    for metadata_path in directory.glob("*.json"):
+        modified = datetime.fromtimestamp(metadata_path.stat().st_mtime, timezone.utc)
+        if not started_at <= modified <= ended_at:
+            continue
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        word_count = metadata.get("word_count")
+        if isinstance(word_count, bool) or not isinstance(word_count, int) or word_count < 0:
+            raise ValueError("diagnostic word_count must be a nonnegative integer")
+        selected.append((metadata_path.stat().st_mtime, metadata_path, word_count > 0))
+
+    counts = Counter()
+    rejection_reasons = Counter()
+    for _, metadata_path, word_bearing in sorted(selected):
+        wav_path = metadata_path.with_suffix(".wav")
+        with wave.open(str(wav_path), "rb") as recording:
+            if (
+                recording.getnchannels() != 1
+                or recording.getsampwidth() != 2
+                or recording.getframerate() != 16000
+                or recording.getnframes() > 16000 * 30
+            ):
+                raise ValueError("diagnostic WAV must be bounded 16 kHz mono PCM16")
+            pcm = recording.readframes(recording.getnframes())
+        session = ListenerSession()
+        session.start()
+        events = session.accept_chunk(pcm)
+        events.extend(session.accept_chunk(bytes(FRAME_BYTES * 250)))
+        stt_bound = any(event.kind == "speech.end" for event in events)
+        rejection_reasons.update(
+            event.result.rejection_reason or "unknown"
+            for event in events if event.kind == "speech.rejected"
+        )
+        label = "word_bearing" if word_bearing else "empty_transcript"
+        counts[f"{label}_clips"] += 1
+        counts[f"{label}_stt_bound"] += int(stt_bound)
+
+    return {
+        "mode": "diagnostic_wav_replay",
+        "clips": len(selected),
+        "word_bearing_clips": counts["word_bearing_clips"],
+        "word_bearing_stt_bound": counts["word_bearing_stt_bound"],
+        "empty_transcript_clips": counts["empty_transcript_clips"],
+        "empty_transcript_stt_bound": counts["empty_transcript_stt_bound"],
+        "rejections": dict(sorted(rejection_reasons.items())),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     import logging
     logging.disable(logging.CRITICAL)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--events", action="store_true")
+    parser.add_argument("--diagnostics-dir", type=Path)
+    parser.add_argument("--diagnostics-start-utc")
+    parser.add_argument("--diagnostics-end-utc")
+    args = parser.parse_args(argv)
+    diagnostic_values = (
+        args.diagnostics_dir, args.diagnostics_start_utc, args.diagnostics_end_utc,
+    )
+    if any(diagnostic_values):
+        if not all(diagnostic_values) or args.events:
+            parser.error("diagnostic replay needs its directory and both UTC bounds")
+        result = replay_diagnostic_wavs(
+            args.diagnostics_dir,
+            started_at=_utc_timestamp(args.diagnostics_start_utc),
+            ended_at=_utc_timestamp(args.diagnostics_end_utc),
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
     result, sent = run_bench()
-    if argv and "--events" in argv:
+    if args.events:
         for at, message in sent:
             keep = {k: message[k] for k in ("type", "turn_id", "text", "reason", "state", "words_kind") if k in message}
             print(at, json.dumps(keep, ensure_ascii=False))
