@@ -803,10 +803,14 @@ class ProtocolAnalysisTests(unittest.TestCase):
         )
         self.assertRegex(
             prompt,
-            r"numbered\s+executable\s+steps.*every\s+such\s+step"
-            r"\s+exactly\s+once",
+            r"every\s+executable\s+instruction\s+exactly\s+once",
         )
-        self.assertRegex(prompt, r"original\s+step\s+order")
+        self.assertRegex(prompt, r"original\s+document\s+order")
+        self.assertRegex(prompt, r"unnumbered\s+prose\s+Methods\s+paragraph")
+        self.assertRegex(
+            prompt,
+            r"numbered\s+executable\s+steps.*preserve\s+those\s+printed\s+numbers",
+        )
         self.assertRegex(prompt, r"section\s+boundaries")
         for component in (
             "material",

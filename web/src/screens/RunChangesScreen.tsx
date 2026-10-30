@@ -39,6 +39,7 @@ export function RunChangesScreen({ protocolId }: { protocolId: string }) {
             <span>{words.chosenDoneHeading}</span>
           </p>
           <p className="muted">{chosen.changes.length ? words.chosenDoneSome(chosen.changes.length) : words.chosenDoneNone}</p>
+          {chosen.lab_revision ? <p className="muted">{words.labRevisionSaved(chosen.lab_revision.label_ko)}</p> : null}
           {chosen.changes.length ? (
             <ul className="chosen-words">
               {chosen.changes.map((change) => (

@@ -100,4 +100,24 @@ describe("StartScreen", () => {
     await user.click(screen.getByTestId("start-go"));
     await waitFor(() => expect(engine.startRun).toHaveBeenCalledWith({ protocolId: "p-ready", changeSetId: null, resume: { sessionId: "s9", version: 4 } }));
   });
+
+  it("keeps the server's lab-revision receipt visible on the final start screen", async () => {
+    const user = userEvent.setup();
+    const last = {
+      item_id: "s4#2", step_id: "s4", step_label: "4", kind: "time", kind_ko: "시간",
+      source_number: "5", source_unit: "min", source_written: "5 min", source_shown_ko: "5분",
+      number: "8", unit: "min", shown_ko: "8분", words_ko: "8분(오늘 바꾼 값 · 원문 5분)",
+    };
+    fakeFetch(table({
+      "/api/protocols/p-ready/start-check/changes": (init?: RequestInit) =>
+        init?.method === "POST"
+          ? { json: { change_set_id: "run-changes-lab", changes: [last], source: "last_time", lab_revision: { revision_id: "lab-adapted-1", version: 1, label_ko: "연구실판 v1", changes: [last] } } }
+          : { json: { ...RUN_OPTIONS, last_time: { changes: [last], when_ko: "10월 28일" } } },
+    }));
+    renderWithClient(<StartScreen protocolId="p-ready" resumeId={null} step={4} />);
+    await user.click(await screen.findByTestId("changes-last-time"));
+    await user.click(screen.getByRole("checkbox", { name: "이 조건을 연구실판으로 저장" }));
+    await user.click(screen.getByTestId("changes-done"));
+    expect(await screen.findByTestId("start-summary")).toHaveTextContent("연구실판 v1로 저장했어요.");
+  });
 });

@@ -13,6 +13,7 @@ and OCR engine here is fake except Pillow itself.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import subprocess
@@ -195,6 +196,36 @@ class ConversionTests(unittest.TestCase):
         command = office.calls[0]
         self.assertEqual(command[:3], ["/usr/bin/soffice", "--headless", "--norestore"])
         self.assertIn("--convert-to", command)
+
+    def test_pasted_methods_become_a_text_pdf_with_exact_scientific_strings_in_order(self) -> None:
+        methods = (
+            "Cells were washed with 500 µL PBS.\n"
+            "The suspension was incubated at 37 °C for 10 min.\n"
+            "Samples were centrifuged at 12,000 ×g for 5 min."
+        )
+        source = self.write("methods.txt", methods.encode("utf-8"))
+
+        conversion = convert_source_to_pdf(source, "text/plain", self.root / "methods.pdf")
+        extraction = extract_protocol_pdf(self.root / "methods.pdf")
+
+        self.assertEqual(extraction.page_count, 1)
+        self.assertFalse(extraction.pages[0].ocr_required)
+        page = extraction.pages[0].text
+        for sentence in methods.splitlines():
+            self.assertIn(sentence, page)
+        self.assertLess(page.index("500 µL"), page.index("37 °C"))
+        self.assertLess(page.index("37 °C"), page.index("12,000 ×g"))
+        self.assertEqual(conversion.media_type, "text/plain")
+        self.assertEqual(conversion.sha256, hashlib.sha256(methods.encode()).hexdigest())
+
+    def test_the_same_pasted_methods_give_the_same_evidence_pdf(self) -> None:
+        source = self.write("methods.txt", b"Add 5 mL buffer. Incubate for 10 min.")
+        convert_source_to_pdf(source, "text/plain", self.root / "methods-a.pdf")
+        convert_source_to_pdf(source, "text/plain", self.root / "methods-b.pdf")
+        self.assertEqual(
+            (self.root / "methods-a.pdf").read_bytes(),
+            (self.root / "methods-b.pdf").read_bytes(),
+        )
 
     def test_without_libreoffice_a_word_document_is_refused_by_name(self) -> None:
         with patch.object(pdf_module, "find_office_converter", return_value=None), \
@@ -437,9 +468,31 @@ class ServerUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(origin["converter"], "libreoffice-24.2.7.2")
         self.assertEqual(origin["media_type"], DOCX_MEDIA_TYPE)
 
+    async def test_pasted_methods_use_the_existing_upload_and_evidence_path(self) -> None:
+        methods = "Add 2.5 mL buffer. Incubate at 37 °C for 15 min."
+        async with await self.client() as client:
+            response = await self.upload(
+                client, methods.encode("utf-8"), "pasted-methods.txt", "text/plain"
+            )
+        self.assertEqual(response.status_code, 201, response.text)
+        payload = response.json()
+        self.assertEqual(payload["protocol"]["analysis_status"], "structured_analysis_ready")
+        protocol_id = payload["protocol"]["protocol_id"]
+        origin = self.registered_event(protocol_id)["converted_from"]
+        self.assertEqual(origin["media_type"], "text/plain")
+        self.assertEqual(origin["filename"], "pasted-methods.txt")
+        catalog, store = self._open_catalog()
+        try:
+            revision = catalog._latest_protocol_revision(protocol_id)
+            extraction = catalog._source_extraction(revision)
+        finally:
+            store.close()
+        self.assertIn(methods, extraction.pages[0].text)
+
     async def test_refusals_name_their_reason(self) -> None:
         cases = (
-            (b"%PDF-1.7", "notes.txt", "text/plain", 415, "unsupported_pdf_media_type"),
+            (b"\x00not methods", "notes.txt", "text/plain", 422, "invalid_source_file"),
+            (b"x" * (256 * 1024 + 1), "too-long.txt", "text/plain", 413, "pasted_methods_too_large"),
             (photo_bytes(fmt="PNG"), "a.jpg", "image/jpeg", 422, "invalid_source_file"),
             (b"plain", "p.docx", DOCX_MEDIA_TYPE, 422, "invalid_source_file"),
             (photo_bytes(), "../a.jpg", "image/jpeg", 400, "protocol_registration_invalid"),

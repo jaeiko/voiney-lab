@@ -50,7 +50,8 @@ export function RunChangesStep({ protocolId, onChosen }: Props) {
   const [stepId, setStepId] = useState<string | null>(null);
   const [valueId, setValueId] = useState<string | null>(null);
   const [chosen, setChosen] = useState<ChosenValue[]>([]);
-  const [source, setSource] = useState<"wizard" | "last_time">("wizard");
+  const [source, setSource] = useState<"wizard" | "last_time" | "lab_revision">("wizard");
+  const [saveLabRevision, setSaveLabRevision] = useState(false);
   const [number, setNumber] = useState("");
   const [unit, setUnit] = useState("");
   const [asText, setAsText] = useState(false);
@@ -71,8 +72,9 @@ export function RunChangesStep({ protocolId, onChosen }: Props) {
   const step = steps.find((item) => item.step_id === stepId) ?? null;
   const value = valueId ? (values.get(valueId) ?? null) : null;
   const lastTime = options.last_time?.changes?.length ? options.last_time : null;
+  const labRevision = options.lab_revision?.changes?.length ? options.lab_revision : null;
 
-  async function send(items: ChosenValue[], from: "wizard" | "last_time", confirmLarge: string[] = []) {
+  async function send(items: ChosenValue[], from: "wizard" | "last_time" | "lab_revision", confirmLarge: string[] = []) {
     setBusy(true);
     setNote(null);
     try {
@@ -80,6 +82,7 @@ export function RunChangesStep({ protocolId, onChosen }: Props) {
         target: options.target,
         source: from,
         changes: items.map((item) => ({ item_id: item.item_id, value: item.text })),
+        ...(saveLabRevision && items.length ? { save_as_lab_revision: true } : {}),
         ...(confirmLarge.length ? { confirm_large: confirmLarge } : {}),
       });
       setBusy(false);
@@ -154,8 +157,18 @@ export function RunChangesStep({ protocolId, onChosen }: Props) {
     setView("steps");
   }
 
+  function fromLabRevision() {
+    if (!labRevision) return;
+    setChosen(chosenFromLastTime(options.values, labRevision.changes));
+    setSource("lab_revision");
+    setSaveLabRevision(false);
+    setView("steps");
+  }
+
   const chosenList = (
     <section className="chosen-list" aria-label={words.chosenHeading(chosen.length)}>
+      {source === "last_time" ? <p className="muted">{words.loadedFromLastTime(lastTime?.when_ko ?? "")}</p> : null}
+      {source === "lab_revision" && labRevision ? <p className="muted">{words.loadedFromLabRevision(labRevision.label_ko)}</p> : null}
       <h3>{words.chosenHeading(chosen.length)}</h3>
       {chosen.length ? (
         <ul>
@@ -174,6 +187,16 @@ export function RunChangesStep({ protocolId, onChosen }: Props) {
       ) : (
         <p className="muted">{words.chosenEmpty}</p>
       )}
+      {chosen.length ? (
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={saveLabRevision}
+            onChange={(event) => setSaveLabRevision(event.target.checked)}
+          />
+          <span>{words.saveLabRevision}</span>
+        </label>
+      ) : null}
       <div className="card-choices">
         <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void send(chosen, source)} data-testid="changes-done">
           {busy ? words.sending : words.done}
@@ -198,6 +221,12 @@ export function RunChangesStep({ protocolId, onChosen }: Props) {
             <button type="button" className="btn" disabled={busy} onClick={fromLastTime} data-testid="changes-last-time">
               <History aria-hidden="true" />
               {words.lastTime(lastTime.changes.length, lastTime.when_ko ?? "")}
+            </button>
+          ) : null}
+          {labRevision ? (
+            <button type="button" className="btn" disabled={busy} onClick={fromLabRevision} data-testid="changes-lab-revision">
+              <History aria-hidden="true" />
+              {words.labRevision(labRevision.label_ko, labRevision.changes.length)}
             </button>
           ) : null}
         </div>
@@ -382,6 +411,14 @@ export function RunChangesStep({ protocolId, onChosen }: Props) {
           <button type="button" className="btn" disabled={busy} onClick={fromLastTime} data-testid="changes-last-time">
             <History aria-hidden="true" />
             {words.lastTime(lastTime.changes.length, lastTime.when_ko ?? "")}
+          </button>
+        </div>
+      ) : null}
+      {labRevision ? (
+        <div className="secondary-actions">
+          <button type="button" className="btn" disabled={busy} onClick={fromLabRevision} data-testid="changes-lab-revision">
+            <History aria-hidden="true" />
+            {words.labRevision(labRevision.label_ko, labRevision.changes.length)}
           </button>
         </div>
       ) : null}

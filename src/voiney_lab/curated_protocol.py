@@ -10754,10 +10754,10 @@ class CuratedProtocolSession:
             self._replay[turn_id] = plan
             return plan
 
-        if not self.active:
+        if not self._run_change_may_apply():
             return said(
-                "실험을 시작한 뒤에 말로 바꿀 수 있어요. 시작 전에는 시작 화면의 "
-                "'오늘 원문과 다르게 할 값'에서 고를 수 있어요.", "run_value_change_inactive")
+                "실험을 시작할 준비가 끝난 뒤에 말로 바꿀 수 있어요. 시작 화면의 "
+                "'오늘 원문과 다르게 할 값'에서 먼저 준비해 주세요.", "run_value_change_inactive")
         index = (self._step_index_for_label(request.step_label) if request.step_label is not None
                  else self.current_index)
         if index is None:
@@ -10812,6 +10812,11 @@ class CuratedProtocolSession:
         plan = self._apply_run_change(pending, index)
         self._replay[turn_id] = plan
         return plan
+
+    def _run_change_may_apply(self) -> bool:
+        """The configured run may take a person's value before or after its first step starts."""
+
+        return self.active or (self.workflow_status == "ready" and not self.experiment_ended)
 
     def _run_change_question(self, pending: Mapping[str, Any], label: str) -> str:
         if pending.get("revert"):
@@ -20638,7 +20643,7 @@ class CuratedProtocolSession:
             asked = dict(self._pending_run_change)
             self._pending_run_change = None
             self._last_front_rule = "yes_no_open_question"
-            if change_reply == "negative" or not self.active:
+            if change_reply == "negative" or not self._run_change_may_apply():
                 plan = self._words_plan("바꾸지 않았어요.", intent_kind="run_value_change_declined")
             else:
                 plan = self._apply_run_change(asked, int(asked.get("step_index") or 0))

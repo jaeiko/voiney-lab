@@ -575,7 +575,7 @@ RUN_CHANGE_LIMIT = 12
 RUN_CHANGE_LARGE_FACTOR = 2.0
 _KIND_OBJECT_KO = {"time": "시간을", "temperature": "온도를", "speed": "속도를", "volume": "부피를",
                    "concentration": "농도를"}
-RUN_CHANGE_SOURCES = ("wizard", "last_time")
+RUN_CHANGE_SOURCES = ("wizard", "last_time", "lab_revision")
 
 
 @dataclass(frozen=True)
@@ -876,6 +876,70 @@ class RunChange:
         return cls(**fields)
 
 
+@dataclass(frozen=True)
+class LabAdaptedRevision:
+    """A person's reusable condition set over one immutable source revision."""
+
+    revision_id: str
+    version: int
+    actor_principal_id: str
+    source_revision_id: str
+    target: StartTarget
+    changes: tuple[RunChange, ...]
+    recorded_at: str
+
+    @property
+    def label_ko(self) -> str:
+        return f"연구실판 v{self.version}"
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "revision_id": self.revision_id,
+            "version": self.version,
+            "label_ko": self.label_ko,
+            "source_revision_id": self.source_revision_id,
+            "target": asdict(self.target),
+            "changes": [change.public_dict() for change in self.changes],
+            "recorded_at": self.recorded_at,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> LabAdaptedRevision:
+        revision_id = value.get("revision_id")
+        version = value.get("version")
+        actor = value.get("actor_principal_id")
+        source_revision_id = value.get("source_revision_id")
+        recorded_at = value.get("recorded_at")
+        target = value.get("target")
+        changes = value.get("changes")
+        if (
+            not isinstance(revision_id, str)
+            or not revision_id.startswith("lab-adapted-")
+            or not isinstance(version, int)
+            or isinstance(version, bool)
+            or version < 1
+            or not isinstance(actor, str)
+            or not actor
+            or not isinstance(source_revision_id, str)
+            or not source_revision_id
+            or not isinstance(recorded_at, str)
+            or not recorded_at
+            or not isinstance(target, Mapping)
+            or not isinstance(changes, list)
+            or any(not isinstance(item, Mapping) for item in changes)
+        ):
+            raise RunChangeError("run_change_invalid", "연구실판 기록을 읽을 수 없어요.")
+        return cls(
+            revision_id=revision_id,
+            version=version,
+            actor_principal_id=actor,
+            source_revision_id=source_revision_id,
+            target=StartTarget.from_mapping(target),
+            changes=tuple(RunChange.from_mapping(item) for item in changes),
+            recorded_at=recorded_at,
+        )
+
+
 def run_change_is_large(change: RunChange) -> bool:
     """Whether the new value is below half or above twice the source's.
 
@@ -960,11 +1024,50 @@ class RunChanges:
         fixture = self.catalog.load_executable_fixture(protocol_id)
         return dict(target), fixture, changeable_values(fixture.steps)
 
-    def options(self, protocol_id: str) -> dict[str, Any]:
+    def options(
+        self, protocol_id: str, *, actor_principal_id: str | None = None
+    ) -> dict[str, Any]:
         target, fixture, values = self._current(protocol_id)
         return {"protocol_id": protocol_id, "target": target, "revision_id": fixture.revision_id,
                 "values": [value.public_dict() for value in values], "limit": RUN_CHANGE_LIMIT,
-                "steps": self._steps(fixture, values)}
+                "steps": self._steps(fixture, values),
+                "lab_revision": self._latest_lab_revision(
+                    protocol_id, target, fixture.revision_id, values, actor_principal_id
+                )}
+
+    def _latest_lab_revision(
+        self,
+        protocol_id: str,
+        target: Mapping[str, Any],
+        source_revision_id: str,
+        values: Sequence[ChangeableValue],
+        actor_principal_id: str | None,
+    ) -> dict[str, Any] | None:
+        if actor_principal_id is None:
+            return None
+        public_values = [value.public_dict() for value in values]
+        for event in reversed(self.catalog.store.list_events(protocol_id)):
+            payload = event.payload if event.event_type == RUN_CHANGES_EVENT else None
+            stored = payload.get("lab_adapted_revision") if isinstance(payload, Mapping) else None
+            if not isinstance(stored, Mapping):
+                continue
+            try:
+                revision = LabAdaptedRevision.from_mapping(stored)
+            except (RunChangeError, StartCheckError):
+                continue
+            if (
+                revision.actor_principal_id != actor_principal_id
+                or revision.source_revision_id != source_revision_id
+                or _target_key(asdict(revision.target)) != _target_key(target)
+            ):
+                continue
+            matched = self.last_time(
+                public_values, [change.public_dict() for change in revision.changes]
+            )
+            if len(matched) != len(revision.changes):
+                continue
+            return {**revision.public_dict(), "changes": matched}
+        return None
 
     def _steps(self, fixture: Any, values: Sequence[ChangeableValue]) -> list[dict[str, Any]]:
         """Every step of the run with its sentence, its stored Korean and the
@@ -1018,6 +1121,7 @@ class RunChanges:
     def choose(
         self, protocol_id: str, changes: object, *, target: object, actor_principal_id: str | None,
         source: object = "wizard", confirm_large: object = (),
+        save_as_lab_revision: object = False,
     ) -> dict[str, Any]:
         """Check each (item, new value) and append the choice; an empty list is
         the step skipped, which is a choice too (nothing changes today). A
@@ -1031,6 +1135,8 @@ class RunChanges:
             raise RunChangeError("run_change_target_stale", "분석이 바뀌었어요. 시작 화면을 다시 열어 주세요.")
         if source not in RUN_CHANGE_SOURCES:
             raise RunChangeError("run_change_invalid", "바꾼 값을 읽을 수 없어요.")
+        if type(save_as_lab_revision) is not bool:
+            raise RunChangeError("run_change_invalid", "연구실판 저장 선택을 읽을 수 없어요.")
         if not isinstance(changes, Sequence) or isinstance(changes, (str, bytes)) or len(changes) > RUN_CHANGE_LIMIT:
             raise RunChangeError("run_change_invalid", f"바꿀 값은 {RUN_CHANGE_LIMIT}개까지 고를 수 있어요.")
         by_id = {value.item_id: value for value in values}
@@ -1062,16 +1168,49 @@ class RunChanges:
                 large=[{**change.public_dict(), "question_ko": change.large_question} for change in unconfirmed])
         change_set_id = "run-changes-" + secrets.token_hex(12)
         revision = self.catalog._latest_protocol_revision(protocol_id)  # noqa: SLF001
+        recorded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        lab_revision = None
+        if save_as_lab_revision:
+            if not chosen:
+                raise RunChangeError(
+                    "run_change_lab_revision_empty", "바꾼 값이 있을 때만 연구실판으로 저장할 수 있어요."
+                )
+            versions = []
+            for event in self.catalog.store.list_events(protocol_id):
+                event_payload = event.payload if event.event_type == RUN_CHANGES_EVENT else None
+                stored = event_payload.get("lab_adapted_revision") if isinstance(event_payload, Mapping) else None
+                if isinstance(stored, Mapping) and stored.get("actor_principal_id") == actor_principal_id:
+                    value = stored.get("version")
+                    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                        versions.append(value)
+            lab_revision = LabAdaptedRevision(
+                revision_id="lab-adapted-" + secrets.token_hex(12),
+                version=max(versions, default=0) + 1,
+                actor_principal_id=actor_principal_id,
+                source_revision_id=fixture.revision_id,
+                target=StartTarget.from_mapping(_target_key(current)),
+                changes=tuple(chosen),
+                recorded_at=recorded_at,
+            )
         payload = {
             "change_set_id": change_set_id, "actor_principal_id": actor_principal_id,
             "target": _target_key(current), "revision_id": fixture.revision_id, "source": source,
             "changes": [change.public_dict() for change in chosen],
             "confirmed_large": [change.item_id for change in large],
-            "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "recorded_at": recorded_at,
+            **({"lab_adapted_revision": {
+                **lab_revision.public_dict(),
+                "actor_principal_id": actor_principal_id,
+            }} if lab_revision is not None else {}),
         }
         self.catalog.store.append_event(change_set_id, protocol_id, revision.revision_number,
                                         RUN_CHANGES_EVENT, payload)
-        return {"change_set_id": change_set_id, "changes": payload["changes"], "source": source}
+        return {
+            "change_set_id": change_set_id,
+            "changes": payload["changes"],
+            "source": source,
+            "lab_revision": lab_revision.public_dict() if lab_revision is not None else None,
+        }
 
     def for_start(
         self, protocol_id: str, change_set_id: str, *, actor_principal_id: str | None,

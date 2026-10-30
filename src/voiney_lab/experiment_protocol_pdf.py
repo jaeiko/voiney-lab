@@ -62,6 +62,7 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 __all__ = [
     "BOTTOM_BAND_FRACTION",
     "DOCX_MEDIA_TYPE",
+    "TEXT_MEDIA_TYPE",
     "IMAGE_MEDIA_TYPES",
     "OFFICE_CONVERTER_ENV",
     "MAX_PROTOCOL_PDF_BYTES",
@@ -647,6 +648,10 @@ def _extract_protocol_pdf_uncached(path: str | Path) -> ProtocolPdfExtraction:
 DOCX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+TEXT_MEDIA_TYPE = "text/plain"
+#: A paste is bounded separately from a file upload. This is ample for a long
+#: paper Methods section while keeping conversion and one analysis bounded.
+MAX_PASTED_METHODS_BYTES = 256 * 1024
 #: The photo formats read, by upload media type: the Pillow format name the
 #: file must open as.
 IMAGE_MEDIA_TYPES = {
@@ -655,7 +660,9 @@ IMAGE_MEDIA_TYPES = {
     "image/heic": "HEIF",
     "image/heif": "HEIF",
 }
-SOURCE_MEDIA_TYPES = frozenset({PDF_MEDIA_TYPE, DOCX_MEDIA_TYPE, *IMAGE_MEDIA_TYPES})
+SOURCE_MEDIA_TYPES = frozenset(
+    {PDF_MEDIA_TYPE, DOCX_MEDIA_TYPE, TEXT_MEDIA_TYPE, *IMAGE_MEDIA_TYPES}
+)
 #: A photo is placed on its page at the resolution OCR renders pages at, so
 #: OCR reads the photo's own pixels, neither enlarged nor shrunk.
 IMAGE_PDF_DPI = pdf_text_engine.OCR_RENDER_DPI
@@ -693,6 +700,10 @@ class ProtocolSourceFormatError(ProtocolPdfError):
 
 class ProtocolSourceTooLargeError(ProtocolPdfError):
     code = "protocol_image_too_large"
+
+
+class ProtocolPastedMethodsTooLargeError(ProtocolSourceTooLargeError):
+    code = "pasted_methods_too_large"
 
 
 class ProtocolSourceConversionUnavailableError(ProtocolPdfError):
@@ -758,7 +769,7 @@ def convert_source_to_pdf(
     *,
     office_converter: str | None = None,
 ) -> SourceConversion:
-    """Write the PDF an uploaded Word document or photo is read as.
+    """Write the PDF an uploaded Word document, photo or Methods paste is read as.
 
     ``office_converter`` names LibreOffice's ``soffice`` for a Word document;
     by default it is looked up (``find_office_converter``).
@@ -769,7 +780,48 @@ def convert_source_to_pdf(
         return image_to_pdf(source, media_type, destination)
     if media_type == DOCX_MEDIA_TYPE:
         return docx_to_pdf(source, destination, converter=office_converter)
-    raise ProtocolPdfTypeError("The upload is not a PDF, a Word document or a photo.")
+    if media_type == TEXT_MEDIA_TYPE:
+        return methods_text_to_pdf(source, destination)
+    raise ProtocolPdfTypeError(
+        "The upload is not a PDF, a Word document, a photo or pasted Methods text."
+    )
+
+
+def methods_text_to_pdf(source: str | Path, destination: str | Path) -> SourceConversion:
+    """Turn UTF-8 Methods text into the immutable PDF the analysis cites."""
+
+    source = Path(source)
+    sha256, byte_size = _file_identity(source)
+    if byte_size > MAX_PASTED_METHODS_BYTES:
+        raise ProtocolPastedMethodsTooLargeError("Pasted Methods text is too large.")
+    try:
+        text = source.read_bytes().decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise ProtocolSourceFormatError("Pasted Methods text must be UTF-8.") from exc
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not text.strip() or any(
+        ord(character) < 32 and character != "\n" for character in text
+    ):
+        raise ProtocolSourceFormatError(
+            "Pasted Methods text is empty or contains control characters."
+        )
+    try:
+        pdf_text_engine.write_text_document(text, destination)
+    except PdfEngineDocumentError as exc:
+        raise ProtocolSourceFormatError(
+            "Pasted Methods text contains an unsupported character."
+        ) from exc
+    except PdfEngineError as exc:
+        raise ProtocolSourceConversionError(
+            "Pasted Methods text could not be converted."
+        ) from exc
+    return SourceConversion(
+        media_type=TEXT_MEDIA_TYPE,
+        sha256=sha256,
+        byte_size=byte_size,
+        converter="voiney-methods-text-v1",
+        detail=(("character_count", len(text)),),
+    )
 
 
 def file_sha256(path: str | Path) -> str:

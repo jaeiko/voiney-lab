@@ -80,6 +80,7 @@ from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     MAX_PROTOCOL_PDF_BYTES,
     SOURCE_MEDIA_TYPES,
+    TEXT_MEDIA_TYPE,
     ProtocolPdfEncryptedError,
     ProtocolPdfError,
     ProtocolPdfMalformedError,
@@ -5074,6 +5075,11 @@ async def _register_protocol_pdf(
     media_type=source_media_type(request.headers.get("content-type",""))
     if media_type not in SOURCE_MEDIA_TYPES:
         raise HTTPException(status_code=415,detail="unsupported_pdf_media_type")
+    # A browser Methods paste has an explicit .txt name. Do not reinterpret a
+    # non-PDF body renamed as .pdf as pasted Methods merely because its
+    # Content-Type is text/plain; that established upload remains unsupported.
+    if media_type==TEXT_MEDIA_TYPE and Path(filename).suffix.casefold()!=".txt":
+        raise HTTPException(status_code=415,detail="unsupported_pdf_media_type")
     length=request.headers.get("content-length")
     if length is not None:
         try:
@@ -5138,6 +5144,7 @@ async def _register_protocol_pdf(
                         "source_kind":(
                             "local_pdf" if converted is None
                             else "local_docx" if converted.converter.startswith("libreoffice")
+                            else "pasted_methods" if converted.media_type=="text/plain"
                             else "local_photo"),
                         "status":"stored",
                     },
@@ -6020,7 +6027,7 @@ def get_protocol_run_changes(protocol_id:str)->dict[str,object]:
             options=RunChanges(
                 catalog,
                 localize=lambda fixture:_with_revision_translations(fixture,start_missing=False),
-            ).options(protocol_id)
+            ).options(protocol_id,actor_principal_id=_start_check_principal_id())
         finally:
             store.close()
         # Lane EASY, decision 3: "지난번처럼" -- the same account's last run of
@@ -6053,7 +6060,8 @@ def post_protocol_run_changes(
             return RunChanges(catalog).choose(
                 protocol_id,body.get("changes"),target=body.get("target"),
                 actor_principal_id=_start_check_principal_id(),source=body.get("source","wizard"),
-                confirm_large=body.get("confirm_large") or ())
+                confirm_large=body.get("confirm_large") or (),
+                save_as_lab_revision=body.get("save_as_lab_revision",False))
         finally:
             store.close()
     except RunChangeError as exc:

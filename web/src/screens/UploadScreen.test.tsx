@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthSession, UploadResponse } from "../api/types";
+import { ApiError } from "../api/client";
 import { ENTRY_READY, ENTRY_UPLOADED, fakeFetch, renderWithClient, SESSION_ACCOUNTS, SOURCE_PAGES, UPLOAD_ANSWER } from "../test/helpers";
 import { afterUpload, UploadScreen, uploadErrorWords } from "./UploadScreen";
 
@@ -70,6 +71,28 @@ describe("UploadScreen", () => {
     expect(calls.some((call) => call.path === "/api/protocols/p-new/analysis" && call.init?.method === "POST")).toBe(true);
   });
 
+  it("pastes a Methods paragraph into the same upload and analysis path", async () => {
+    const user = userEvent.setup();
+    const { calls } = fakeFetch({
+      "/api/protocols?filename=pasted-methods.txt": { json: UPLOAD_ANSWER },
+      "/api/protocols": { json: { protocols: [] } },
+    });
+    renderWithClient(<UploadScreen session={session} />);
+    await answerSource(user, "CC BY paper DOI 10.0000/example");
+    await user.type(
+      screen.getByLabelText("Methods 문단"),
+      "Cells were washed with 500 µL PBS, then incubated at 37 °C for 10 min.",
+    );
+    await user.click(screen.getByRole("button", { name: "Methods 문단 올리기" }));
+    expect(await screen.findByTestId("pages-ask")).toBeInTheDocument();
+    const sent = calls.find((call) => call.path === "/api/protocols?filename=pasted-methods.txt");
+    expect(sent?.init?.method).toBe("POST");
+    expect((sent?.init?.headers as Record<string, string>)["Content-Type"]).toBe("text/plain");
+    expect(await (sent?.init?.body as Blob).text()).toBe(
+      "Cells were washed with 500 µL PBS, then incubated at 37 °C for 10 min.",
+    );
+  });
+
   it("쪽 고르기 shows the pages' small pictures and analyses the picked pages only", async () => {
     const user = userEvent.setup();
     const { calls } = fakeFetch({
@@ -109,6 +132,7 @@ describe("UploadScreen", () => {
     await user.upload(screen.getByTestId("file-input"), pdf("secret.pdf"));
     expect(await screen.findByTestId("upload-error")).toHaveTextContent("암호가 걸린 PDF는 올릴 수 없어요. 암호 없는 원본을 골라 주세요.");
     expect(screen.getByTestId("file-pick")).toBeInTheDocument();
+    expect(uploadErrorWords(new ApiError(413, "pasted_methods_too_large"))).toBe("Methods 문단이 너무 길어요. 256 KiB 이하로 붙여 넣어 주세요.");
     expect(uploadErrorWords(new TypeError("x"))).toBe("올리지 못했어요. 다시 해 주세요.");
   });
 
