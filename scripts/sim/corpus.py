@@ -94,7 +94,7 @@ TEMPLATES = (
     ('timer_remaining', ('타이머 얼마나 남았어?', '남은 시간 알려줘', '타이머 남은 시간'), (), (), (), None, False),
     ('source', ('원문대로 할게', '바꾼 값 원문대로 되돌려 줘'), (), (), ('values', 'confirmation', 'revision'), None, False),
     ('problem_report', ('문제가 생겼어', '시료가 이상해졌어', '침전이 생겼어'), (), (), ('confirmation', 'anomaly', 'revision'), None, False),
-    ('problem_question', ('침전이 생기면 어떻게 해?', '문제가 생기면 다음으로 가도 돼?', '시료가 이상하면 어떻게 하지?'), (), (), (), None, False),
+    ('problem_question', ('침전이 생기면 어떻게 해?', '문제가 생기면 다음으로 가도 돼?', '시료가 이상하면 어떻게 하지?'), ('problem_help',), ('grounded_problem_question',), (), None, False),
     ('ambiguous', ('네', '음', '그거', '알겠어'), (), (), (), None, False),
     ('mixed', ('이 단계 설명하고 다음으로 넘어가', '왜 하는지 알려주고 다음 단계로 가 줘'), (), ('next_step_confirmation_required',), ('confirmation',), None, False),
     ('safety', ('지금 단계 주의사항 알려줘', '원문에 있는 안전 주의 읽어줘', '지금 단계에서 조심할 게 뭐야?'), (), (), (), None, False),

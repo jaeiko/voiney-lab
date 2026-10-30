@@ -90,6 +90,14 @@ SPOKEN_PROTOCOL_WITH_HISTORY = 1
 SPOKEN_QUOTE_CHARS = 90
 
 
+def _document_kind(document_type: str) -> str:
+    return {
+        "facility_sop": "안전 SOP",
+        "supplier_sds": "물질 SDS",
+        "equipment_manual": "장비 매뉴얼",
+    }.get(document_type, "안전 문서")
+
+
 class KnowledgeUnavailable(RuntimeError):
     """A source cannot be searched; ``setting`` names what is missing or off."""
 
@@ -559,6 +567,12 @@ class ProtocolKnowledge:
     def size(self) -> int:
         return len(self._units)
 
+    @property
+    def source_texts(self) -> tuple[str, ...]:
+        """Exact current-revision excerpts eligible for problem answers."""
+
+        return tuple(unit.text for unit in self._units)
+
     def _nearness(self, unit: _ProtocolUnit, current: int | None) -> float:
         if current is None or unit.step_index is None:
             return 0.0
@@ -646,6 +660,78 @@ class ProtocolKnowledge:
         self, query: str, *, limit: int, context: KnowledgeContext,
     ) -> list[KnowledgeHit]:
         return self.search_sync(query, limit=limit, context=context)
+
+
+class SafetyKnowledge:
+    """Exact excerpts from approved safety documents linked to this step.
+
+    The safety pack has already performed the facility, validity and step-name
+    gates. This source only searches those applicable excerpts; demo documents
+    and unlinked documents never enter the answer context.
+    """
+
+    tier = "lab"
+
+    def __init__(self, fixture: Any, safety_pack: Any) -> None:
+        self.fixture = fixture
+        self.safety_pack = safety_pack
+        self.protocol_id = str(fixture.protocol_id)
+        self.revision_id = str(getattr(fixture, "revision_id", "") or "")
+        self._step_index = {
+            step.step_id: index for index, step in enumerate(fixture.steps)
+        }
+
+    async def search(
+        self, query: str, *, limit: int, context: KnowledgeContext,
+    ) -> list[KnowledgeHit]:
+        if (
+            context.protocol_id != self.protocol_id
+            or (context.revision_id or "") != self.revision_id
+            or context.step_id not in self._step_index
+        ):
+            return []
+        index = self._step_index[str(context.step_id)]
+        step = self.fixture.steps[index]
+        guidance = self.safety_pack.guidance_for_step(step, index)
+        query_terms = frozenset(index_terms(query))
+        if not query_terms:
+            return []
+        hits: list[KnowledgeHit] = []
+        for document in guidance.applicable_documents:
+            text = _clean(getattr(document, "summary_text", "") or "")
+            if not text or bool(getattr(document, "is_demo", False)):
+                continue
+            matched = query_terms & frozenset(index_terms(
+                f"{getattr(document, 'title', '')} "
+                f"{getattr(document, 'topic', '')} {text}"
+            ))
+            if not matched:
+                continue
+            page = int(getattr(document, "page_number", None) or 1)
+            kind = _document_kind(str(getattr(document, "document_type", "")))
+            reviewed = next((
+                translated for language, translated in
+                tuple(getattr(document, "reviewed_translations", ()) or ())
+                if str(language).casefold().startswith("ko")
+            ), "")
+            hits.append(KnowledgeHit(
+                tier="lab",
+                title=str(getattr(document, "title", "") or kind),
+                text=text,
+                locator=f"{kind} p.{page}",
+                source_url=getattr(document, "source_uri", None),
+                language=str(getattr(document, "language", "") or "en"),
+                score=float(len(matched)),
+                details=(
+                    ("kind", "safety_document"), ("page", str(page)),
+                    ("step_label", str(step.source_label)),
+                    ("step_id", str(step.step_id)), ("reading", reviewed),
+                    ("document_type", str(getattr(document, "document_type", ""))),
+                    ("document_id", str(getattr(document, "document_id", ""))),
+                ),
+            ))
+        hits.sort(key=lambda hit: (-hit.score, hit.title, hit.locator))
+        return hits[:limit]
 
 
 # --- History: the same account's earlier runs of this protocol ----------------------
@@ -938,6 +1024,76 @@ def _spoken_history(hit: KnowledgeHit, language: str) -> str:
     if after:
         line += f" 그 뒤 기록: {after[0]}."
     return line
+
+
+def compose_grounded_problem_answer(
+    found: KnowledgeSearch | Sequence[KnowledgeHit],
+    *,
+    language: str,
+    step_label: str,
+    step_page: int,
+) -> ProblemHelp:
+    """Show exact current-revision evidence, or say explicitly it is absent.
+
+    This narrower composer is for prospective problem/reason/what-if
+    questions. It deliberately excludes run history, public material and
+    model-written prose. A model may select one of these hits, but the words
+    returned here remain the selected source's exact words.
+    """
+
+    hits = found.hits if isinstance(found, KnowledgeSearch) else tuple(found)
+    selected = tuple(hit for hit in hits if hit.tier in {"protocol", "lab"})
+    shown: list[str] = []
+    said: list[str] = []
+    sources: list[dict[str, str]] = []
+    quoted: list[str] = []
+    for hit in selected[:3]:
+        if hit.tier == "protocol":
+            shown.append(
+                f"{TIER_LABELS['protocol']} · {hit.locator} · "
+                f"{KIND_LABELS.get(hit.detail('kind'), '')}\n“{hit.text}”"
+                + (f"\n{hit.detail('reading')}" if hit.detail("reading") else "")
+            )
+            speech, spoken_quote = _spoken_quote(hit, language)
+            said.append(speech)
+            quoted.extend((hit.text, hit.detail("reading"), spoken_quote))
+        else:
+            shown.append(f"{TIER_LABELS['lab']} · {hit.locator} · {hit.title}\n“{hit.text}”")
+            reading = hit.detail("reading")
+            if language == "ko" and reading:
+                said.append(f"{hit.locator}: {reading}")
+                quoted.extend((hit.text, reading))
+            elif language == "ko":
+                said.append("연결된 안전 문서에 관련 내용이 있어요. 화면에서 확인해 주세요.")
+                quoted.append(hit.text)
+            else:
+                sentence = _first_sentence(hit.text)
+                said.append(f"{hit.locator}: {sentence}")
+                quoted.extend((hit.text, sentence))
+        sources.append({
+            "tier": hit.tier,
+            "locator": hit.locator,
+            "kind": hit.detail("kind"),
+            "page": hit.detail("page"),
+            "step_label": hit.detail("step_label"),
+            "document_id": hit.detail("document_id"),
+        })
+    if not selected:
+        where = f"{step_label}단계 · p.{step_page}"
+        shown.append(f"원문에 없음 · 현재 {where}\n현재 프로토콜 검토본과 연결된 안전 문서에서 관련 내용을 찾지 못했어요.")
+        said.append("원문에 없어요. 현재 프로토콜 검토본과 연결된 안전 문서에서 관련 내용을 찾지 못했어요.")
+    return ProblemHelp(
+        display="\n\n".join(shown),
+        speech=" ".join(said),
+        closing="",
+        closing_held=False,
+        sources=tuple(sources),
+        found={
+            "protocol": sum(hit.tier == "protocol" for hit in selected),
+            "lab": sum(hit.tier == "lab" for hit in selected),
+        },
+        quoted_text="\n".join(item for item in quoted if item),
+    )
 
 
 def compose_problem_help(

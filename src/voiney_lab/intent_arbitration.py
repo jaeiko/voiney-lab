@@ -347,6 +347,26 @@ def arbitrate_request(text: str) -> RequestArbitration:
             ("troubleshooting",),
         )
 
+    # Prospective bench failures are questions about source-backed handling,
+    # not predictions and not permission to move workflow state. Keep this
+    # ahead of the uncertainty reader so "만약 ... 실패하면" reaches the
+    # same grounded help path as "문제가 생기면".
+    hypothetical = re.search(
+        r"만약|가정|경우|발생|생기|때|(?:으|하|되|됐|실패하|이상하|다르|나)면|수\s*있",
+        normalized,
+    )
+    asks_handling_or_reason = re.search(
+        r"어떻게|어떡|어쩌|뭐|무엇|왜|이유|원인|먼저|확인|대처|"
+        r"(?:가|넘어가|진행해)도\s*돼|가정하면",
+        normalized,
+    )
+    prospective_problem = bool(asks_handling_or_reason and hypothetical)
+    if prospective_problem:
+        return RequestArbitration(
+            normalized, RequestIntent.TROUBLESHOOTING, 1.0,
+            "problem_contingency_question", ("troubleshooting",),
+        )
+
     if _matches(normalized, _UNCERTAINTY_PATTERNS):
         return RequestArbitration(
             normalized,
@@ -359,7 +379,7 @@ def arbitrate_request(text: str) -> RequestArbitration:
     if re.search(rf"(?:문제(?:가)?\s*생기면|{_PROBLEM_SUBJECTS}(?:이|가)?\s*이상하면)", normalized) and re.search(
         r"어떻게|어떡|어쩌|(?:가|넘어가|진행해)도\s*돼", normalized
     ):
-        return RequestArbitration(normalized, RequestIntent.GENERAL_QA, 1.0,
+        return RequestArbitration(normalized, RequestIntent.TROUBLESHOOTING, 1.0,
                                   'problem_contingency_question', ('troubleshooting',))
 
     problem = problem_reading(text)

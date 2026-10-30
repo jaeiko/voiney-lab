@@ -42,6 +42,33 @@ STATE_FIELDS = {
 }
 
 
+def grounded_answer_measurement(
+    primary_text: str,
+    source_texts: tuple[str, ...],
+    protocol_source: str,
+) -> dict[str, bool]:
+    """Content-safe QA1 measures from admitted evidence, never model traces."""
+
+    from voiney_lab.answer_checks import (
+        introduces_numbers,
+        ungrounded_safety_instructions,
+    )
+
+    primary = str(primary_text or "")
+    evidence = "\n".join(source_texts)
+    exact = bool(source_texts) and all(
+        text in protocol_source and text in primary for text in source_texts
+    )
+    explicit_absence = not source_texts and "원문에 없음" in primary
+    invented_values = introduces_numbers(primary, evidence)
+    generated_safety = bool(ungrounded_safety_instructions(primary, evidence))
+    return {
+        "grounded": bool((exact or explicit_absence) and not invented_values and not generated_safety),
+        "invented_values": invented_values,
+        "generated_safety": generated_safety,
+    }
+
+
 def snapshot(workflow: Any) -> dict[str, Any]:
     result = {group: copy.deepcopy(tuple(getattr(workflow, name, None) for name in names)) for group,names in STATE_FIELDS.items()}
     return result
@@ -226,6 +253,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         events = capture.events
         done = next((e for e in reversed(events) if e['type'] == 'turn.done'), {})
         decision = next((e for e in reversed(events) if e['type'] == 'turn.route_decision'), {})
+        reply = next((e for e in reversed(events) if e['type'] == 'reply.delta'), {})
         router_stopped = next((e for e in reversed(events) if e['type'] == 'router.stopped'), {})
         router_measurement = decision.get('router')
         if not isinstance(router_measurement, dict) and router_stopped:
@@ -268,6 +296,16 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         protected = protected_scientific_names(
             list((protocol.fixture.localizations or {}).values()) + list((protocol.fixture.machine_localizations or {}).values()),
             ' '.join(page.text for page in protocol.fixture.draft.extraction.pages))
+        grounding = None
+        if case.family == 'problem_question':
+            raw_sources = reply.get('source_texts')
+            source_texts = tuple(
+                item for item in raw_sources if isinstance(item, str)
+            ) if isinstance(raw_sources, list) else ()
+            grounding = grounded_answer_measurement(
+                str(reply.get('primary_text') or ''), source_texts,
+                '\n'.join(workflow.problem_knowledge().source_texts),
+            )
         return {
             'protected_names':protected,
             'invalid_state':invalid_state, 'error_codes': error_codes, 'action': done.get('result_kind', decision.get('action')), 'intent_kind': done.get('intent_kind'),
@@ -283,6 +321,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             'endpoint_audio_frames': [e.result.total_frames for e in committed],
             'cut_off': any(e.result.forced for e in committed) or len(committed)>1,
             'interrupted': any(e['type'] in {'turn.cancelled', 'audio.cancelled'} for e in events),
+            'grounding': grounding,
             'timings_ms': {**timings, 'provider_stt_ms': round(provider_ms['stt'], 3),
                            'provider_tts_ms': round(provider_ms['tts'], 3),
                            'boundary_ms': round((time.perf_counter()-started)*1000, 3)},

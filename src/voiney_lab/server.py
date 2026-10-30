@@ -24,6 +24,7 @@ from voiney_lab.brain import (
     ConversationHistory,
     SentenceChunker,
     answer_curated_protocol_question,
+    select_curated_protocol_answer,
 )
 from voiney_lab.configuration import (
     CascadeSttSettings,
@@ -36,6 +37,7 @@ from voiney_lab.configuration import (
 from voiney_lab.cascade_filler import (
     CascadeFiller,
     FillerSessionMemory,
+    GROUNDED_ANSWER_STATUS_DELAY_MS,
     cascade_filler_mode,
     cascade_filler_status_delay_ms,
     cascade_filler_status_speech_enabled,
@@ -188,6 +190,8 @@ from voiney_lab.language import (
 from voiney_lab.intent_arbitration import arbitrate_request
 from voiney_lab.knowledge import (
     HistoryKnowledge,
+    SafetyKnowledge,
+    compose_grounded_problem_answer,
     compose_problem_help,
     search_tiers,
 )
@@ -7715,6 +7719,10 @@ class ListenerSession:
         self.auto_translation_announced=False
         # Waiting-status sentences already said and made in this session.
         self.filler_memory=FillerSessionMemory()
+        # Exact turns currently waiting for the answer-role model to select
+        # one supplied source excerpt. The filler reads this only; it is not
+        # workflow state and cannot authorize a mutation.
+        self.grounded_answer_turns:set[tuple[int,int]]=set()
         # What the agent has said lately, for the echo check (lane XO, 6b):
         # (when it was synthesized, the sentence).
         self.spoken_recently:collections.deque[tuple[float,str]]=collections.deque(
@@ -11537,6 +11545,13 @@ def _problem_help_sources(
     """
 
     sources:list[Any]=[curated.problem_knowledge()]
+    if marker is not None and marker.get("kind")=="grounded_question":
+        if curated.safety_pack is not None:
+            sources.append(SafetyKnowledge(curated.fixture,curated.safety_pack))
+        # This answer is bounded to the current protocol revision and linked
+        # approved safety documents. Earlier runs and public sources are not
+        # evidence for it.
+        return sources
     store=session.experiment_report_store
     if store is not None and session.experiment_report_id:
         held=session.problem_history
@@ -11576,7 +11591,7 @@ def _problem_causes_allowed(session:ListenerSession,plan:Any,language:str)->bool
 
 async def _with_problem_help(
     session:ListenerSession,curated:CuratedProtocolSession,plan:Any,*,
-    language:str,timings:dict[str,Any],
+    language:str,timings:dict[str,Any],turn_id:int,generation:int,
 )->tuple[Any,dict[str,Any]|None]:
     """The help put after a problem's reply (decision 2), and ③'s job if any.
 
@@ -11603,13 +11618,65 @@ async def _with_problem_help(
         sources,str(marker.get("words") or ""),context=context,limit=4,
         timeout_seconds=PROBLEM_HELP_SEARCH_SECONDS)
     timings["knowledge_search_ms"]=max(found.elapsed_ms.values(),default=0.0)
+    grounded_question=marker.get("kind")=="grounded_question"
+    selector_status="not_applicable"
+    if grounded_question:
+        session.grounded_answer_turns.add((turn_id,generation))
+        eligible=tuple(hit for hit in found.hits if hit.tier in {"protocol","lab"})
+        if not eligible:
+            selector_status="no_evidence"
+        elif session.multi_brain_settings.answer_brain_enabled:
+            started=session.clock()
+            try:
+                role=RoleModel.from_environment("answer")
+                selected=await asyncio.wait_for(
+                    select_curated_protocol_answer(
+                        _role_client(role),str(marker.get("words") or ""),
+                        language=language,
+                        protocol_id=curated.fixture.protocol_id,
+                        protocol_title=curated.fixture.title,
+                        step_label=curated.fixture.steps[curated.current_index].source_label,
+                        facts=tuple(
+                            (f"grounded_{index}",hit.detail("kind") or hit.tier,hit.text)
+                            for index,hit in enumerate(eligible)
+                        ),
+                    ),
+                    timeout=session.multi_brain_settings.answer_timeout_seconds,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # The exact source search remains usable; no other provider is
+                # substituted and no model prose reaches the answer.
+                selector_status=f"provider_{type(exc).__name__}"
+            else:
+                selector_status=("unsupported" if selected.fact_id=="unsupported" else "selected")
+                if selected.fact_id=="unsupported":
+                    eligible=()
+                else:
+                    index=int(selected.fact_id.removeprefix("grounded_"))
+                    eligible=(eligible[index],)
+                found=replace(found,hits=eligible)
+            finally:
+                timings["grounded_answer_selector_ms"]=round((session.clock()-started)*1000)
+        else:
+            selector_status="disabled"
     causes_follow=_problem_causes_allowed(session,plan,language)
+    if grounded_question:
+        causes_follow=False
     public=public_reference_part(found.tier("public"),language=language)
-    help_=_with_public_reference(
-        compose_problem_help(
-            replace(found,hits=tuple(hit for hit in found.hits if hit.tier!="public")),
-            language=language,causes_follow=causes_follow),
-        public)
+    step=curated.fixture.steps[curated.current_index]
+    if grounded_question:
+        help_=compose_grounded_problem_answer(
+            found,language=language,step_label=step.source_label,
+            step_page=int(step.evidence.source_page_number),
+        )
+    else:
+        help_=_with_public_reference(
+            compose_problem_help(
+                replace(found,hits=tuple(hit for hit in found.hits if hit.tier!="public")),
+                language=language,causes_follow=causes_follow),
+            public)
     violations=problem_help_violations(
         f"{help_.shown}\n{help_.spoken}",quoted=help_.quoted_text.splitlines())
     if violations:
@@ -11620,12 +11687,39 @@ async def _with_problem_help(
     else:
         display=f"{plan.display_text}\n\n{help_.shown}"
         speech=f"{plan.speech_text} {help_.spoken}"
+    # The composer shows at most three exact excerpts; expose and cite exactly
+    # that admitted set, never an additional searched-but-unshown line.
+    admitted=tuple(hit for hit in found.hits if hit.tier in {"protocol","lab"})[:3]
     marker.update({
         "found":dict(help_.found),"sources":[dict(item) for item in help_.sources],
         "search_ms":dict(found.elapsed_ms),"unavailable":list(found.unavailable),
         "failed":list(found.failed),"causes_follow":causes_follow,
+        "answer_selector_status":selector_status,
     })
-    plan=replace(plan,display_text=display,speech_text=speech,primary_text=display,problem_help=marker)
+    plan=replace(
+        plan,display_text=display,speech_text=speech,primary_text=display,
+        problem_help=marker,
+        source_texts=(tuple(hit.text for hit in admitted) if grounded_question else plan.source_texts),
+        source_pages=(tuple(int(hit.detail("page") or 0) for hit in admitted)
+                      if grounded_question else plan.source_pages),
+        evidence_ids=(tuple(f"grounded_{index}" for index,_hit in enumerate(admitted))
+                      if grounded_question else plan.evidence_ids),
+        citations=(tuple({
+            "kind":hit.tier,"label":hit.locator,"page":int(hit.detail("page") or 0),
+            "step_label":hit.detail("step_label"),
+        } for hit in admitted) if grounded_question else plan.citations),
+        translation_status=(
+            "answer_selector_exact_source" if selector_status=="selected"
+            else "deterministic_protocol_structure"
+        ),
+        limitations=(
+            tuple(dict.fromkeys((
+                *plan.limitations,
+                "원문 선택을 완료하지 못해 검색된 원문을 그대로 표시했어요.",
+            )))
+            if selector_status.startswith("provider_") else plan.limitations
+        ),
+    )
     if not causes_follow:
         return plan,None
     step=curated.fixture.steps[int(marker["step_index"])]
@@ -14343,7 +14437,8 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                 # Lane HELP, decision 1-2: the sources' help after the reply
                 # (an anomaly's read-back first), and the record of it.
                 plan,problem_causes=await _with_problem_help(
-                    session,curated,plan,language=turn_language,timings=timings)
+                    session,curated,plan,language=turn_language,timings=timings,
+                    turn_id=turn_id,generation=generation)
                 if problem_causes is not None:
                     session.begin_research(turn_id,generation)
                 if session.experiment_report_store is not None and not problem_record_failed:
@@ -15426,7 +15521,12 @@ async def run_turn_safely(
             "filler.tone",
             configuration_id=session.accepted_configuration_id,
             turn_id=target_turn,generation=target_generation)
+    normal_status_speech=cascade_filler_status_speech_enabled()
     def filler_activity()->str|None:
+        if (turn_id,generation) in session.grounded_answer_turns:
+            return "grounding_answer"
+        if not normal_status_speech:
+            return None
         # The same progress state the Turn card shows; nothing else is claimed.
         progress=session.turn_progress.get((turn_id,generation))
         return progress.state if progress is not None else None
@@ -15441,8 +15541,8 @@ async def run_turn_safely(
         mode=cascade_filler_mode(),send_tone=filler_tone,
         # Off by default (lane XO, decision 7): the tone and the screen only.
         status_delay_ms=(
-            cascade_filler_status_delay_ms()
-            if cascade_filler_status_speech_enabled() else None),
+            min(cascade_filler_status_delay_ms(),GROUNDED_ANSWER_STATUS_DELAY_MS)
+            if normal_status_speech else GROUNDED_ANSWER_STATUS_DELAY_MS),
         activity=filler_activity,memory=session.filler_memory)
     filler.start()
     try: await run_turn(
@@ -15480,6 +15580,7 @@ async def run_turn_safely(
             "state.changed",state=session.state.value,turn_id=turn_id,
             generation=generation))
     finally:
+        session.grounded_answer_turns.discard((turn_id,generation))
         await filler.cancel()
 
 

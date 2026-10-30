@@ -496,6 +496,20 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   `problem_help_violations`) and recorded as a `problem_help` event with its
   places, not its text. A source that cannot be used raises
   `KnowledgeUnavailable` (its setting) and is skipped; none replaces it.
+  A prospective problem/reason/what-if question is the narrower
+  `grounded_problem_question` on the same front rule. It searches only
+  `ProtocolKnowledge` for the current revision and `SafetyKnowledge` for
+  approved, non-demo safety excerpts that `SafetyPack.guidance_for_step`
+  links to the authoritative current step. It never admits history, public
+  material or supplemental knowledge. When the current answer role is on,
+  `brain.select_curated_protocol_answer` can select one supplied fact ID or
+  `unsupported`; it cannot write answer prose. `compose_grounded_problem_answer`
+  then returns the exact excerpt with its step/page or the fixed "원문에 없음"
+  line with the current step/page. A provider failure is a visible limitation
+  and leaves the deterministic exact-source result read-only. While this
+  selection remains pending, `ListenerSession.grounded_answer_turns` lets the
+  Cascade filler say the fixed source-check sentence once at 3 seconds; the
+  set is generation-scoped telemetry, not workflow state.
 - Public material (lane KNOW, human decision 2026-10-24):
   `public_knowledge.PublicKnowledgeSource` is the `public` tier of the
   knowledge contract — one Moss index of licence-checked public pieces

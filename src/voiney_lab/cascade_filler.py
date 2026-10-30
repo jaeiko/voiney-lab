@@ -74,6 +74,9 @@ def cascade_filler_status_speech_enabled(
 
 FILLER_STATUS_DELAY_ENV = "VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS"
 DEFAULT_FILLER_STATUS_DELAY_MS = 1500
+# A grounded answer that still waits for the exact-source selector gets one
+# fixed progress sentence at this product latency boundary.
+GROUNDED_ANSWER_STATUS_DELAY_MS = 3000
 
 
 def cascade_filler_status_delay_ms(
@@ -126,6 +129,12 @@ FILLER_STATUS_PHRASES = {
         "checking_approved_information": "Đang kiểm tra thông tin đã được phê duyệt.",
         "composing": "Đang soạn câu trả lời.",
     },
+}
+
+GROUNDED_ANSWER_STATUS_PHRASES = {
+    "ko": "원문과 맞춰 보는 중이에요.",
+    "en": "Checking this against the source.",
+    "vi": "Đang đối chiếu với tài liệu nguồn.",
 }
 
 
@@ -322,7 +331,11 @@ class CascadeFiller:
         ):
             return
         activity = self._activity()
-        phrase = FILLER_STATUS_PHRASES[self.language].get(activity or "")
+        phrase = (
+            GROUNDED_ANSWER_STATUS_PHRASES[self.language]
+            if activity == "grounding_answer"
+            else FILLER_STATUS_PHRASES[self.language].get(activity or "")
+        )
         if phrase is None or phrase == self._memory.last_status_phrase:
             return
         key = (self.language, phrase)
