@@ -1042,12 +1042,12 @@ def compose_grounded_problem_answer(
     """
 
     hits = found.hits if isinstance(found, KnowledgeSearch) else tuple(found)
-    selected = tuple(hit for hit in hits if hit.tier in {"protocol", "lab"})
+    selected = tuple(hit for hit in hits if hit.tier in {"protocol", "lab"})[:3]
     shown: list[str] = []
     said: list[str] = []
     sources: list[dict[str, str]] = []
     quoted: list[str] = []
-    for hit in selected[:3]:
+    for hit in selected:
         if hit.tier == "protocol":
             shown.append(
                 f"{TIER_LABELS['protocol']} · {hit.locator} · "

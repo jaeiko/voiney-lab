@@ -24,6 +24,7 @@ from voiney_lab.cascade_filler import (
 )
 from voiney_lab.curated_protocol import CuratedProtocolAction, CuratedProtocolSession
 from voiney_lab.intent_arbitration import RequestIntent, arbitrate_request
+from voiney_lab.knowledge import KnowledgeHit, compose_grounded_problem_answer
 from voiney_lab.multi_brain import MultiBrainSettings
 from voiney_lab.runtime_routing import route_curated_runtime_turn
 from voiney_lab.safety_pack import SafetyDocumentRef, StepSafetyGuidance
@@ -206,6 +207,42 @@ class GroundedAnswerServerBoundaryTests(unittest.TestCase):
         self.assertIn("연구실 자료 · 안전 SOP p.7", answer.display_text)
         self.assertEqual(answer.citations[0]["kind"], "lab")
 
+    def test_rejected_grounded_frame_stays_on_the_grounded_absence_contract(self) -> None:
+        with patch(
+            "voiney_lab.server.problem_help_violations",
+            return_value=("permission",),
+        ):
+            answer, causes, _client = self._compose("온도가 이상하면 어떻게 하지?")
+
+        self.assertIsNone(causes)
+        self.assertIn("원문에 없음 · 현재", answer.display_text)
+        self.assertIn("현재 프로토콜 검토본", answer.display_text)
+        self.assertNotIn("지난 기록", answer.display_text)
+        self.assertEqual(answer.source_texts, ())
+        self.assertEqual(answer.problem_help["found"], {"protocol": 0, "lab": 0})
+
+
+class GroundedAnswerCompositionTests(unittest.TestCase):
+    def test_display_sources_and_counts_share_the_same_three_hit_limit(self) -> None:
+        hits = tuple(
+            KnowledgeHit(
+                "protocol", f"{index}단계 노트", f"source line {index}",
+                f"p.1 · {index}단계",
+                details=(("kind", "note"), ("page", "1"),
+                         ("step_label", str(index))),
+            )
+            for index in range(1, 5)
+        )
+
+        answer = compose_grounded_problem_answer(
+            hits, language="ko", step_label="1", step_page=1,
+        )
+
+        self.assertEqual(answer.found, {"protocol": 3, "lab": 0})
+        self.assertEqual(len(answer.sources), 3)
+        self.assertIn("source line 3", answer.shown)
+        self.assertNotIn("source line 4", answer.shown)
+
 
 class GroundedAnswerLatencyCueTests(unittest.IsolatedAsyncioTestCase):
     async def test_pending_exact_source_answer_says_the_fixed_cue_at_three_seconds(self) -> None:
@@ -234,7 +271,9 @@ class GroundedAnswerLatencyCueTests(unittest.IsolatedAsyncioTestCase):
             send_tone=lambda *_args: _noop(),
             status_delay_ms=3000,
             activity=lambda: "grounding_answer",
-            memory=FillerSessionMemory(),
+            memory=FillerSessionMemory(
+                last_status_phrase=GROUNDED_ANSWER_STATUS_PHRASES["ko"],
+            ),
         )
         filler.start()
         await asyncio.sleep(0)

@@ -11681,7 +11681,14 @@ async def _with_problem_help(
         f"{help_.shown}\n{help_.spoken}",quoted=help_.quoted_text.splitlines())
     if violations:
         log.warning("problem help dropped checks=%s","+".join(violations))
-        help_=compose_problem_help((),language=language,causes_follow=causes_follow)
+        if grounded_question:
+            found=replace(found,hits=())
+            help_=compose_grounded_problem_answer(
+                (),language=language,step_label=step.source_label,
+                step_page=int(step.evidence.source_page_number),
+            )
+        else:
+            help_=compose_problem_help((),language=language,causes_follow=causes_follow)
     if plan.action is CuratedProtocolAction.PROBLEM_HELP:
         display,speech=help_.shown,help_.spoken
     else:
@@ -15539,7 +15546,8 @@ async def run_turn_safely(
         send_clear=filler_clear,is_current=session.is_current,
         clock=session.clock,
         mode=cascade_filler_mode(),send_tone=filler_tone,
-        # Off by default (lane XO, decision 7): the tone and the screen only.
+        # General status speech is off by default. Grounded answers still use
+        # their fixed three-second source-check cue.
         status_delay_ms=(
             min(cascade_filler_status_delay_ms(),GROUNDED_ANSWER_STATUS_DELAY_MS)
             if normal_status_speech else GROUNDED_ANSWER_STATUS_DELAY_MS),
