@@ -18,7 +18,7 @@ import secrets
 import sqlite3
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, fields as _dataclass_fields, is_dataclass, replace as _replace_dataclass
+from dataclasses import asdict, dataclass, field, fields as _dataclass_fields, is_dataclass, replace as _replace_dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
@@ -121,6 +121,8 @@ EVENT_NAMES_KO: dict[str, str] = {
     "pi_confirmed": "PI 확인", "notebook_domain_selected": "실험 노트 분야 양식 변경",
     "notebook_inventory_recorded": "Methods 정보 기록",
     "notebook_share_changed": "실험 노트 비교 공유 변경",
+    "checkpoint_continuation": "저장 지점에서 이어서 시작",
+    "notebook_binder_created": "묶음 실험 노트 생성",
 }
 
 
@@ -382,6 +384,238 @@ class ExperimentReportStore:
                 (organization_id, event_key, encoded, actor_principal_id, _now()),
             )
         return self.notebook_template(organization_id)
+
+    def create_notebook_binder(
+        self, *, organization_id: str, owner_principal_id: str,
+        topic_name: str, date_from: str, date_to: str, protocol_id: str,
+        report_ids: Sequence[str],
+    ) -> "NotebookBinder":
+        """Append one immutable topic/filter/report selection to an owned report.
+
+        A binder is a projection of existing Voiney reports, not a parallel
+        protocol or workflow store.  The first selected report holds the
+        append-only selection event; every experiment remains independently
+        projected from its own ledger.
+        """
+
+        organization_id = _clean_identifier(organization_id, "organization_id")
+        owner_principal_id = _clean_identifier(owner_principal_id, "owner_principal_id")
+        topic = _clean_text(topic_name, maximum=120)
+        dates = []
+        for value, name in ((date_from, "date_from"), (date_to, "date_to")):
+            if value and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is None:
+                raise ValueError(f"{name} is invalid")
+            dates.append(value)
+        if dates[0] and dates[1] and dates[0] > dates[1]:
+            raise ValueError("notebook binder date filter is invalid")
+        protocol = _clean_identifier(protocol_id, "protocol_id") if protocol_id else ""
+        chosen = tuple(dict.fromkeys(
+            _clean_identifier(str(report_id), "report_id") for report_id in report_ids
+        ))
+        if len(chosen) < 2 or len(chosen) > 50:
+            raise ValueError("notebook binder requires 2 to 50 reports")
+        reports = []
+        for report_id in chosen:
+            report = self.get_report(report_id)
+            if (
+                report.get("organization_id") != organization_id
+                or report.get("owner_principal_id") != owner_principal_id
+            ):
+                raise KeyError("experiment report not found")
+            day = str(report.get("started_at") or "")[:10]
+            if (
+                report.get("status") not in {"completed", "stopped", "incomplete"}
+                or not report.get("ended_at")
+                or (dates[0] and day < dates[0])
+                or (dates[1] and day > dates[1])
+                or (protocol and report.get("protocol_id") != protocol)
+            ):
+                raise ValueError("selected report does not match notebook binder filter")
+            reports.append(report)
+        reports.sort(key=lambda item: (str(item.get("started_at") or ""), str(item["report_id"])))
+        ordered_ids = [str(item["report_id"]) for item in reports]
+        identity = json.dumps({
+            "organization_id": organization_id,
+            "owner_principal_id": owner_principal_id,
+            "topic_name": topic,
+            "date_from": dates[0], "date_to": dates[1], "protocol_id": protocol,
+            "report_ids": ordered_ids,
+        }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        binder_id = "NB-" + digest[:20].upper()
+        payload = {
+            "binder_id": binder_id, "topic_name": topic,
+            "date_from": dates[0], "date_to": dates[1], "protocol_id": protocol,
+            "report_ids": ordered_ids,
+        }
+        # Projection and both audits are non-mutating.  A failed request must
+        # not leave a binder-created event in the append-only report ledger.
+        self._build_notebook_binder(
+            payload, created_at="", organization_id=organization_id,
+            owner_principal_id=owner_principal_id,
+        )
+        self.append_event(
+            ordered_ids[0], event_key="notebook-binder-" + digest[:32],
+            event_type="notebook_binder_created", source_tier="operator", payload=payload,
+        )
+        return self.notebook_binder(
+            binder_id, organization_id=organization_id,
+            owner_principal_id=owner_principal_id,
+        )
+
+    def _notebook_binder_spec(
+        self, binder_id: str, *, organization_id: str, owner_principal_id: str,
+    ) -> tuple[dict[str, Any], str]:
+        binder_id = _clean_identifier(binder_id, "binder_id")
+        organization_id = _clean_identifier(organization_id, "organization_id")
+        owner_principal_id = _clean_identifier(owner_principal_id, "owner_principal_id")
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT event.payload,event.created_at
+                  FROM experiment_report_events AS event
+                  JOIN experiment_reports AS report ON report.report_id=event.report_id
+                 WHERE event.event_type='notebook_binder_created'
+                   AND report.organization_id=? AND report.owner_principal_id=?
+                 ORDER BY event.id
+                """,
+                (organization_id, owner_principal_id),
+            ).fetchall()
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if isinstance(payload, dict) and payload.get("binder_id") == binder_id:
+                return payload, str(row["created_at"])
+        raise KeyError("notebook binder not found")
+
+    def list_notebook_binders(
+        self, *, organization_id: str, owner_principal_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        """The owner's immutable binder selections, newest first."""
+
+        organization_id = _clean_identifier(organization_id, "organization_id")
+        owner_principal_id = _clean_identifier(owner_principal_id, "owner_principal_id")
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT event.payload,event.created_at
+                  FROM experiment_report_events AS event
+                  JOIN experiment_reports AS report ON report.report_id=event.report_id
+                 WHERE event.event_type='notebook_binder_created'
+                   AND report.organization_id=? AND report.owner_principal_id=?
+                 ORDER BY event.id DESC
+                """,
+                (organization_id, owner_principal_id),
+            ).fetchall()
+        found = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if isinstance(payload, dict) and payload.get("binder_id"):
+                found.append({**payload, "created_at": row["created_at"]})
+        return tuple(found)
+
+    def notebook_binder_candidates(
+        self, *, organization_id: str, owner_principal_id: str,
+        date_from: str = "", date_to: str = "", protocol_id: str = "",
+    ) -> tuple[dict[str, Any], ...]:
+        """Finished owned reports that match the requested binder filters."""
+
+        organization_id = _clean_identifier(organization_id, "organization_id")
+        owner_principal_id = _clean_identifier(owner_principal_id, "owner_principal_id")
+        parameters: list[Any] = [organization_id, owner_principal_id]
+        where = [
+            "organization_id=?", "owner_principal_id=?",
+            "status IN ('completed','stopped','incomplete')", "ended_at IS NOT NULL",
+        ]
+        if date_from:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_from) is None:
+                raise ValueError("date_from is invalid")
+            where.append("substr(started_at,1,10)>=?")
+            parameters.append(date_from)
+        if date_to:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_to) is None:
+                raise ValueError("date_to is invalid")
+            where.append("substr(started_at,1,10)<=?")
+            parameters.append(date_to)
+        if protocol_id:
+            where.append("protocol_id=?")
+            parameters.append(_clean_identifier(protocol_id, "protocol_id"))
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT report_id,session_id,protocol_id,protocol_title,status,started_at,ended_at "
+                "FROM experiment_reports WHERE " + " AND ".join(where)
+                + " ORDER BY started_at,report_id LIMIT 100",
+                tuple(parameters),
+            ).fetchall()
+        return tuple(dict(row) for row in rows)
+
+    def notebook_binder(
+        self, binder_id: str, *, organization_id: str, owner_principal_id: str,
+    ) -> "NotebookBinder":
+        """Build one binder from its immutable selection and isolated reports."""
+
+        spec, created_at = self._notebook_binder_spec(
+            binder_id, organization_id=organization_id,
+            owner_principal_id=owner_principal_id,
+        )
+        return self._build_notebook_binder(
+            spec, created_at=created_at, organization_id=organization_id,
+            owner_principal_id=owner_principal_id,
+        )
+
+    def _build_notebook_binder(
+        self, spec: Mapping[str, Any], *, created_at: str,
+        organization_id: str, owner_principal_id: str,
+    ) -> "NotebookBinder":
+        """Project and audit a binder without writing to its report ledgers."""
+
+        entries = []
+        for report_id in spec.get("report_ids") or ():
+            report = self.get_report(str(report_id))
+            if (
+                report.get("organization_id") != organization_id
+                or report.get("owner_principal_id") != owner_principal_id
+            ):
+                raise KeyError("experiment report not found")
+            fixture, _problem = report_protocol_fixture(report)
+            narrative = self._narrative(str(report_id), None, fixture)
+            if narrative.facts is None or narrative.facts.notebook is None:
+                raise RuntimeError("notebook projection is unavailable")
+            source_steps = _source_steps_from_fixture(fixture) if fixture is not None else []
+            source_protocol = getattr(getattr(fixture, "draft", None), "protocol", None)
+            inventory = tuple(
+                item.name_source_text for item in (
+                    *getattr(source_protocol, "materials", ()),
+                    *getattr(source_protocol, "equipment", ()),
+                )
+            )
+            provenance = audit_notebook_number_provenance(
+                narrative.facts.notebook, source_steps=source_steps,
+                source_inventory=inventory, events=report["events"], zone=narrative.facts.zone,
+            )
+            if provenance:
+                raise RuntimeError("notebook binder contains an ungrounded number")
+            continuation = _notebook_continuation(report["events"])
+            revisions = _notebook_condition_revisions(report["events"])
+            entries.append(NotebookBinderEntry(
+                report_id=str(report["report_id"]), session_id=str(report["session_id"]),
+                protocol_id=str(report["protocol_id"]), protocol_title=str(report["protocol_title"]),
+                started_at=str(report["started_at"]), ended_at=str(report.get("ended_at") or ""),
+                status=str(report["status"]), notebook=narrative.facts.notebook,
+                continuation=continuation, condition_revisions=revisions,
+                protocol_sha256=str(report.get("protocol_sha256") or ""),
+                event_keys=tuple(str(event.get("event_key") or "") for event in report["events"]),
+                narrative=narrative,
+            ))
+        binder = NotebookBinder(
+            binder_id=str(spec["binder_id"]), topic_name=str(spec["topic_name"]),
+            date_from=str(spec.get("date_from") or ""), date_to=str(spec.get("date_to") or ""),
+            protocol_id=str(spec.get("protocol_id") or ""), created_at=created_at,
+            entries=tuple(entries),
+        )
+        problems = audit_notebook_binder_isolation(binder)
+        if problems:
+            raise RuntimeError("notebook binder isolation check failed: " + "; ".join(problems))
+        return binder
 
     def open_report(
         self,
@@ -3382,6 +3616,8 @@ VALUE_BAR_HEADER = ("단계·항목", "원문", "실제")
 DOMAIN_HEADER = ("항목", "원문·기록에서 찾은 내용", "근거")
 SAMPLE_RECORD_HEADER = ("셀·시료 번호", "기록 그대로")
 INVENTORY_HEADER = ("시약·장비 (원문)", "종류", "구매처", "카탈로그 번호", "Lot 번호", "입력 시점")
+BINDER_TOC_HEADER = ("프로토콜", "시작", "끝", "상태")
+BINDER_META_HEADER = ("항목", "내용")
 NOT_SAID_WORDS = "말하지 않음."
 FIRST_RUN_WORDS = "처음 실험 — 같은 프로토콜의 앞선 기록이 없다."
 SAME_AS_LAST_WORDS = "지난번과 조건·관찰이 같다."
@@ -3592,6 +3828,7 @@ class NotebookImage:
     source_document_id: str = ""
     bounding_box: tuple[float, float, float, float] | None = None
     caption_source: str = ""
+    source_session_id: str = ""
 
 
 DEFAULT_NOTEBOOK_TEMPLATE = tuple(
@@ -3646,6 +3883,165 @@ class LabNotebook:
     inventory: tuple[NotebookInventoryItem, ...] = ()
     section_template: tuple[NotebookSection, ...] = DEFAULT_NOTEBOOK_TEMPLATE
     images: tuple[NotebookImage, ...] = ()
+
+
+@dataclass(frozen=True)
+class NotebookContinuation:
+    source_report_id: str
+    source_session_id: str
+
+
+@dataclass(frozen=True)
+class NotebookConditionRevision:
+    label: str
+    recorded_at: str
+    changes: tuple[str, ...]
+
+
+def _json_compatible(value: Any) -> Any:
+    """Return the exact list/dict projection exposed at the HTTP boundary."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_compatible(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True)
+class NotebookBinderEntry:
+    """One report projection kept separate inside a binder."""
+
+    report_id: str
+    session_id: str
+    protocol_id: str
+    protocol_title: str
+    started_at: str
+    ended_at: str
+    status: str
+    notebook: LabNotebook
+    continuation: NotebookContinuation | None
+    condition_revisions: tuple[NotebookConditionRevision, ...]
+    protocol_sha256: str = field(repr=False)
+    event_keys: tuple[str, ...] = field(repr=False)
+    narrative: ReportNarrative = field(repr=False, compare=False)
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "report_id": self.report_id, "session_id": self.session_id,
+            "protocol_id": self.protocol_id, "protocol_title": self.protocol_title,
+            "started_at": self.started_at, "ended_at": self.ended_at,
+            "status": self.status, "notebook": _json_compatible(asdict(self.notebook)),
+            "continuation": (
+                _json_compatible(asdict(self.continuation)) if self.continuation else None
+            ),
+            "condition_revisions": [
+                _json_compatible(asdict(item)) for item in self.condition_revisions
+            ],
+        }
+
+
+@dataclass(frozen=True)
+class NotebookBinder:
+    """An immutable selection of independently projected experiment reports."""
+
+    binder_id: str
+    topic_name: str
+    date_from: str
+    date_to: str
+    protocol_id: str
+    created_at: str
+    entries: tuple[NotebookBinderEntry, ...]
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "binder_id": self.binder_id, "topic_name": self.topic_name,
+            "date_from": self.date_from, "date_to": self.date_to,
+            "protocol_id": self.protocol_id, "created_at": self.created_at,
+            "entries": [entry.public_dict() for entry in self.entries],
+            "audit": {"ungrounded_numbers": 0, "cross_experiment_mixing": 0},
+        }
+
+
+def _notebook_continuation(
+    events: Sequence[Mapping[str, Any]],
+) -> NotebookContinuation | None:
+    for event in reversed(events):
+        if str(event.get("event_type") or "") not in {
+            "checkpoint_continuation", "session_restarted_from_checkpoint",
+        }:
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        source_session_id = str(payload.get("source_session_id") or "")
+        source_report_id = str(payload.get("source_report_id") or "")
+        if source_report_id or source_session_id:
+            return NotebookContinuation(source_report_id, source_session_id)
+    return None
+
+
+def _notebook_condition_revisions(
+    events: Sequence[Mapping[str, Any]],
+) -> tuple[NotebookConditionRevision, ...]:
+    found = []
+    for event in events:
+        if str(event.get("event_type") or "") != "session_started":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        revision = payload.get("lab_adapted_revision")
+        if not isinstance(revision, Mapping):
+            continue
+        version = revision.get("version")
+        label = " ".join(str(revision.get("label_ko") or "").split())
+        if not label and isinstance(version, int) and not isinstance(version, bool) and version > 0:
+            label = f"연구실판 v{version}"
+        if not label:
+            continue
+        changes = []
+        for change in revision.get("changes") or ():
+            if not isinstance(change, Mapping):
+                continue
+            step = str(change.get("step_label") or "")
+            source = " ".join(str(change.get("source_written") or "").split())
+            actual = " ".join(str(change.get("shown_ko") or "").split())
+            if step and source and actual:
+                changes.append(f"{step}단계 · {source} → {actual}")
+        found.append(NotebookConditionRevision(
+            label=label, recorded_at=str(revision.get("recorded_at") or ""),
+            changes=tuple(changes),
+        ))
+    return tuple(found)
+
+
+def audit_notebook_binder_isolation(binder: NotebookBinder) -> tuple[str, ...]:
+    """Check that record-linked rows and images still belong to their entry."""
+
+    problems = []
+    report_ids = [entry.report_id for entry in binder.entries]
+    session_ids = [entry.session_id for entry in binder.entries]
+    if len(report_ids) != len(set(report_ids)):
+        problems.append("duplicate report")
+    if len(session_ids) != len(set(session_ids)):
+        problems.append("duplicate session")
+    for entry in binder.entries:
+        event_keys = set(entry.event_keys)
+        for value in entry.notebook.values:
+            if value.key and value.key not in event_keys:
+                problems.append(f"{entry.report_id}: foreign value key")
+        for bar in entry.notebook.value_bars:
+            if bar.source_key and bar.source_key not in event_keys:
+                problems.append(f"{entry.report_id}: foreign value bar")
+        for item in entry.notebook.timeline:
+            if item.source_key and item.source_key not in event_keys:
+                problems.append(f"{entry.report_id}: foreign timeline item")
+        for image in entry.notebook.images:
+            if image.kind == "photo" and image.source_session_id != entry.session_id:
+                problems.append(f"{entry.report_id}: foreign photo")
+            if (
+                image.kind == "source_figure" and image.source_document_id
+                and image.source_document_id != entry.protocol_sha256
+            ):
+                problems.append(f"{entry.report_id}: foreign source figure")
+    return tuple(dict.fromkeys(problems))
 
 
 # Samples named in words (decision ② a-b): "3번 샘플", "샘플 2번", "S2", "대조군",
@@ -4278,6 +4674,7 @@ def _notebook_photos(
             caption=" ".join(str(event.get("user_wording") or "사진 첨부").split()),
             url=url, media_type=media_type, asset_id=evidence_id,
             interpretation_status=str(payload.get("interpretation_status") or "not_interpreted"),
+            source_session_id=session_id,
         ))
     return tuple(images)
 
@@ -5077,6 +5474,7 @@ def audit_notebook_number_provenance(
     source_steps: Sequence[Mapping[str, Any]],
     source_inventory: Sequence[str] = (),
     events: Sequence[Mapping[str, Any]],
+    zone: ZoneInfo | None = None,
 ) -> tuple[str, ...]:
     """Return displayed numbers that cannot be reproduced from source or ledger.
 
@@ -5144,14 +5542,17 @@ def audit_notebook_number_provenance(
             rebuilt_yield.value + "\n" + rebuilt_yield.formula
         ))
     moments = []
+    audit_zone = zone or report_timezone()
     for event in events:
         try:
             moment = datetime.fromisoformat(str(event.get("created_at") or "").replace("Z", "+00:00"))
         except ValueError:
             continue
         moments.append(moment)
+        local = moment.astimezone(audit_zone)
         admitted.update(str(value) for value in (
             moment.year, moment.month, moment.day, moment.hour, moment.minute, moment.second,
+            local.year, local.month, local.day, local.hour, local.minute, local.second,
         ))
     for left in moments:
         for right in moments:
@@ -6134,6 +6535,55 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     return ordered
 
 
+def notebook_binder_blocks(binder: NotebookBinder) -> list[tuple[str, Any]]:
+    """The same binder projection used by the screen, Word and PDF exports."""
+
+    status_words = {
+        "completed": "완료", "stopped": "중단", "incomplete": "미완료",
+    }
+    blocks: list[tuple[str, Any]] = [
+        ("title", binder.topic_name),
+        ("subtitle", "묶음 실험 노트 · Voiney Lab으로 진행한 기록"),
+        ("h1", "목차"),
+        _table(BINDER_TOC_HEADER, tuple(
+            (
+                entry.protocol_title, entry.started_at, entry.ended_at or NO_RECORD_WORDS,
+                status_words.get(entry.status, entry.status),
+            ) for entry in binder.entries
+        )),
+    ]
+    for entry in binder.entries:
+        blocks += [
+            ("pagebreak", None), ("body", None),
+            ("h1", entry.protocol_title),
+            _table(BINDER_META_HEADER, (
+                ("시작", entry.started_at),
+                ("끝", entry.ended_at or NO_RECORD_WORDS),
+                ("상태", status_words.get(entry.status, entry.status)),
+                ("실험 기록", entry.report_id),
+            )),
+        ]
+        if entry.continuation is not None:
+            source = entry.continuation.source_report_id or entry.continuation.source_session_id
+            blocks.append(("note", f"저장 지점에서 이어서 시작 · 앞선 실험 기록 {source}"))
+        if entry.condition_revisions:
+            blocks.append(("h2", "연구실판 조건 변경 이력"))
+            for revision in entry.condition_revisions:
+                blocks.append(("h3", " · ".join(
+                    part for part in (revision.label, revision.recorded_at) if part
+                )))
+                blocks.append(
+                    ("list", revision.changes)
+                    if revision.changes else ("note", NO_RECORD_WORDS)
+                )
+        # The per-experiment notebook remains the ordinary report projection.
+        blocks.extend(
+            block for block in report_blocks(entry.narrative)
+            if block[0] not in {"title", "subtitle"}
+        )
+    return blocks
+
+
 def _label_order(label: str) -> tuple[int, str]:
     match = re.match(r"\d+", str(label))
     return (int(match.group()) if match else 10**9, str(label))
@@ -6209,6 +6659,7 @@ TABLE_WIDTHS: dict[tuple[str, ...], tuple[float, ...]] = {
     DOMAIN_HEADER: (0.24, 0.62, 0.14),
     SAMPLE_RECORD_HEADER: (0.22, 0.78),
     INVENTORY_HEADER: (0.30, 0.09, 0.16, 0.18, 0.15, 0.12),
+    BINDER_TOC_HEADER: (0.40, 0.23, 0.23, 0.14),
 }
 #: The report's one font, for Korean and Latin letters alike (lane RP2,
 #: decision 1): Word prints it as Malgun Gothic, and the server's LibreOffice
@@ -6310,6 +6761,25 @@ def render_docx(
     return _render_docx_blocks(report_blocks(narrative), image_resolver=image_resolver)
 
 
+def render_notebook_binder_docx(
+    binder: NotebookBinder,
+    image_resolver: Callable[[NotebookImage], tuple[bytes, str] | None] | None = None,
+) -> bytes:
+    return _render_docx_blocks(
+        notebook_binder_blocks(binder), image_resolver=image_resolver,
+    )
+
+
+def render_notebook_binder_pdf(
+    binder: NotebookBinder, *, converter: str | None = None, run: Any = None,
+    image_resolver: Callable[[NotebookImage], tuple[bytes, str] | None] | None = None,
+) -> bytes:
+    return report_docx_to_pdf(
+        render_notebook_binder_docx(binder, image_resolver=image_resolver),
+        converter=converter, run=run,
+    )
+
+
 def _render_docx_blocks(
     blocks: Sequence[tuple[str, Any]],
     *, image_resolver: Callable[[NotebookImage], tuple[bytes, str] | None] | None = None,
@@ -6360,6 +6830,8 @@ def _render_docx_blocks(
             _space(paragraph, "note")
         elif kind == "appendix":
             small = True
+        elif kind == "body":
+            small = False
         elif kind in {"h1", "h2", "h3"}:
             paragraph = document.add_paragraph()
             run = paragraph.add_run(str(content))
