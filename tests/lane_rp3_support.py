@@ -157,6 +157,8 @@ class RecordWriter:
         self.at(clock)
         self.turn += 1
         key = key or f"turn-{self.turn}"
+        if event_type in {"purpose_recorded", "result_recorded", "observation", "anomaly"}:
+            fields.setdefault("confirmation_state", "user_reported")
         with mock.patch.object(er, "_now", lambda: self.clock):
             self.store.append_event(
                 self.report_id, event_key=key, event_type=event_type,

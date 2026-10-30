@@ -203,6 +203,35 @@ class NotebookDraftTests(unittest.TestCase):
         )
         self.assertIn(f"notebook.interpretation_words: {candidate}", problems)
 
+    def test_number_audit_does_not_trust_an_unconfirmed_result_event(self) -> None:
+        record = cell_run(self.temporary.name, session="session-note1-unconfirmed-number")
+        fixture = cell_protocol()
+        book = self.book(record, fixture)
+        source_steps = er._source_steps_from_fixture(fixture)
+        events = [
+            *record.doc()["events"],
+            {
+                "event_key": "unsafe-result",
+                "event_type": "result_recorded",
+                "user_wording": "1.7 100",
+                "confirmation_state": None,
+                "payload": {"result": "1.7 100"},
+            },
+        ]
+        tampered = replace(book, interpretation_words="기록된 결과는 1.7 과 100")
+        problems = er.audit_notebook_number_provenance(
+            tampered, source_steps=source_steps, events=events,
+        )
+        self.assertIn("notebook.interpretation_words: 1.7", problems)
+
+        events[-1]["confirmation_state"] = "read_back"
+        self.assertNotIn(
+            "notebook.interpretation_words: 1.7",
+            er.audit_notebook_number_provenance(
+                tampered, source_steps=source_steps, events=events,
+            ),
+        )
+
     def test_protocol_projection_never_invents_an_objective(self) -> None:
         protocol = SimpleNamespace(
             protocol_id="p-no-purpose", metadata=SimpleNamespace(title="Protocol 12"),

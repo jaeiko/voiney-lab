@@ -7758,6 +7758,13 @@ class ListenerSession:
         self._cascade_vad_config=self.detector.config
         self._vad_classifier=self.detector.classifier
         self._listening_onset=self.detector.listening_onset
+        # LISTEN3: production WebRTC input always qualifies transient noise.
+        # A deterministic test classifier may opt in on its detector; old
+        # classifier fixtures retain their exact historical expectations.
+        self._transient_noise_gate=(
+            self.detector.transient_noise_gate
+            or isinstance(self._vad_classifier,WebRtcVadClassifier)
+        )
         self._interrupt_detector=self._new_interrupt_detector()
         self._interrupt_framer=FrameBuffer()
         self._interrupt_candidate_identity:tuple[int,int]|None=None
@@ -7868,11 +7875,16 @@ class ListenerSession:
                 onset_window_frames=config.playback_onset_window_frames,
                 prefix_frames=config.barge_in_prefix_frames,
             )
-        return EndpointDetector(
+        detector=EndpointDetector(
             config,
             classifier=self._vad_classifier,
             listening_onset=False,
         )
+        detector.enable_transient_noise_gate(
+            self._transient_noise_gate
+            and detector.classifier is self._vad_classifier
+        )
+        return detector
     def _restore_primary_detector(self,state:TurnState)->None:
         self.detector=EndpointDetector(
             self._cascade_vad_config,classifier=self._vad_classifier,
@@ -8034,6 +8046,10 @@ class ListenerSession:
         # relative gate keeps low continuous room sound from resetting the
         # 1000 ms endpoint forever.  Calibration and an explicit wearer line
         # retain their existing measured behaviour.
+        detector.enable_transient_noise_gate(
+            self._transient_noise_gate
+            and detector.classifier is self._vad_classifier
+        )
         detector.enable_adaptive_noise_gate(
             self.level_reference is None and not self.calibration_pending)
         if detector.state is not TurnState.IDLE:
@@ -10746,7 +10762,11 @@ def _record_experiment_report_plan(
             step_id=notebook.get("step_id") or step_id
             step_label=str(notebook.get("step_label"))
     elif notebook.get("kind")=="fix":
-        wanted="purpose_recorded" if notebook.get("target")=="purpose" else "result_recorded"
+        wanted={
+            "purpose":"purpose_recorded",
+            "result":"result_recorded",
+            "observation":"observation",
+        }.get(str(notebook.get("target") or ""),"result_recorded")
         amended=next(
             (item for item in reversed(report.get("events") or ()) if item.get("event_type")==wanted),
             None,
@@ -10927,6 +10947,10 @@ def _record_experiment_report_plan(
             category=category,
             severity=("unknown" if plan.reported_anomaly else None),
             confirmation_state=(
+                str(notebook.get("confirmation_state"))
+                if notebook.get("confirmation_state") else
+                "experimenter_confirmed"
+                if (getattr(plan,"note_record",None) or {}).get("experimenter_confirmed") else
                 "user_reported"
                 if plan.reported_anomaly or plan.reported_observation else None
             ),
@@ -12578,6 +12602,7 @@ DROP_REASON_WORDS_KO={
     "filler_only":"'음' 같은 소리만 들렸어요",
     "non_lexical_event":"말이 아닌 소리였어요",
     "non_speech":"말소리가 아니었어요",
+    "transient_noise":"말이 아닌 짧은 소리였어요",
     "keyterm_echo":"용어만 나열돼 말로 보지 않았어요",
     "transcription_failed":"받아 적지 못했어요",
     "provider_no_speech_probability":"말소리가 아니었어요",

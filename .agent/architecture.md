@@ -93,8 +93,15 @@ generation is cancelled and its audio cleared (barge-in).
    of those voiced levels may keep the endpoint open after one frame actually
    reaches that rise; a steady wearer voice cannot arm the gate against
    itself. It does not alter PCM,
-   the 1000 ms silence, or the 15 s safety bound. With the filter on (lane
-   HEAR, decision 2: the experimenter's
+   the 1000 ms silence, or the 15 s safety bound. For production WebRTC input
+   (lane LISTEN3), a six-of-ten voiced burst during that one-second ending
+   window reopens it only when a bounded 160--400 ms PCM window also has
+   speech-like periodicity and band energy. An impact-only utterance that has
+   no such window is rejected before STT as `transient_noise`; the next two
+   seconds retain a four-frame WebRTC plus speech-shape recovery path so a
+   quiet short command immediately after an impact is not lost. This
+   qualifier reads no transcript and changes no workflow state. With the
+   speaker filter on (lane HEAR, decision 2: the experimenter's
    `speaker_filter`, a `voice_reference` measured through
    `POST /api/voice/calibration` under `VOICE_REFERENCE_MAX_AGE_DAYS` old, on
    the microphone the page names in `client.audio_ready` — `stored_voice_filter`),
@@ -338,6 +345,17 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   `run_value_reverted`, `session_started.run_changes`) feeds the notebook's
   "원문 → 실제"; the workspace events feed a recovery; "지난번처럼" reads the
   owner's last record (`ExperimentReportStore.last_run_values`).
+- Record transcript gate (lane SAFE1): purpose/result answers are echoed
+  exactly after persistence and accept an immediate append-only correction.
+  One- or two-syllable answers and contextless numbers wait for one explicit
+  confirmation. Contextless values such as a bare `측정값 37 °C` also wait
+  before persistence; a value with a named property or sample keeps the
+  normal save-and-read-back path. A pending value cannot move a step,
+  complete work, or start a timer.
+  Report events carry `read_back`, `experimenter_confirmed`, or correction
+  evidence, and notebook number provenance admits record prose only with one
+  of those human-intent states (ordinary observations retain
+  `user_reported`).
 
 ### Page evidence segments and known analysis limits
 

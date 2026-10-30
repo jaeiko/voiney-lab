@@ -4974,7 +4974,33 @@ def audit_notebook_number_provenance(
         {"steps": list(source_steps), "inventory": list(source_inventory)},
         ensure_ascii=False, default=str,
     )
-    event_blob = json.dumps(list(events), ensure_ascii=False, default=str)
+    record_events = {"purpose_recorded", "result_recorded", "observation", "anomaly"}
+    trusted_states = {
+        "read_back", "experimenter_confirmed", "experimenter_corrected", "user_reported",
+    }
+
+    def number_evidence(event: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Remove record prose that has no evidence of human intent."""
+
+        if str(event.get("event_type") or "") not in record_events:
+            return event
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        trusted = (
+            str(event.get("confirmation_state") or "") in trusted_states
+            or payload.get("experimenter_confirmed") is True
+        )
+        if trusted:
+            return event
+        stripped = dict(event)
+        stripped.pop("user_wording", None)
+        stripped["payload"] = {
+            key: value for key, value in payload.items()
+            if key not in {"result", "next_change", "samples", "record_fix", "deviations"}
+        }
+        return stripped
+
+    evidence_events = [number_evidence(event) for event in events]
+    event_blob = json.dumps(evidence_events, ensure_ascii=False, default=str)
     admitted = {normalized(value) for value in _NUMBER.findall(source_blob + "\n" + event_blob)}
     # Source identity (citation/DOI and protocol title) is loaded from the
     # immutable protocol revision but is not repeated in ``source_steps``.
@@ -4986,7 +5012,7 @@ def audit_notebook_number_provenance(
     rebuilt_yield = _calculated_yield([
         ("record", str(event.get("event_key") or ""),
          " ".join(str(event.get("user_wording") or "").split()))
-        for event in events if str(event.get("user_wording") or "").strip()
+        for event in evidence_events if str(event.get("user_wording") or "").strip()
     ])
     shown_yield = next((field for field in notebook.domain.fields
                         if field.label == "수득량·수율"), None)

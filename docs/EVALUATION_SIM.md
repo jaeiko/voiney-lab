@@ -25,6 +25,29 @@ python scripts/sim/run.py --emergency-matrix --split holdout --output ~/reports/
 쓰러짐·의식, 가스·냄새, 화상, 감전, 삼킴의 합성 발화와 비응급 대조군이다.
 응급 놓침과 헛경보를 따로 센다. 실제 음성 인식이나 안전 대응의 검증은 아니다.
 
+LISTEN3 충격음 묶음은 수식으로 만든 타자·유리 부딪힘·피펫 클릭을 30 cm·1 m
+두 거리에서 돌린다. 소음 갈래에는 충격음만, 나머지 갈래에는 착용자 운반 신호가
+끝난 0.5초 뒤 충격음을 둔다. `legacy`는 충격음 판정을 끈 수정 전 처리이고
+`current`는 켠 처리다. 두 결과는 문장·분할·충격음 축 지문이 같아 비교할 수 있다.
+`wearer_dropped`, `impact_reopened`, `noise_sent_to_stt`, `wrong_state`를 함께 본다.
+이 PCM은 실제 한국어 음성이나 실제 도구 녹음이 아니므로 현장 검증으로 부르지 않는다.
+
+```bash
+python scripts/sim/run.py --impact-matrix --impact-filter legacy \
+  --split development --output ~/reports/sim/listen3-development-before.json
+python scripts/sim/run.py --impact-matrix --impact-filter current \
+  --split development --output ~/reports/sim/listen3-development-after.json
+python scripts/sim/compare.py ~/reports/sim/listen3-development-before.json \
+  ~/reports/sim/listen3-development-after.json
+
+python scripts/sim/run.py --impact-matrix --impact-filter legacy \
+  --split holdout --output ~/reports/sim/listen3-holdout-before.json
+python scripts/sim/run.py --impact-matrix --impact-filter current \
+  --split holdout --output ~/reports/sim/listen3-holdout-after.json
+python scripts/sim/compare.py ~/reports/sim/listen3-holdout-before.json \
+  ~/reports/sim/listen3-holdout-after.json
+```
+
 저장소의 가상환경을 활성화하고 저장소 루트에서 실행한다.
 
 ```bash
@@ -189,6 +212,20 @@ python scripts/sim/live.py --catalog-copy ~/reports/sim/catalog-snapshot \
 원장이 있어도 결과 파일은 덮어쓰지 않는다. 한도 중단은 종료 코드 3과 완료/계획 말 수로
 표시한다. 비교되지 않은 조건은 0점이나 성공으로 채우지 않는다.
 
+## 진단 WAV의 익명 말 끝 재생
+
+LISTEN3의 재생은 사람이 정한 UTC 구간만 읽고, 메타데이터의 `word_count`가 0인지와
+제품 `ListenerSession`이 STT 경계(`speech.end`)를 만들었는지만 센다. 원음·파일 이름·
+세션·받아쓰기 글은 출력하거나 복사하지 않는다. 아래 시각은 예시이므로 실제 시험 구간으로
+바꾼다. 이 명령은 공급자를 호출하지 않는다.
+
+```bash
+python scripts/hear_listening_bench.py \
+  --diagnostics-dir ~/voiney-lab/data/runtime/stt-diagnostics \
+  --diagnostics-start-utc 2026-10-29T13:45:00Z \
+  --diagnostics-end-utc 2026-10-29T13:51:59Z
+```
+
 ## 사람 녹음과 참조 문장
 
 진단 파일은 읽기만 한다. 먼저 사람이 순서를 대조할 빈 참조 목록을 만든다.
@@ -238,6 +275,16 @@ python scripts/sim/diagnostics.py ~/voiney-lab/data/runtime/stt-diagnostics \
 첫 실측 뒤 사람이 확정할 출시 목표는 조용함 이해 95% 이상, 중간 소음
 10 dB 이해 90% 이상, 잘못 바뀐 상태·응급 놓침·번역이 있는 조건의 영어 원문 0이다. 단계 이름 겹침도 별도로 센다. 소음만에서 명령이
 실행되는 수도 0이어야 한다. 오프라인에서만 통과한 수치를 현장 출시 근거로 쓰지 않는다.
+
+### 선택 VAD 모델은 평가만
+
+Silero 같은 새 VAD는 이 줄에서 제품 의존성이나 실행 경로에 넣지 않는다. 사람이 같은
+비공개 진단 WAV와 위 충격음 개발용·시험용 분할을 현재 WebRTC+충격음 판정과 똑같이
+재생하는 별도 오프라인 어댑터를 만든 뒤에만 후보로 잰다. 비교 항목은 착용자 발화 놓침,
+짧은 명령 놓침, 소음의 STT 진입, 말 시작·끝 오차, CPU 시간, 최대 메모리, 처리 지연이다.
+원음·받아쓰기·식별자는 결과에 쓰지 않고 숫자 집계만 남긴다. 시험용 개별 행은 보지
+않는다. 실제 노트북·선택 마이크에서 사람 음성 재시험까지 끝나고 사람이 채택을 결정하기
+전에는 패키지를 추가하거나 기본 VAD를 바꾸지 않는다.
 
 ## 저장 번역과 라우터 비교
 
