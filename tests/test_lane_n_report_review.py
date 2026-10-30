@@ -147,7 +147,7 @@ class ServedReviewTests(VoiceNotesHarness, unittest.TestCase):
         fix = next(e for e in events if e["event_type"] == "record_corrected")
         self.assertEqual(fix["payload"]["record_fix"]["source"], "voice_review")
         self.assertEqual(fix["payload"]["record_fix"]["text_after"], "pH 7.4")
-        self.assertIn("| — | pH 7.4 (정정됨 — 처음 “pH 7.2”) |", self.report_markdown())
+        self.assertIn("| — | pH 7.4 [정정됨]<br>처음 기록: pH 7.2 |", self.report_markdown())
         timeline = self.timeline()["timeline"]
         corrected = next(e for e in timeline if e["event_type"] == "observation_corrected")
         self.assertEqual(corrected["payload"]["content"], "pH 7.4")

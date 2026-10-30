@@ -213,7 +213,7 @@ class ObservationQuestionTests(_Voice):
         observed = [e for e in self.events() if e[0] == "observation" and e[2] == "밴드가 투명하고 깨끗해"]
         self.assertEqual(len(observed), 1)
         self.assertEqual(observed[0][1], "5")
-        self.assertIn("| 5단계 · Fictional wash | — | 밴드가 투명하고 깨끗해 |", self.markdown())
+        self.assertIn("| 5단계 · Fictional wash | — | 밴드가 투명하고 깨끗해 [되읽음] |", self.markdown())
         self.assertIsNone(self.session.notebook_question_open())
 
     def test_not_asked_when_the_completion_carried_a_description_or_the_step_names_nothing(self) -> None:
