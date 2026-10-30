@@ -343,7 +343,7 @@ export const run = {
   },
   timerNotice: "타이머 알림",
   audioHeld: "소리를 켜려면 화면을 한 번 눌러 주세요.",
-  // The end screen (person's decision 3 of 2026-10-26): what was done, three numbers, one rating, chips, a line, [보내기].
+  // The end screen: what was done, record and unheard-word counts, one rating, chips, a line, [보내기].
   end: {
     completed: "실험을 마쳤어요",
     stopped: "실험을 멈췄어요",
@@ -357,7 +357,7 @@ export const run = {
     hours: (hours: number, minutes: number) => (minutes ? `${hours}시간 ${minutes}분` : `${hours}시간`),
     minutes: (minutes: number) => `${minutes}분`,
     seconds: (seconds: number) => `${seconds}초`,
-    counts: { voice: "말로 남긴 기록", changes: "오늘 바꾼 값", help: "문제 도움" },
+    counts: { records: "남긴 기록", missed: "못 들은 말" },
     countUnknown: "—",
     question: "오늘 안내는 어땠나요?",
     questionLead: "하나만 골라도 돼요. 다음 안내를 고치는 데 써요.",

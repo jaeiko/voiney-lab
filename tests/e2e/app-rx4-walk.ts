@@ -84,7 +84,8 @@ export async function fieldWalk(page: Page, info: TestInfo, key: 'eam23' | 'soil
   // The end screen for this protocol, skipped.
   await expect(page.getByTestId('run-ended')).toContainText('실험을 멈췄어요');
   await expect(page.getByTestId('end-sub')).toContainText(plan.title);
-  await expect(page.getByTestId('end-counts').locator('[data-count="voice"] .end-count-number')).toHaveText('1');
+  await expect(page.getByTestId('end-counts').locator('[data-count="records"] .end-count-number')).toHaveText('1');
+  await expect(page.getByTestId('end-counts').locator('[data-count="missed"] .end-count-number')).toHaveText('0');
   await shot(page, info, `32-${key}-ended`);
   await page.getByTestId('end-skip').click();
   await expect(page.getByTestId('end-home')).toBeVisible();

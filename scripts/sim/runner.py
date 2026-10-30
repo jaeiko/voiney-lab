@@ -66,7 +66,8 @@ class Capture:
 async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                    transcriber: Callable[..., Any] | None = None, synthesizer: Callable[..., bytes] | None = None,
                    router_settings: Any = None, offline: bool = True, classifier: Callable | None = None, stt_provider: str = 'google_cloud', role_client: Callable | None = None,
-                   oracle_environment: bool = False) -> dict:
+                   oracle_environment: bool = False,
+                   transient_noise_gate: bool = False) -> dict:
     """Only provider boundaries are replaced; emergency/front rules/gates are production code."""
     from voiney_lab.curated_protocol import CuratedProtocolSession
     from voiney_lab.vad import EndpointDetector, VadConfig
@@ -95,6 +96,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         from voiney_lab.configuration import VoiceVadSettings
         vad_config=VadConfig.from_settings(VoiceVadSettings.from_environment().cascade)
         detector = EndpointDetector(vad_config, classifier=classifier or ((lambda frame: any(frame)) if offline else None), listening_onset=True)
+        detector.enable_transient_noise_gate(transient_noise_gate)
         session = server.ListenerSession(detector, curated_protocol_session=workflow,
                                          tool_context=ToolContext(Path('/unused/sim'), None, 'ko', 'test_only'),
                                          llm_router_settings=router_settings)
@@ -103,6 +105,12 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         workflow.active = True
         workflow._workflow_status = 'running'
         workflow.current_index = case.index
+        if case.setup == 'purpose_question':
+            workflow.open_notebook_question('purpose')
+        if case.setup == 'result_question':
+            workflow.active = False
+            workflow._workflow_status = 'completed'
+            workflow.open_notebook_question('result')
         if case.setup == 'completion_pending':
             workflow.confirm_mode = 'confirm'
             primed = workflow.front_plan(
@@ -272,6 +280,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             'drop_reasons': sorted(set(drops)), 'stt_failures':stt_failures,
             'stt_calls': stt_calls, 'stt_responses':len(hypotheses),
             'terminal': bool(done or drops), 'endpoint_count': len(committed),
+            'endpoint_audio_frames': [e.result.total_frames for e in committed],
             'cut_off': any(e.result.forced for e in committed) or len(committed)>1,
             'interrupted': any(e['type'] in {'turn.cancelled', 'audio.cancelled'} for e in events),
             'timings_ms': {**timings, 'provider_stt_ms': round(provider_ms['stt'], 3),

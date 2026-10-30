@@ -153,6 +153,67 @@ def generate_development_cases(protocol: Protocol) -> tuple[Case, ...]:
             timer_setup,
             ('timer_status',),
         ),
+        *(
+            Case(
+                f'{protocol.code}.voice2_timer_remaining.{at}',
+                'timer_remaining',
+                text,
+                timer_index,
+                timer_setup,
+                ('timer_status',),
+            )
+            for at, text in enumerate((
+                '타임 얼마?', '타임 얼마나?', '타이머 얼마?',
+                '어, 그럼 타이머 얼마나 남았지?', '어... 타임, 얼마 남았어?',
+                '시간 몇 남았어?',
+            ))
+        ),
+        *(
+            Case(
+                f'{protocol.code}.voice2_step_question.{at}',
+                'step_question',
+                text,
+                0,
+                'active',
+                (action,),
+            )
+            for at, (text, action) in enumerate((
+                ('지금 몇 단계?', 'protocol_query'),
+                ('어, 지금 단계 몇이야?', 'protocol_query'),
+                ('다음 뭐야?', 'next_information'),
+                ('그럼 다음에 뭐 해?', 'next_information'),
+            ))
+        ),
+        Case(
+            f'{protocol.code}.safe1_purpose.0',
+            'safe1_purpose',
+            '편. 편.',
+            0,
+            'purpose_question',
+            ('clarify_completion',),
+            ('notebook_confirmation_required',),
+            ('notebook',),
+        ),
+        Case(
+            f'{protocol.code}.safe1_result.0',
+            'safe1_result',
+            '1.7 100',
+            0,
+            'result_question',
+            ('clarify_completion',),
+            ('notebook_confirmation_required',),
+            ('notebook',),
+        ),
+        Case(
+            f'{protocol.code}.safe1_observation.0',
+            'safe1_observation',
+            '관찰 기록해 줘: 측정값 37 °C',
+            0,
+            'active',
+            ('clarify_completion',),
+            ('note_confirmation_required',),
+            ('confirmation',),
+        ),
     )
 
 
@@ -197,12 +258,20 @@ def generate_cases(protocol: Protocol) -> tuple[Case, ...]:
             value, unit = values[0]
             shown = f'{value} {unit}'.strip()
             for family, text, allowed in (
-                ('observation', f'관찰 기록해 줘: 측정값 {shown}', ('record', 'confirmation', 'revision')),
+                ('observation', f'관찰 기록해 줘: 측정값 {shown}', ('confirmation',)),
                 ('value_inside', f'현재 단계 값을 {shown}로 바꿔 줘', ('confirmation',)),
                 ('value_outside', f'현재 단계 값을 {float(value.replace('−','-').replace(',','.')) * 1000 + 999:g} {unit}로 바꿔 줘', ('confirmation',)),
             ):
-                expected_actions=('clarify_parameter','clarify_completion','decline_completion') if family in {'value_outside','value_inside'} else ()
-                expected_intents=('operational_value_clarification_required','run_value_change_confirmation_required','run_value_change_refused') if family in {'value_outside','value_inside'} else ()
+                expected_actions=(
+                    ('clarify_completion',)
+                    if family == 'observation' else
+                    ('clarify_parameter','clarify_completion','decline_completion')
+                )
+                expected_intents=(
+                    ('note_confirmation_required',)
+                    if family == 'observation' else
+                    ('operational_value_clarification_required','run_value_change_confirmation_required','run_value_change_refused')
+                )
                 cases.append(Case(f'{protocol.code}.{family}.{index}', family, text, index=index,
                                   actions=expected_actions,intents=expected_intents,allowed=allowed, terms=terms))
         if terms:

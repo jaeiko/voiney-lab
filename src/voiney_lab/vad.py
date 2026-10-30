@@ -31,6 +31,7 @@ import logging
 import math
 import statistics
 
+import numpy as np
 import webrtcvad
 
 from voiney_lab.audio import FRAME_BYTES, FRAME_MS, SAMPLE_RATE
@@ -56,6 +57,113 @@ ADAPTIVE_NOISE_WINDOW_FRAMES = 50
 ADAPTIVE_NOISE_MIN_VOICED_SHARE = 0.6
 ADAPTIVE_NOISE_FLOOR_PERCENTILE = 20.0
 ADAPTIVE_NOISE_RISE_DB = 6.0
+
+#: LISTEN3 (2026-10-29): a short impact can satisfy WebRTC's six-of-ten
+#: resume rule after the wearer has stopped. A bounded acoustic window keeps
+#: those candidates from reopening the endpoint. WebRTC still owns onset and
+#: per-frame verdicts; this check is used only for a would-be resume and for
+#: rejecting a committed impact-only lump before STT.
+TRANSIENT_SPEECH_WINDOW_FRAMES = 20
+TRANSIENT_SPEECH_MIN_FRAMES = 8
+TRANSIENT_PERIODICITY_MIN = 0.60
+TRANSIENT_APERIODIC_PERIODICITY_MIN = 0.30
+TRANSIENT_MID_BAND_MIN = 0.08
+TRANSIENT_APERIODIC_MID_BAND_MIN = 0.50
+TRANSIENT_LOW_BAND_MIN = 0.05
+TRANSIENT_SPECTRAL_FLATNESS_MAX = 0.30
+_TRANSIENT_WINDOW_STEP_FRAMES = 5
+_TRANSIENT_MIN_SIGNAL_RMS = 8.0
+_TRANSIENT_FOLLOWUP_FRAMES = 100
+_TRANSIENT_FOLLOWUP_MIN_VOICED = 4
+
+
+def _speech_shape_evidence(frames: Iterable[bytes]) -> bool:
+    """Whether one bounded PCM window has a speech-like acoustic shape.
+
+    Raw words and protocol state are not involved. The pitch-period search
+    is limited to 40--200 samples (400--80 Hz); the spectrum check uses only
+    aggregate power ratios. A constant nonzero signal is rejected: it has no
+    speech spectrum and can represent clipped input or a synthetic impact.
+    """
+
+    selected = tuple(frames)
+    if len(selected) < TRANSIENT_SPEECH_MIN_FRAMES:
+        return False
+    samples = np.frombuffer(b"".join(selected), dtype="<i2").astype(
+        np.float64, copy=False
+    )
+    if not samples.size:
+        return False
+    rms = float(np.sqrt(np.mean(samples * samples)))
+    if rms < _TRANSIENT_MIN_SIGNAL_RMS:
+        return False
+    centered = samples - float(np.mean(samples))
+    power = float(np.dot(centered, centered))
+    if power <= 1e-6 * len(centered):
+        return False
+
+    periodicity = 0.0
+    maximum_lag = min(200, len(centered) // 3)
+    for lag in range(40, maximum_lag + 1, 4):
+        left = centered[:-lag]
+        right = centered[lag:]
+        denominator = math.sqrt(
+            float(np.dot(left, left)) * float(np.dot(right, right))
+        )
+        if denominator:
+            periodicity = max(
+                periodicity, float(np.dot(left, right)) / denominator
+            )
+
+    spectrum = np.abs(np.fft.rfft(centered * np.hanning(len(centered))))
+    spectrum += 1e-12
+    spectral_power = spectrum * spectrum
+    total_power = float(np.sum(spectral_power))
+    if total_power <= 0:
+        return False
+    frequencies = np.fft.rfftfreq(len(centered), 1 / SAMPLE_RATE)
+    low_band = float(
+        np.sum(spectral_power[(frequencies >= 60) & (frequencies < 1000)])
+        / total_power
+    )
+    mid_band = float(
+        np.sum(spectral_power[(frequencies >= 250) & (frequencies < 3000)])
+        / total_power
+    )
+    flatness = math.exp(float(np.mean(np.log(spectrum)))) / float(
+        np.mean(spectrum)
+    )
+    return low_band >= TRANSIENT_LOW_BAND_MIN and (
+        periodicity >= TRANSIENT_PERIODICITY_MIN
+        and mid_band >= TRANSIENT_MID_BAND_MIN
+        or periodicity >= TRANSIENT_APERIODIC_PERIODICITY_MIN
+        and mid_band >= TRANSIENT_APERIODIC_MID_BAND_MIN
+        and flatness <= TRANSIENT_SPECTRAL_FLATNESS_MAX
+    )
+
+
+def _contains_speech_shape(frames: list[tuple[bytes, bool]]) -> bool:
+    """Scan an utterance in bounded overlapping windows for speech evidence."""
+
+    pcm = [frame for frame, _voiced in frames]
+    if len(pcm) <= TRANSIENT_SPEECH_WINDOW_FRAMES:
+        return _speech_shape_evidence(pcm)
+    starts = list(
+        range(
+            0,
+            len(pcm) - TRANSIENT_SPEECH_WINDOW_FRAMES + 1,
+            _TRANSIENT_WINDOW_STEP_FRAMES,
+        )
+    )
+    last = len(pcm) - TRANSIENT_SPEECH_WINDOW_FRAMES
+    if starts[-1] != last:
+        starts.append(last)
+    return any(
+        _speech_shape_evidence(
+            pcm[start : start + TRANSIENT_SPEECH_WINDOW_FRAMES]
+        )
+        for start in starts
+    )
 
 #: The level of a frame with no signal at all, and of one that is all zeros.
 LEVEL_FLOOR_DB = -100.0
@@ -407,6 +515,8 @@ class EndpointDetector:
         self._onset: deque[bool] = deque(maxlen=self.onset_window_frames)
         self._resume: deque[bool] = deque(
             maxlen=self.config.listening_resume_window_frames)
+        self._resume_audio: deque[bytes] = deque(
+            maxlen=self.config.listening_resume_window_frames)
         self._resume_voiced_frames=0
         self._utterance: list[tuple[bytes, bool]] = []
         self.voiced_frames = 0
@@ -444,6 +554,20 @@ class EndpointDetector:
             maxlen=ADAPTIVE_NOISE_WINDOW_FRAMES)
         self._adaptive_noise_threshold_db: float | None = None
         self._adaptive_noise_armed = False
+        #: LISTEN3: production ListenerSession opts in. Direct unit users
+        #: keep the historical WebRTC-only rule unless they enable it.
+        self.transient_noise_gate = False
+        #: After an impact-only rejection, keep a two-second recovery window
+        #: for a short, quiet command. WebRTC must still mark at least four
+        #: frames and the bounded acoustic window must carry speech evidence.
+        self._transient_followup_remaining = 0
+        self._transient_followup_audio: deque[bytes] = deque(
+            maxlen=TRANSIENT_SPEECH_WINDOW_FRAMES
+        )
+        self._transient_followup_voiced: deque[bool] = deque(
+            maxlen=TRANSIENT_SPEECH_WINDOW_FRAMES
+        )
+        self._speech_shape_confirmed = False
 
     @property
     def buffered_frames(self) -> int:
@@ -455,6 +579,7 @@ class EndpointDetector:
         self._prefix_levels.clear()
         self._onset.clear()
         self._resume.clear()
+        self._resume_audio.clear()
         self._resume_voiced_frames=0
         self._utterance.clear()
         self._utterance_levels.clear()
@@ -464,6 +589,10 @@ class EndpointDetector:
         self._prefix_frames_retained = 0
         self._forget_level()
         self._forget_adaptive_noise()
+        self._transient_followup_remaining = 0
+        self._transient_followup_audio.clear()
+        self._transient_followup_voiced.clear()
+        self._speech_shape_confirmed = False
 
     def _forget_level(self) -> None:
         self._wearer_heard = False
@@ -490,6 +619,17 @@ class EndpointDetector:
         if self.adaptive_noise_gate and not enabled:
             self._forget_adaptive_noise()
         self.adaptive_noise_gate = enabled
+
+    def enable_transient_noise_gate(self, enabled: bool) -> None:
+        """Qualify resume candidates and impact-only commits before STT."""
+
+        self.transient_noise_gate = bool(enabled)
+        if not self.transient_noise_gate:
+            self._resume_audio.clear()
+            self._transient_followup_remaining = 0
+            self._transient_followup_audio.clear()
+            self._transient_followup_voiced.clear()
+            self._speech_shape_confirmed = False
 
     def _adaptive_endpoint_voiced(self, voiced: bool, level_db: float) -> bool:
         """Qualify a VAD verdict against this turn's own low-level room sound."""
@@ -610,6 +750,7 @@ class EndpointDetector:
             self.voiced_frames = sum(flag for _, flag in self._utterance)
             self.consecutive_silence_frames = self._trailing_silence()
             self._resume.clear()
+            self._resume_audio.clear()
             self._resume_voiced_frames = 0
             self._recent_voiced.clear()
             self._recent_voiced_count = 0
@@ -633,12 +774,30 @@ class EndpointDetector:
         voiced = self._adaptive_endpoint_voiced(raw_voiced, frame_level)
         level = frame_level if voiced else None
         if self.state == TurnState.IDLE:
+            if self._transient_followup_remaining:
+                self._transient_followup_remaining -= 1
+                self._transient_followup_audio.append(frame)
+                self._transient_followup_voiced.append(raw_voiced)
+            else:
+                self._transient_followup_audio.clear()
+                self._transient_followup_voiced.clear()
             self._prefix.append((frame, voiced))
             self._prefix_levels.append(level)
             self._onset.append(voiced)
-            if (len(self._onset) == self.onset_window_frames
-                    and sum(self._onset) >= self.onset_voiced_frames):
+            ordinary_onset = (
+                len(self._onset) == self.onset_window_frames
+                and sum(self._onset) >= self.onset_voiced_frames
+            )
+            followup_onset = (
+                len(self._transient_followup_audio)
+                == TRANSIENT_SPEECH_WINDOW_FRAMES
+                and sum(self._transient_followup_voiced)
+                >= _TRANSIENT_FOLLOWUP_MIN_VOICED
+                and _speech_shape_evidence(self._transient_followup_audio)
+            )
+            if ordinary_onset or followup_onset:
                 self.state = TurnState.USER_SPEAKING
+                self._speech_shape_confirmed = followup_onset
                 self._utterance = list(self._prefix)
                 self._utterance_levels = list(self._prefix_levels)
                 self._prefix_frames_retained = len(self._utterance)
@@ -654,7 +813,11 @@ class EndpointDetector:
                 self._prefix_levels.clear()
                 self._onset.clear()
                 self._resume.clear()
+                self._resume_audio.clear()
                 self._resume_voiced_frames=0
+                self._transient_followup_remaining = 0
+                self._transient_followup_audio.clear()
+                self._transient_followup_voiced.clear()
                 log.info("speech.started grace_ms=%s", self.config.endpoint_silence_frames * FRAME_MS)
                 return EndpointResult(speech_started=True, voiced_frames=self.voiced_frames,
                                       total_frames=len(self._utterance),
@@ -671,11 +834,14 @@ class EndpointDetector:
                 self.consecutive_silence_frames = 1
                 self._resume.clear()
                 self._resume.append(False)
+                self._resume_audio.clear()
+                self._resume_audio.append(frame)
                 self._resume_voiced_frames=0
                 log.info("silence.started grace_ms=%s", self.config.endpoint_silence_frames * FRAME_MS)
         else:
             self.consecutive_silence_frames += 1
             self._resume.append(voiced)
+            self._resume_audio.append(frame)
             if voiced:
                 self._resume_voiced_frames += 1
         loud = self._loud(level)
@@ -703,9 +869,15 @@ class EndpointDetector:
         if (self.consecutive_silence_frames
                 and len(self._resume) == self.config.listening_resume_window_frames
                 and sum(self._resume) >= self.config.listening_resume_voiced_frames):
+            if (
+                self.transient_noise_gate
+                and not _speech_shape_evidence(self._resume_audio)
+            ):
+                return EndpointResult()
             self.voiced_frames += self._resume_voiced_frames
             self.consecutive_silence_frames = self._trailing_resume_silence()
             self._resume.clear()
+            self._resume_audio.clear()
             self._resume_voiced_frames=0
             log.info("speech.resumed")
         return EndpointResult()
@@ -789,7 +961,18 @@ class EndpointDetector:
         # the wearer's words; count what is kept.
         voiced_frames = (
             sum(flag for _, flag in kept) if kind == "level" else self.voiced_frames)
-        accepted = voiced_frames >= self.config.minimum_voiced_frames
+        accepted = (
+            voiced_frames >= self.config.minimum_voiced_frames
+            or self._speech_shape_confirmed
+        )
+        transient_only = bool(
+            self.transient_noise_gate
+            and kept
+            and not self._speech_shape_confirmed
+            and not _contains_speech_shape(kept)
+        )
+        if transient_only:
+            accepted = False
         result = EndpointResult(
             utterance=b"".join(frame for frame, _ in kept)
             if accepted else None,
@@ -799,13 +982,18 @@ class EndpointDetector:
             total_frames=len(kept),
             prefix_frames_retained=min(
                 self._prefix_frames_retained,len(kept)),
-            rejection_reason="minimum_voiced_frames"
-            if not accepted else None,
+            rejection_reason=(
+                "transient_noise"
+                if transient_only
+                else "minimum_voiced_frames" if not accepted else None
+            ),
             voiced_level_db=_median_level(kept_levels) if accepted else None,
             endpoint=kind or ("forced" if forced else "silence"),
         )
         if result.rejected:
             self.reset()
+            if transient_only and self.transient_noise_gate:
+                self._transient_followup_remaining = _TRANSIENT_FOLLOWUP_FRAMES
         else:
             # This transition and detachment make the accepted commit exactly once.
             self.state = TurnState.PROCESSING

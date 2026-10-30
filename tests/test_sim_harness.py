@@ -47,11 +47,38 @@ def test_voice1_development_regressions_keep_confirmation_and_timer_queries_read
         assert {case.text for case in timer_cases} == {
             '타임 얼마나 남았어? 어',
             '시간 얼마나 남았어 음',
+            '타임 얼마?',
+            '타임 얼마나?',
+            '타이머 얼마?',
+            '어, 그럼 타이머 얼마나 남았지?',
+            '어... 타임, 얼마 남았어?',
+            '시간 몇 남았어?',
         }
         for case in timer_cases:
             result = asyncio.run(run_case(protocol, case))
             assert result['action'] == 'timer_status'
             assert result['changed_fields'] == []
+            assert score_case(case, result)['wrong_state'] is False
+
+
+def test_safe1_development_regressions_stage_uncertain_records_without_writing():
+    from scripts.sim.corpus import generate_development_cases
+
+    for protocol in load_corpus():
+        cases = [
+            case for case in generate_development_cases(protocol)
+            if case.family.startswith('safe1_')
+        ]
+        assert {case.family for case in cases} == {
+            'safe1_purpose', 'safe1_result', 'safe1_observation',
+        }
+        for case in cases:
+            result = asyncio.run(run_case(protocol, case))
+            assert result['action'] == 'clarify_completion'
+            assert result['intent_kind'] in {
+                'notebook_confirmation_required', 'note_confirmation_required',
+            }
+            assert result['step_after'] == result['step_before']
             assert score_case(case, result)['wrong_state'] is False
 
 

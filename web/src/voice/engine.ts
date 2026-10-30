@@ -23,6 +23,7 @@ import { runStore } from "./runStore";
 declare let playbackEpoch: number;
 declare function resetCascadePlayback(): void;
 declare function reconnectMic(generation?: number, reason?: string): Promise<boolean>;
+declare function closeMicrophone(): Promise<void>;
 declare function recordCalibrationPcm(seconds: number): Promise<{ pcm: Int16Array; micId: string | null }>;
 declare function pcmBase64(pcm: Int16Array): string;
 
@@ -341,7 +342,16 @@ async function onMessage(e: MessageEvent, generation: number, current: WebSocket
     // connection.js continued the run on a new connection: its first state is taken whatever the old one's number was.
     runStore.set({ model: { ...runStore.get().model, stateRevision: -1 } });
   }
+  const endedBefore = runStore.get().model.ended;
   runStore.event(m, eventContext());
+  if (m.type === "experiment.ended" && runStore.get().model.ended !== endedBefore) {
+    sessionActive = false;
+    removeProvisionalTurns(generation);
+    void closeMicrophone();
+    void keepScreenOn(false);
+    runStore.set({ active: false, phase: "idle", micOn: false, audioHeld: false });
+    renderState("IDLE");
+  }
   if (m.type === "protocol.fixture.state") syncProtocolState();
 }
 

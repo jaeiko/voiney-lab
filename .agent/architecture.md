@@ -93,8 +93,15 @@ generation is cancelled and its audio cleared (barge-in).
    of those voiced levels may keep the endpoint open after one frame actually
    reaches that rise; a steady wearer voice cannot arm the gate against
    itself. It does not alter PCM,
-   the 1000 ms silence, or the 15 s safety bound. With the filter on (lane
-   HEAR, decision 2: the experimenter's
+   the 1000 ms silence, or the 15 s safety bound. For production WebRTC input
+   (lane LISTEN3), a six-of-ten voiced burst during that one-second ending
+   window reopens it only when a bounded 160--400 ms PCM window also has
+   speech-like periodicity and band energy. An impact-only utterance that has
+   no such window is rejected before STT as `transient_noise`; the next two
+   seconds retain a four-frame WebRTC plus speech-shape recovery path so a
+   quiet short command immediately after an impact is not lost. This
+   qualifier reads no transcript and changes no workflow state. With the
+   speaker filter on (lane HEAR, decision 2: the experimenter's
    `speaker_filter`, a `voice_reference` measured through
    `POST /api/voice/calibration` under `VOICE_REFERENCE_MAX_AGE_DAYS` old, on
    the microphone the page names in `client.audio_ready` — `stored_voice_filter`),
@@ -140,9 +147,14 @@ generation is cancelled and its audio cleared (barge-in).
 4. Routing, one line (AGENTS rule 3):
    - `CuratedProtocolSession.front_plan` reads the turn first and never
      waits on a model (`FRONT_RULES`: transcript quality, pause and "종료",
-     yes/no to an open question, replies to an endpoint question, time left,
-     "그거", repeat, cancel, completion naming the current step, start, a
+     yes/no to an open question, replies to an endpoint question, time left
+     (including short timer/time-word + amount/remaining-word combinations),
+     current/next-step questions, "그거", repeat, cancel, completion naming the current step, start, a
      problem at the bench (`problem_help`), and the rest of the table).
+     These information questions leave every checkpoint unchanged. A direct
+     unblocked `다음` records the completion and answers with only the completed
+     label, the next checked Korean step summary and the undo word; `취소`
+     immediately after that still opens the existing revert confirmation.
    - Router off (`VOINEY_LAB_LLM_ROUTER_ENABLED`, default false): the rules'
      own route (`route_curated_runtime_turn` → `plan`).
    - Router on: `llm_router.route_turn_with_llm_router` makes one streamed
@@ -349,6 +361,17 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   front rule may apply a person-confirmed value while the one state machine is
   `ready` and still before its first step; it does not start or advance the
   workflow and preview or ended sessions still reject it.
+- Record transcript gate (lane SAFE1): purpose/result answers are echoed
+  exactly after persistence and accept an immediate append-only correction.
+  One- or two-syllable answers and contextless numbers wait for one explicit
+  confirmation. Contextless values such as a bare `측정값 37 °C` also wait
+  before persistence; a value with a named property or sample keeps the
+  normal save-and-read-back path. A pending value cannot move a step,
+  complete work, or start a timer.
+  Report events carry `read_back`, `experimenter_confirmed`, or correction
+  evidence, and notebook number provenance admits record prose only with one
+  of those human-intent states (ordinary observations retain
+  `user_reported`).
 
 ### Page evidence segments and known analysis limits
 

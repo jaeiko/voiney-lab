@@ -4466,6 +4466,36 @@ _NOTEBOOK_FIX = re.compile(
     r"^\s*(?P<target>목적|시료|결과|다음에 바꿀 점|다음 할 일)\s*(?:을|를|은|는|만)?\s*"
     r"(?:고쳐|바꿔|수정)(?:\s*줘|요|\s*주세요|해\s*줘|해)?\s*[:,：]?\s*(?P<text>.+?)\s*$"
 )
+_NOTEBOOK_READBACK_FIX = re.compile(
+    r"^\s*(?:정정|수정|고쳐|바꿔)(?:\s*해\s*줘|\s*해주세요|\s*해요)?"
+    r"\s*[:,：]?\s*(?P<text>.*?)\s*$"
+)
+_CONTEXTLESS_NUMBERS = re.compile(r"^[\s\d.,+\-–—~/%:]+$")
+
+
+def transcript_record_needs_confirmation(text: str) -> bool:
+    """Return whether record words are too thin to enter the ledger unchecked.
+
+    This check is only for record content. Exact control commands such as
+    ``다음`` keep their existing deterministic route.
+    """
+
+    compact = " ".join(text.split()).strip()
+    if not compact:
+        return True
+    if _CONTEXTLESS_NUMBERS.fullmatch(compact):
+        return True
+    hangul = "".join(re.findall(r"[가-힣]", compact))
+    non_hangul_words = re.sub(r"[\s가-힣.!?。,'\"‘’“”]+", "", compact)
+    return bool(hangul) and len(hangul) <= 2 and not non_hangul_words
+
+
+def contextless_measurement_needs_confirmation(text: str) -> bool:
+    """A bare ``측정값 <number+unit>`` names no sample or measured property."""
+
+    compact = " ".join(text.split()).strip()
+    tail = re.sub(r"^(?:측정값|값)\s*(?:은|는|이|가)?\s*[:：]?\s*", "", compact)
+    return bool(tail) and tail != compact
 
 
 @dataclass(frozen=True)
@@ -4718,6 +4748,18 @@ _TIMER_START_PATTERNS = (
     re.compile(r"^(?:start\s+(?:the\s+)?timer|timer\s+start)$", re.I),
 )
 _TIMER_QUERY_PATTERNS = (
+    # Lane VOICE2: short bench questions are combinations, not a sentence
+    # list. A timer/time word plus an amount/remaining word is enough; only
+    # fillers, particles and question endings may surround them, so "점심
+    # 타임" and a source-duration question keep their existing readings.
+    re.compile(
+        r"^(?:(?:어|음|아|그럼|그러면|그래서|근데|그런데)\s*[,~]?\s*)*"
+        r"(?=[^?？]*(?:타이머|타임|시간|몇\s*분))"
+        r"(?=[^?？]*(?:얼마나|얼마|몇|남))"
+        r"(?:타이머|타임|시간|몇|분|초|얼마나|얼마|남았|남아|남은|남았는지|남지|남나|"
+        r"더|좀|대충|대략|쯤|정도|이|가|은|는|을|를|이나|나|알려|말해|줘|주세요|"
+        r"야|이야|예요|에요|어|어요|지|죠|니|나요|습니까|요|\s|[?？.,~])+$"
+    ),
     re.compile(r"타이머.*(?:얼마나|몇\s*분|몇\s*초|남았|상태|어떻게)"),
     re.compile(r"^타임\s*(?:얼마나\s*남았어|몇\s*(?:분|초)\s*남았어|남은\s*시간\s*알려\s*(?:줘|주세요))$"),
     re.compile(r"^(?:몇\s*분\s*남았어|얼마나\s*남았어)\??$"),
@@ -5875,6 +5917,9 @@ _UNDO_COMPLETION = re.compile(
     r"(?:완료(?:한\s*(?:거|것|단계))?(?:를|을)?\s*)취소(?:해|하자|할게|할래)?"
     rf"{_REVERT_POLITE}$"
 )
+_BARE_COMPLETION_UNDO = re.compile(
+    r"^(?:방금\s*)?취소(?:해|해줘|해\s*줘|해주세요|해요)?$"
+)
 
 
 @dataclass(frozen=True)
@@ -6156,7 +6201,10 @@ _PROTOCOL_SCOPE_PATTERNS = (
         re.I,
     )),
     ("total_steps", re.compile(r"(?:이\s*실험|프로토콜|지금)?(?:은|는)?\s*총\s*몇\s*단계|총\s*단계\s*수|(?:전체|모든)\s*단계\s*(?:의\s*)?(?:수|개수)|how\s+many\s+steps")),
-    ("current_position", re.compile(r"(?:현재|지금)\s*(?:몇\s*번째|몇)\s*단계|where\s+am\s+i")),
+    ("current_position", re.compile(
+        r"(?:현재|지금)\s*(?:(?:몇\s*번째|몇)\s*단계|단계(?:는|가)?\s*몇)|"
+        r"where\s+am\s+i"
+    )),
     ("remaining_steps", re.compile(r"몇\s*단계\s*남|남은\s*단계|steps?\s+(?:are\s+)?remaining")),
     ("purpose", re.compile(
         r"(?:실험|프로토콜).*(?:목표|목적|뭐\s*하는|무슨\s*실험|어떤\s*실험|"
@@ -14072,10 +14120,16 @@ class CuratedProtocolSession:
                 intent_kind="note_decimal_unclear",
                 action=CuratedProtocolAction.DECLINE_COMPLETION,
             )
-        if (self.confirm_mode != "confirm" and self.ambient_mode != "noisy") or intent.note_confirmed:
+        if intent.note_confirmed:
             return None
         values = measured_values(content)
-        if not values and self.ambient_mode != "noisy":
+        low_context = (
+            transcript_record_needs_confirmation(content)
+            or contextless_measurement_needs_confirmation(content)
+        )
+        if self.confirm_mode != "confirm" and self.ambient_mode != "noisy" and not low_context:
+            return None
+        if not values and self.ambient_mode != "noisy" and not low_context:
             return None
         step = self.fixture.steps[self.current_index]
         self._pending_note_confirmation = {
@@ -14090,15 +14144,18 @@ class CuratedProtocolSession:
             "requested_generation": generation,
         }
         if values:
-            shown = ", ".join(value.text for value in values)
-            heard = ", ".join(spoken_korean(value.text) for value in values)
+            shown_values = list(measurement_spans(content)) or [value.text for value in values]
+            shown = ", ".join(shown_values)
+            heard = ", ".join(spoken_korean(value) for value in shown_values)
             ending = josa_ro(shown)[len(shown):]
-            asked_shown = f"{shown}{ending} 기록할까요? 맞으면 '네'라고 해 주세요."
-            asked_heard = f"{heard}{ending} 기록할까요? 맞으면 '네'라고 해 주세요."
+            asked_shown = f"{shown}{ending} 기록할까요? 맞으면 '네', 아니면 '정정'이라고 말해 주세요."
+            asked_heard = f"{heard}{ending} 기록할까요? 맞으면 '네', 아니면 '정정'이라고 말해 주세요."
         else:
             # Lane SP1, decision 3: in 시끄러운 곳 mode a note with no value
             # is asked about too, with its words.
-            asked_shown = asked_heard = f"'{content}' 이렇게 기록할까요? 맞으면 '네'라고 해 주세요."
+            asked_shown = asked_heard = (
+                f"'{content}' 이렇게 기록할까요? 맞으면 '네', 아니면 '정정'이라고 말해 주세요."
+            )
         plan = self._words_plan(
             asked_shown,
             intent_kind="note_confirmation_required",
@@ -15207,6 +15264,18 @@ class CuratedProtocolSession:
         if self._pause_state == "paused" or self._experiment_ended():
             return None
         revert = step_revert_request(transcript)
+        if (
+            revert is None
+            and self.active
+            and self.current_index > 0
+            and _BARE_COMPLETION_UNDO.fullmatch(command_key)
+            and self.fixture.steps[self.current_index - 1].step_id
+            in self._completed_step_ids
+        ):
+            # Lane VOICE2: the short completion reply teaches "취소". It is
+            # accepted only where the immediately preceding step is recorded
+            # complete, and it keeps the existing named confirmation gate.
+            revert = StepRevertRequest("undo_completion", None)
         if revert is not None:
             return self._plan_step_revert_request(
                 revert, command_key=command_key, turn_id=turn_id, language=language,
@@ -18384,6 +18453,23 @@ class CuratedProtocolSession:
             words += " 잘못 넘어갔으면 '방금 완료 취소'라고 해 주세요."
         return words
 
+    def _short_forward_words(self, completed_label: str) -> str:
+        """The direct "다음" reply: completion, new source step, undo word."""
+
+        step = self.fixture.steps[self.current_index]
+        reading = self._localized_fact(step.step_id, "current_step")
+        summary = (
+            _without_step_prefix(step.source_label, " ".join(reading.split()))
+            if reading else "화면에서 확인해 주세요."
+        )
+        summary = re.split(r"(?<=[.!?。])\s+", summary.strip(), maxsplit=1)[0]
+        if summary and summary[-1] not in ".!?。":
+            summary += "."
+        return (
+            f"{completed_label}단계 완료. {step.source_label}단계: {summary} "
+            "잘못이면 '취소'."
+        )
+
     def _peek_advance_refusal(self) -> str | None:
         """Would a forward move be refused right now, without moving?
 
@@ -19479,6 +19565,8 @@ class CuratedProtocolSession:
 
         if self._notebook_question is None or not self._notebook_question_valid():
             return None
+        if self._notebook_question.get("stage") == "readback":
+            return None
         return str(self._notebook_question["kind"])
 
     def open_notebook_question(self, kind: str, *, completed_index: int | None = None) -> str:
@@ -19496,6 +19584,7 @@ class CuratedProtocolSession:
         self._notebook_question = {
             "kind": kind, "step_index": self.current_index, "revision": self._revision,
             "completed_label": completed_label, "completed_step_id": completed_step_id,
+            "stage": "answer",
         }
         return _NOTEBOOK_QUESTIONS[kind]
 
@@ -19568,6 +19657,75 @@ class CuratedProtocolSession:
         key = _semantic_utterance_key(transcript)
         if language != "ko" or transcript_quality is not None:
             return None
+        stage = str(held.get("stage") or "answer")
+        if stage == "readback":
+            correction = _NOTEBOOK_READBACK_FIX.fullmatch(words)
+            if correction is None:
+                self._notebook_question = None
+                return None
+            corrected = correction.group("text").strip()
+            if corrected:
+                self._notebook_question = None
+                return self._plan_notebook_fix_text(
+                    str(held["kind"]), corrected, turn_id=turn_id,
+                )
+            held["stage"] = "correction"
+            noun = "목적" if held["kind"] == "purpose" else "결과"
+            plan = self._words_plan(
+                f"고칠 {noun}을 말해 주세요.",
+                intent_kind="notebook_correction_requested",
+                action=CuratedProtocolAction.CLARIFY_PARAMETER,
+            )
+            self._last_front_rule = "notebook_question"
+            self._replay[turn_id] = plan
+            return plan
+        if stage == "confirm":
+            affirmative = _AFFIRMATIVE_COMPLETION_CONFIRMATION.fullmatch(key)
+            correction = _NOTEBOOK_READBACK_FIX.fullmatch(words)
+            negative = _NEGATIVE_COMPLETION_CONFIRMATION.fullmatch(key)
+            if affirmative:
+                pending = str(held.get("pending_text") or "")
+                self._notebook_question = None
+                return self._notebook_record_plan(
+                    str(held["kind"]), pending, held,
+                    confirmation_state="experimenter_confirmed", turn_id=turn_id,
+                    confirmed=True,
+                )
+            if correction is not None or negative:
+                corrected = correction.group("text").strip() if correction is not None else ""
+                if corrected:
+                    self._notebook_question = None
+                    return self._notebook_record_plan(
+                        str(held["kind"]), corrected, held,
+                        confirmation_state="experimenter_corrected", turn_id=turn_id,
+                        confirmed=True,
+                    )
+                held["stage"] = "correction"
+                noun = "목적" if held["kind"] == "purpose" else "결과"
+                plan = self._words_plan(
+                    f"고칠 {noun}을 말해 주세요.",
+                    intent_kind="notebook_correction_requested",
+                    action=CuratedProtocolAction.CLARIFY_PARAMETER,
+                )
+                self._last_front_rule = "notebook_question"
+                self._replay[turn_id] = plan
+                return plan
+            plan = self._words_plan(
+                "맞으면 '네', 아니면 '정정'이라고 말해 주세요.",
+                intent_kind="notebook_confirmation_required",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            )
+            self._replay[turn_id] = plan
+            return plan
+        if stage == "correction":
+            self._notebook_question = None
+            if held.get("pending_text") is not None:
+                return self._notebook_record_plan(
+                    str(held["kind"]), words, held,
+                    confirmation_state="experimenter_corrected", turn_id=turn_id,
+                    confirmed=True,
+                )
+            return self._plan_notebook_fix_text(str(held["kind"]), words, turn_id=turn_id)
         if (
             not key or _NOTEBOOK_SKIP.fullmatch(key) or _NOTEBOOK_BARE_YES_NO.fullmatch(key)
             or _NOTEBOOK_ACKNOWLEDGEMENT.fullmatch(key)
@@ -19617,25 +19775,60 @@ class CuratedProtocolSession:
         ):
             return None
         kind = str(held["kind"])
+        if transcript_record_needs_confirmation(words):
+            held["stage"] = "confirm"
+            held["pending_text"] = words
+            noun = {"purpose": "목적", "result": "결과", "observation": "관찰"}[kind]
+            plan = self._words_plan(
+                f"{noun}을 '{words}'으로 기록할까요? 맞으면 '네', 아니면 '정정'이라고 말해 주세요.",
+                intent_kind="notebook_confirmation_required",
+                action=CuratedProtocolAction.CLARIFY_COMPLETION,
+            )
+            self._last_front_rule = "notebook_question"
+            self._replay[turn_id] = plan
+            return plan
         self._notebook_question = None
+        return self._notebook_record_plan(
+            kind, words, held, confirmation_state="read_back", turn_id=turn_id,
+        )
+
+    def _notebook_record_plan(
+        self, kind: str, words: str, held: dict[str, Any], *,
+        confirmation_state: str, turn_id: int, confirmed: bool = False,
+    ) -> CuratedProtocolTurnPlan:
+        """Build one notebook append after its transcript gate."""
+
         if kind == "purpose":
             from voiney_lab.experiment_reports import samples_in_text
 
             samples = samples_in_text(words)
-            said = f"목적과 시료 {len(samples)}개를 기록했어요." if samples else "목적을 기록했어요."
+            said = (
+                f"확인했어요. 목적을 '{words}'라고 기록했어요."
+                if confirmed else
+                f"목적을 '{words}'라고 기록했어요. 틀리면 '정정'이라고 말해 주세요."
+            )
             self._notebook_said["purpose"] = True
             plan = replace(
                 self._words_plan(said, intent_kind="notebook_purpose",
                                  action=CuratedProtocolAction.CLARIFY_PARAMETER),
-                notebook_record={"kind": "purpose", "text": words, "samples": samples},
+                notebook_record={
+                    "kind": "purpose", "text": words, "samples": samples,
+                    "confirmation_state": confirmation_state,
+                },
             )
         elif kind == "observation":
+            said = (
+                f"확인했어요. 관찰을 '{words}'라고 기록했어요."
+                if confirmed else
+                f"관찰을 '{words}'라고 기록했어요. 틀리면 '정정'이라고 말해 주세요."
+            )
             plan = replace(
-                self._words_plan("관찰을 기록했어요.", intent_kind="notebook_observation",
+                self._words_plan(said, intent_kind="notebook_observation",
                                  action=CuratedProtocolAction.RECORD_OBSERVATION),
                 notebook_record={
                     "kind": "observation", "text": words,
                     "step_label": held.get("completed_label"), "step_id": held.get("completed_step_id"),
+                    "confirmation_state": confirmation_state,
                 },
                 reported_observation=True, observation_predicate="observed", observation_outcome=words,
                 step_label=held.get("completed_label"),
@@ -19645,15 +19838,41 @@ class CuratedProtocolSession:
 
             result, next_change = split_result_and_next(words)
             said = (
-                "결과와 다음에 바꿀 점을 기록했어요." if result and next_change
-                else "다음에 바꿀 점을 기록했어요." if next_change else "결과를 기록했어요.")
+                f"확인했어요. 결과를 '{words}'라고 기록했어요."
+                if confirmed else
+                f"결과를 '{words}'라고 기록했어요. 틀리면 '정정'이라고 말해 주세요."
+            )
             self._notebook_said["result"] = True
             plan = replace(
                 self._words_plan(said, intent_kind="notebook_result",
                                  action=CuratedProtocolAction.CLARIFY_PARAMETER),
-                notebook_record={"kind": "result", "text": words, "result": result, "next_change": next_change},
+                notebook_record={
+                    "kind": "result", "text": words, "result": result,
+                    "next_change": next_change, "confirmation_state": confirmation_state,
+                },
             )
+        if not confirmed:
+            self._notebook_question = {**held, "stage": "readback", "pending_text": None}
         self._last_front_rule = "notebook_question"
+        self._replay[turn_id] = plan
+        return plan
+
+    def _plan_notebook_fix_text(
+        self, kind: str, text: str, *, turn_id: int,
+    ) -> CuratedProtocolTurnPlan:
+        target = kind if kind in {"purpose", "result", "observation"} else "result"
+        noun = {"purpose": "목적", "result": "결과", "observation": "관찰"}[target]
+        plan = replace(
+            self._words_plan(
+                f"{noun}{'을' if target in {'purpose', 'observation'} else '를'} 고쳤어요.",
+                intent_kind="notebook_fix", action=CuratedProtocolAction.CLARIFY_PARAMETER,
+            ),
+            notebook_record={
+                "kind": "fix", "target": target, "text": text,
+                "confirmation_state": "experimenter_corrected",
+            },
+        )
+        self._last_front_rule = "notebook_fix"
         self._replay[turn_id] = plan
         return plan
 
@@ -19667,11 +19886,7 @@ class CuratedProtocolSession:
         if not self._notebook_said.get(target):
             plan = self._words_plan(f"고칠 {noun} 기록이 없어요.", intent_kind="notebook_fix_nothing")
         else:
-            plan = replace(
-                self._words_plan(f"{noun}{'을' if target == 'purpose' else '를'} 고쳤어요.",
-                                 intent_kind="notebook_fix", action=CuratedProtocolAction.CLARIFY_PARAMETER),
-                notebook_record={"kind": "fix", "target": target, "text": text},
-            )
+            return self._plan_notebook_fix_text(target, text, turn_id=turn_id)
         self._last_front_rule = "notebook_fix"
         self._replay[turn_id] = plan
         return plan
@@ -20342,6 +20557,56 @@ class CuratedProtocolSession:
                 actor_role=actor_role,
                 open_question=None,
             )
+        note_correction = (
+            _NOTEBOOK_READBACK_FIX.fullmatch(" ".join(transcript.split()))
+            if note_confirm_valid and transcript_quality is None else None
+        )
+        if note_correction is not None and self._pending_note_confirmation is not None:
+            asked = dict(self._pending_note_confirmation)
+            self._pending_note_confirmation = None
+            corrected = note_correction.group("text").strip()
+            self._last_front_rule = "yes_no_open_question"
+            if not corrected:
+                self._pending_note_capture = {
+                    "configuration_id": configuration_id,
+                    "requested_generation": generation,
+                    "workflow_revision": self._revision,
+                    "step_index": self.current_index,
+                    "step_id": asked.get("step_id"),
+                    "requested_turn_id": turn_id,
+                    "category": asked.get("category"),
+                    "confirmed_correction": True,
+                }
+                plan = self._words_plan(
+                    "고칠 값을 말해 주세요.",
+                    intent_kind="note_correction_requested",
+                    action=CuratedProtocolAction.CLARIFY_PARAMETER,
+                )
+                self._replay[turn_id] = plan
+                return plan
+            return self._execute_turn_intent(
+                CuratedControlIntent(
+                    intent_kind=str(asked.get("intent_kind") or "record_note"),
+                    action=CuratedProtocolAction.RECORD_OBSERVATION,
+                    target_step="authoritative_current_step",
+                    reported_observation=True,
+                    observation_predicate=asked.get("category"),
+                    observation_outcome=corrected,
+                    confidence_source="server_pending_note_correction",
+                    language=language,
+                    normalized_transcript=normalized_confirmation,
+                    note_confirmed=True,
+                ),
+                transcript=transcript,
+                command_key=command_key,
+                turn_id=turn_id,
+                language=language,
+                configuration_id=configuration_id,
+                generation=generation,
+                actor_principal_id=actor_principal_id,
+                actor_role=actor_role,
+                open_question=None,
+            )
         note_reply = (
             "affirmative"
             if (
@@ -20617,6 +20882,7 @@ class CuratedProtocolSession:
                 confidence_source="server_pending_observation_note",
                 language=language,
                 normalized_transcript=normalized_confirmation,
+                note_confirmed=bool(note_pending.get("confirmed_correction")),
             )
         elif transcript_pending_valid and (
             (
@@ -23460,10 +23726,24 @@ class CuratedProtocolSession:
                     )
                 if rounds_notice and language == "ko":
                     control_text = f"{rounds_notice}{control_text}"
-                if forward_said and intent.reported_completion and language == "ko":
-                    # Lane VX, decision 1: nothing was asked, so what was
-                    # recorded is said first.
-                    control_text = f"{self._forward_record_words(completed_label)} {control_text}"
+                if (
+                    forward_said
+                    and intent.reported_completion
+                    and language == "ko"
+                    and command_key == "다음"
+                ):
+                    # Lane VOICE2: the direct "다음" response is one short
+                    # progress line. The next-step summary is only a checked
+                    # stored Korean reading; when none exists, the screen is
+                    # named instead of translating or inventing one here.
+                    self._forward_hint_said = True
+                    control_text = self._short_forward_words(completed_label)
+                elif forward_said and intent.reported_completion and language == "ko":
+                    # Other existing move/completion phrases keep their
+                    # established acknowledgement and arrival wording.
+                    control_text = (
+                        f"{self._forward_record_words(completed_label)} {control_text}"
+                    )
                 plan = self._arrival_plan(
                     control_text, language=language, intent_kind=intent.intent_kind,
                     requested_transition=intent.requested_transition,
@@ -24333,8 +24613,7 @@ class CuratedProtocolSession:
                     f"và tài liệu liên quan. Quy trình vẫn ở bước {step.source_label}."
                 ),
                 "ko": (
-                    "현재 진행 중인 실험 절차와 관련 실험실 "
-                    f"자료에 대한 질문을 도와드릴 수 있어요. 현재 {step.source_label}단계를 유지합니다."
+                    "지금은 '현재 단계', '타이머 얼마', '다음 뭐야'처럼 말해 주세요."
                 ),
                 }.get(language, f"현재 프로토콜은 {step.source_label}단계를 유지합니다.")
             plan = CuratedProtocolTurnPlan(
