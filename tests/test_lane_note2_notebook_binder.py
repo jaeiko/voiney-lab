@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 from pathlib import Path
 from types import SimpleNamespace
@@ -197,41 +198,80 @@ def test_owner_builds_and_exports_the_same_binder_projection_through_http(
     # Resolve the legacy fixture's owner before the binder query.
     assert devices["owner"].get(f"/api/experiment-reports/{first}/notebook").status_code == 200
     owner = srv._account_for_cookie(devices["owner"].session_cookie).principal()
-    second = store.open_report(
-        session_id="session-owned-second", protocol_id="protocol-shared",
-        protocol_title="Fictional source", protocol_revision="revision-one",
-        protocol_sha256="a" * 64, readiness_status="ready", development_only=True,
-        organization_id=owner.organization_id, owner_principal_id=owner.principal_id,
-    )["report_id"]
     workspace = initialize_workspace_store(srv._workspace_settings())
-    workspace.start_experiment(
-        owner, session_id="session-owned-second", protocol_id="protocol-shared",
-        protocol_revision_id="revision-one",
-    )
-    workspace.bind_resource(owner, "experiment_report", second)
+    selected = []
+    for suffix, observation in (
+        ("second", "second-only observation"),
+        ("third", "third-only observation"),
+    ):
+        session_id = f"session-owned-{suffix}"
+        report_id = store.open_report(
+            session_id=session_id, protocol_id="protocol-shared",
+            protocol_title="Fictional source", protocol_revision="revision-one",
+            protocol_sha256="a" * 64, readiness_status="ready", development_only=True,
+            organization_id=owner.organization_id, owner_principal_id=owner.principal_id,
+        )["report_id"]
+        workspace.start_experiment(
+            owner, session_id=session_id, protocol_id="protocol-shared",
+            protocol_revision_id="revision-one",
+        )
+        workspace.bind_resource(owner, "experiment_report", report_id)
+        store.append_event(
+            report_id, event_key=f"{suffix}-start", event_type="session_started",
+            step_id="p-1", step_label="1", payload={"run_changes": []},
+        )
+        store.append_event(
+            report_id, event_key=f"{suffix}-step", event_type="step_completed",
+            step_id="p-1", step_label="1",
+        )
+        store.append_event(
+            report_id, event_key=f"{suffix}-observation", event_type="observation",
+            step_id="p-1", step_label="1", user_wording=observation,
+            category="appearance", confirmation_state="read_back",
+        )
+        store.append_event(
+            report_id, event_key=f"{suffix}-complete", event_type="workflow_completed",
+            step_id="p-1", step_label="1",
+        )
+        store.finalize(report_id, status="completed", event_key=f"{suffix}-final")
+        selected.append(report_id)
     workspace.close()
-    store.append_event(
-        second, event_key="second-start", event_type="session_started",
-        step_id="p-1", step_label="1", payload={"run_changes": []},
+    figure = SimpleNamespace(
+        asset_id="source-crop-one", source_document_id="a" * 64,
+        source_page=2, normalized_bounding_box=(0.1, 0.2, 0.3, 0.4),
+        caption_primary="shared protocol figure", caption_source="Figure 1.",
+        mime_type="image/png", sha256="b" * 64,
     )
-    store.append_event(
-        second, event_key="second-observation", event_type="observation",
-        step_id="p-1", step_label="1", user_wording="second-only observation",
-        category="appearance", confirmation_state="read_back",
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
     )
-    store.append_event(
-        second, event_key="second-complete", event_type="workflow_completed",
-        step_id="p-1", step_label="1",
-    )
-    store.finalize(second, status="completed", event_key="second-final")
-    monkeypatch.setattr(er, "report_protocol_fixture", lambda report: (cell_protocol(), ""))
+
+    def fixture_for_report(report):
+        fixture = cell_protocol()
+        fixture.steps = tuple(
+            step for section in fixture.draft.protocol.sections for step in section.steps
+        )
+        fixture.source_pdf_sha256 = "a" * 64
+        fixture.visual_for_step = lambda index: figure if index == 0 else None
+        fixture.visual_content = lambda index: (figure, png)
+        return fixture, ""
+
+    monkeypatch.setattr(er, "report_protocol_fixture", fixture_for_report)
+    monkeypatch.setattr(srv, "report_protocol_fixture", fixture_for_report)
+    monkeypatch.setattr(er, "audit_notebook_number_provenance", lambda *args, **kwargs: ())
 
     candidates = devices["owner"].get("/api/notebook-binders/candidates")
     assert candidates.status_code == 200, candidates.text
-    assert {item["report_id"] for item in candidates.json()["reports"]} == {first, second}
+    assert {item["report_id"] for item in candidates.json()["reports"]} == {first, *selected}
+    invalid = devices["owner"].post("/api/notebook-binders", json={
+        "topic_name": "   ",
+        "date_from": "", "date_to": "", "protocol_id": "",
+        "report_ids": selected,
+    })
+    assert invalid.status_code == 422, invalid.text
     created = devices["owner"].post("/api/notebook-binders", json={
         "topic_name": "HTTP 묶음", "date_from": "", "date_to": "",
-        "protocol_id": "protocol-shared", "report_ids": [second, first],
+        "protocol_id": "protocol-shared", "report_ids": list(reversed(selected)),
     })
     assert created.status_code == 201, created.text
     binder_id = created.json()["binder_id"]
@@ -246,6 +286,8 @@ def test_owner_builds_and_exports_the_same_binder_projection_through_http(
     document = Document(io.BytesIO(word.content))
     assert "HTTP 묶음" in _text(document)
     assert "second-only observation" in _text(document)
+    assert "third-only observation" in _text(document)
+    assert len(document.inline_shapes) == 2
 
     rendered = []
     monkeypatch.setattr(

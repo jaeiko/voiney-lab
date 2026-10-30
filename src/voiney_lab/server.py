@@ -6904,10 +6904,13 @@ def export_notebook_binder(binder_id:str,format_name:str)->Response:
             return (bytes(response.body),media_type) if media_type.startswith("image/") else None
         if getattr(image,"kind","")!="source_figure":
             return None
-        matches=[]
+        checked_documents=set()
         for entry in binder.entries:
-            if entry.protocol_sha256!=getattr(image,"source_document_id",""):
+            source_document_id=getattr(image,"source_document_id","")
+            if (entry.protocol_sha256!=source_document_id
+                    or entry.protocol_sha256 in checked_documents):
                 continue
+            checked_documents.add(entry.protocol_sha256)
             fixture,_problem=report_protocol_fixture(store.get_report(entry.report_id))
             visual_for_step=getattr(fixture,"visual_for_step",None)
             visual_content=getattr(fixture,"visual_content",None)
@@ -6915,12 +6918,14 @@ def export_notebook_binder(binder_id:str,format_name:str)->Response:
                 continue
             for index in range(len(getattr(fixture,"steps",()) or ())):
                 asset=visual_for_step(index)
-                if asset is not None and asset.asset_id==image.asset_id:
-                    matches.append((visual_content,index))
-        if len(matches)!=1:
-            return None
-        asset,content=matches[0][0](matches[0][1])
-        return content,asset.mime_type
+                if (asset is None or asset.asset_id!=image.asset_id
+                        or asset.source_document_id!=source_document_id):
+                    continue
+                resolved,content=visual_content(index)
+                if (resolved.asset_id==image.asset_id
+                        and resolved.source_document_id==source_document_id):
+                    return content,resolved.mime_type
+        return None
 
     if format_name=="docx":
         content=render_notebook_binder_docx(binder,image_resolver=resolve)
