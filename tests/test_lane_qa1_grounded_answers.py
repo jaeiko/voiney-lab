@@ -52,6 +52,21 @@ class GroundedQuestionRoutingTests(unittest.TestCase):
                 self.assertEqual(decision.reason_code, "problem_contingency_question")
                 self.assertFalse(decision.state_mutation)
 
+    def test_nearby_questions_keep_their_existing_routes(self) -> None:
+        for words in (
+            "AMBIC가 무엇인지 설명해 줄 수 있어?",
+            "다음에 뭐 하면 돼?",
+            "쏟으면 어떡해?",
+            "튜브가 무엇인지 설명해 줄 수 있어?",
+            "끝났다고 하면 어떻게 돼?",
+            "거품이 왜 생기지?",
+        ):
+            with self.subTest(words=words):
+                self.assertNotEqual(
+                    arbitrate_request(words).reason_code,
+                    "problem_contingency_question",
+                )
+
     def test_all_ten_public_protocols_use_the_read_only_problem_help_path(self) -> None:
         protocols = load_corpus()
         self.assertEqual(len(protocols), 10)

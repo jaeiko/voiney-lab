@@ -105,7 +105,10 @@ class InGelRowsTests(unittest.TestCase):
                 # A whole-English sentence is helped on the rules' path; at the
                 # voice boundary the Korean session asks it again (the set's note).
                 english = not re.search(r"[가-힣]", case["utterance"])
-                self.assertEqual(helped, case["expect_help"] or english)
+                # QA1 makes the prospective problem C03 read-only grounded
+                # help; the rest of this older HELP set keeps its expectation.
+                expected = case["expect_help"] or english or case["id"] == "C03"
+                self.assertEqual(helped, expected)
 
 
 if __name__ == "__main__":
