@@ -131,6 +131,28 @@ def test_impact_only_chunk_is_dropped_before_stt(
     assert result["drop_reasons"] in (["transient_noise"], ["no_vad_endpoint"])
 
 
+def test_constant_level_blob_is_dropped_before_stt() -> None:
+    protocol = load_corpus()[0]
+    noise_case = next(
+        case for case in generate_cases(protocol) if case.family == "noise"
+    )
+    pcm = array("h", [12000] * (20 * SAMPLES_PER_FRAME)).tobytes()
+
+    result = asyncio.run(
+        run_case(
+            protocol,
+            noise_case,
+            pcm=pcm,
+            classifier=lambda frame: any(frame),
+            transient_noise_gate=True,
+        )
+    )
+
+    assert result["stt_calls"] == 0
+    assert result["changed_fields"] == []
+    assert result["drop_reasons"] == ["transient_noise"]
+
+
 @pytest.mark.parametrize(
     ("words", "family", "frames"),
     [("네", "ambiguous", 24), ("다음", "complete", 30), ("종료", "stop", 30)],

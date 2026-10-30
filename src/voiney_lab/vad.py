@@ -82,9 +82,8 @@ def _speech_shape_evidence(frames: Iterable[bytes]) -> bool:
 
     Raw words and protocol state are not involved. The pitch-period search
     is limited to 40--200 samples (400--80 Hz); the spectrum check uses only
-    aggregate power ratios. Exact constant carriers remain accepted for the
-    deterministic listener benches -- a real microphone is AC-coupled and
-    WebRTC still has to call the frame voiced first.
+    aggregate power ratios. A constant nonzero signal is rejected: it has no
+    speech spectrum and can represent clipped input or a synthetic impact.
     """
 
     selected = tuple(frames)
@@ -101,7 +100,7 @@ def _speech_shape_evidence(frames: Iterable[bytes]) -> bool:
     centered = samples - float(np.mean(samples))
     power = float(np.dot(centered, centered))
     if power <= 1e-6 * len(centered):
-        return True
+        return False
 
     periodicity = 0.0
     maximum_lag = min(200, len(centered) // 3)
@@ -627,6 +626,10 @@ class EndpointDetector:
         self.transient_noise_gate = bool(enabled)
         if not self.transient_noise_gate:
             self._resume_audio.clear()
+            self._transient_followup_remaining = 0
+            self._transient_followup_audio.clear()
+            self._transient_followup_voiced.clear()
+            self._speech_shape_confirmed = False
 
     def _adaptive_endpoint_voiced(self, voiced: bool, level_db: float) -> bool:
         """Qualify a VAD verdict against this turn's own low-level room sound."""

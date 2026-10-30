@@ -111,6 +111,8 @@ async def evaluate(args: argparse.Namespace) -> dict:
         (p.fixture.fixture_sha256, asdict(c), kind, distance)
         for p, c in cases for kind, distance in conditions
     ]
+    oracle_pcm = oracle_audio()
+    oracle_frames = len(oracle_pcm) // 640
     rows = []
     router = None
     client = None
@@ -139,7 +141,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
                         pcm = (
                             impact_pcm(impact_kind, distance_cm, frames=20)
                             if c.family == 'noise'
-                            else append_impact(oracle_audio(), impact_kind, distance_cm)
+                            else append_impact(oracle_pcm, impact_kind, distance_cm)
                         )
                     result = await run_case(
                         p, c, router_settings=router,
@@ -170,7 +172,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
                             noise_sent_to_stt=(not wearer_case
                                                and result['stt_calls'] > 0),
                             impact_reopened=wearer_case and any(
-                                frames > len(oracle_audio()) // 640
+                                frames > oracle_frames
                                 for frames in result['endpoint_audio_frames']
                             ),
                         )
