@@ -1,7 +1,7 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type MouseEvent, type ReactNode } from 'react';
 import { postJson } from '../api/client';
-import { experimentPath, recordsApi, reportPath, type Notebook, type NotebookResponse, type NotebookSection, type RecordEvent, type ReviewValue } from '../api/recordsApi';
+import { experimentPath, recordsApi, reportPath, type Notebook, type NotebookBinder, type NotebookSection, type RecordEvent, type ReviewValue } from '../api/recordsApi';
 import { isSessionExpired, signedOut, useExperiments, useSignOutOnExpiry, useWorkspaceSession } from '../api/queries';
 import type { AuthSession, Experiment } from '../api/types';
 import { EmptyBox, ErrorBox, LoadingBox, Note } from '../components/Pieces';
@@ -50,6 +50,44 @@ export function RecordsScreen({ session }: { session: AuthSession }) {
         <span>{Number.isInteger(item.completed_step_count) ? c.count(item.completed_step_count!) : c.unknown}</span>
         <span>{Number.isInteger(item.rating) ? c.rating(item.rating!) : item.rating_state === 'unavailable' ? c.ratingUnavailable : c.noRating}</span>
       </a></li>)}</ul>}
+    <NotebookBinderBuilder dateFrom={from} dateTo={to} protocolId={protocol} />
+  </section>;
+}
+
+function NotebookBinderBuilder({ dateFrom, dateTo, protocolId }: { dateFrom: string; dateTo: string; protocolId: string }) {
+  const candidates = useQuery({
+    queryKey: ['notebook-binder-candidates', dateFrom, dateTo, protocolId],
+    queryFn: () => recordsApi.binderCandidates(dateFrom, dateTo, protocolId),
+  });
+  const [topic, setTopic] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [created, setCreated] = useState<NotebookBinder | null>(null);
+  const [busy, setBusy] = useState(false), [failed, setFailed] = useState(false);
+  useSignOutOnExpiry(candidates.error);
+  const available = new Set((candidates.data?.reports ?? []).map(item => item.report_id));
+  const chosen = selected.filter(reportId => available.has(reportId));
+  function toggle(reportId: string) {
+    setSelected(current => current.includes(reportId)
+      ? current.filter(value => value !== reportId) : [...current, reportId]);
+  }
+  async function create() {
+    setBusy(true); setFailed(false); setCreated(null);
+    try {
+      const binder = await recordsApi.createBinder({
+        topic_name: topic.trim(), date_from: dateFrom, date_to: dateTo,
+        protocol_id: protocolId, report_ids: chosen,
+      });
+      setCreated(binder); await candidates.refetch();
+    } catch { setFailed(true); } finally { setBusy(false); }
+  }
+  return <section className='record-section notebook-binder-builder'>
+    <h2>{c.binder}</h2><p>{c.binderWhy}</p>
+    <label className='field'><span>{c.binderTopic}</span><input maxLength={120} value={topic} onChange={event => setTopic(event.target.value)} /></label>
+    {candidates.isPending ? <LoadingBox label={c.loading} /> : candidates.isError ? <ErrorBox message={c.binderFailed} onRetry={() => void candidates.refetch()} /> : !candidates.data.reports.length ? <EmptyBox message={c.binderNoCandidates} /> : <fieldset className='binder-candidates'><legend>{c.binderChoose}</legend>{candidates.data.reports.map(report => <label key={report.report_id}><input type='checkbox' checked={chosen.includes(report.report_id)} onChange={() => toggle(report.report_id)} /><span><strong>{report.protocol_title}</strong> · {time(report.started_at)} · {state(report.status)}</span></label>)}</fieldset>}
+    <button className='btn btn-primary' disabled={busy || !topic.trim() || chosen.length < 2} onClick={() => void create()}>{c.binderCreate}</button>
+    {failed ? <Note>{c.binderFailed}</Note> : null}
+    {created ? <p><a className='btn' href={routes.binder(created.binder_id)}>{c.binderOpen(created.topic_name)}</a></p> : null}
+    {candidates.data?.binders.length ? <><h3>{c.binderSaved}</h3><ul>{candidates.data.binders.map(binder => <li key={binder.binder_id}><a href={routes.binder(binder.binder_id)}>{binder.topic_name}</a> · {time(binder.created_at)}</li>)}</ul></> : null}
   </section>;
 }
 
@@ -210,16 +248,41 @@ function NotebookVisuals({ notebook }: { notebook: Notebook }) {
 
 function DomainNotebook({ notebook, reportId, editable, refresh }: { notebook: Notebook; reportId: string; editable: boolean; refresh: () => void }) {
   const domain = notebook.domain;
+  const hasDomainContent = Boolean(
+    domain?.fields.some(field => field.value) || (notebook.plate_positions ?? []).length
+    || (notebook.sample_rows ?? []).length,
+  );
   const [selected, setSelected] = useState(domain?.code || 'general');
   const [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   async function save() { setBusy(true); setMessage(''); try { await recordsApi.selectDomain(reportId, selected); setMessage(c.saved); refresh(); } catch { setMessage(c.saveFailed); } finally { setBusy(false); } }
   return <>
     {editable ? <div className='record-actions'><label className='field'><span>{c.domainProfile}</span><select value={selected} onChange={event => setSelected(event.target.value)}>{Object.entries(c.domainOptions).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></label><button className='btn' disabled={busy || selected === domain?.code} onClick={() => void save()}>{c.domainSave}</button>{message ? <p role='status'>{message}</p> : null}</div> : null}
-    <h3>{domain?.label || c.domainOptions.general}</h3>
-    <Rows heads={c.domainHeads} rows={(domain?.fields ?? []).map(field => [field.label, field.value, [c.fieldOrigins[field.origin] || '', field.formula ? c.formula(field.formula) : ''].filter(Boolean).join('\n')])} />
+    {hasDomainContent ? <><h3>{domain?.label || c.domainOptions.general}</h3><Rows heads={c.domainHeads} rows={(domain?.fields ?? []).filter(field => field.value).map(field => [field.label, field.value, [c.fieldOrigins[field.origin] || '', field.formula ? c.formula(field.formula) : ''].filter(Boolean).join('\n')])} /></> : <div className='notebook-blank'>{c.blank}</div>}
     {(notebook.plate_positions ?? []).length ? <><h3>{c.plateLayout}</h3><div className='notebook-plate'>{notebook.plate_positions!.map((position, i) => <article key={`${position.label}-${i}`}><strong>{position.label}</strong><span>{position.step_label ? c.step(position.step_label) : c.outside}</span><p>{position.words}</p></article>)}</div></> : null}
     {(notebook.sample_rows ?? []).length ? <><h3>{c.sampleRecords}</h3><Rows heads={c.sampleRecordHeads} rows={notebook.sample_rows!.map(row => [row.identifier, row.records.join('\n')])} /></> : null}
   </>;
+}
+
+function RecordWording({ words, recordState }: { words: string; recordState?: Notebook['purpose_state'] }) {
+  if (!words) return <div className='notebook-blank'>{c.blank}</div>;
+  return <><p>{words}{recordState?.label ? <> <strong className='record-state'>{recordState.label}</strong></> : null}</p>{recordState?.original ? <details><summary>{c.originalSummary}</summary><p>{recordState.original}</p></details> : null}</>;
+}
+
+function MethodRows({ notebook }: { notebook: Notebook }) {
+  const rows = notebook.method_rows ?? [];
+  if (!rows.length) return <div className='notebook-blank'>{c.blank}</div>;
+  return <div className='record-table-wrap'><table className='record-table'><thead><tr>{c.methodHeads.map(head => <th scope='col' key={head}>{head}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.label}-${index}`}>
+    <th scope='row'>{row.label}{row.source_page ? ` · PDF p.${row.source_page}` : ''}</th>
+    <td>{row.translation_status === 'passed' && row.text_ko ? <strong>{row.text_ko}</strong> : <strong>{row.translation_status === 'rejected' ? c.translationRejected : c.translationMissing}</strong>}<small className='method-source'>{row.source_text}</small></td>
+    <td>{row.actual_values}</td><td>{[row.started_at && row.ended_at ? `${row.started_at}–${row.ended_at}` : row.started_at || row.ended_at, row.timer].filter(Boolean).join(' · ')}</td>
+  </tr>)}</tbody></table></div>;
+}
+
+function ObservationRows({ notebook }: { notebook: Notebook }) {
+  if (!notebook.observations.length) return <div className='notebook-blank'>{c.blank}</div>;
+  return <div className='record-table-wrap'><table className='record-table'><thead><tr>{c.observationHeads.map(head => <th scope='col' key={head}>{head}</th>)}</tr></thead><tbody>{notebook.observations.map((observation, index) => <tr key={`${observation.label}-${observation.at}-${index}`}>
+    <th scope='row'>{observation.label}</th><td>{observation.at}</td><td>{observation.text || observation.shown}{observation.state?.label ? <> <strong className='record-state'>{observation.state.label}</strong></> : null}{observation.state?.original ? <details><summary>{c.originalSummary}</summary><p>{observation.state.original}</p></details> : null}</td>
+  </tr>)}</tbody></table></div>;
 }
 
 function InventoryNotebook({ notebook, reportId, editable, refresh }: { notebook: Notebook; reportId: string; editable: boolean; refresh: () => void }) {
@@ -259,21 +322,17 @@ function NotebookTemplateEditor({ template, refresh }: { template: NotebookSecti
   return <details className='record-section notebook-template'><summary>{c.template}</summary><p>{c.templateWhy}</p><ol>{sections.map((section, i) => <li key={section.id}><input aria-label={c.templateName} maxLength={60} value={section.name} onChange={event => rename(i, event.target.value)} /><button className='btn' aria-label={c.moveUp(section.name)} disabled={i === 0} onClick={() => move(i, -1)}>↑</button><button className='btn' aria-label={c.moveDown(section.name)} disabled={i === sections.length - 1} onClick={() => move(i, 1)}>↓</button></li>)}</ol><button className='btn' disabled={busy || sections.some(section => !section.name.trim())} onClick={() => void save()}>{c.templateSave}</button>{message ? <p role='status'>{message}</p> : null}</details>;
 }
 
-function GroundedNotebookSections({ notebook: n, data, reportId, editable, refresh }: { notebook: Notebook; data: NotebookResponse; reportId: string; editable: boolean; refresh: () => void }) {
-  const methodRows = (n.method_rows ?? []).map(row => [
-    row.label + (row.source_page ? ` · PDF p.${row.source_page}` : ''), row.source_text,
-    row.actual_values, [row.started_at && row.ended_at ? `${row.started_at}–${row.ended_at}` : row.started_at || row.ended_at, row.timer].filter(Boolean).join(' · '),
-  ]);
+function GroundedNotebookSections({ notebook: n, review, reportStatus, reportId, editable, refresh }: { notebook: Notebook; review: ReviewValue[]; reportStatus: string; reportId: string; editable: boolean; refresh: () => void }) {
   const blank = <div className='notebook-blank'>{c.blank}</div>;
   const content: Record<string, ReactNode> = {
     experiment_info: <><Rows rows={n.header_rows} /><h3>{c.samples}</h3><Rows heads={c.sampleHeads} rows={n.samples.map(sample => [sample.name, [sample.condition, sample.control ? c.control : ''].filter(Boolean).join(' · ')])} /></>,
-    purpose: n.purpose_words ? <p>{n.purpose_words}</p> : blank,
-    methods: <><Rows heads={c.methodHeads} rows={methodRows} />{n.condition_rows.length ? <><h3>{c.conditions}</h3><Rows heads={c.tableHeads} rows={n.condition_rows} /></> : null}{n.condition_note ? <p>{n.condition_note}</p> : null}<NotebookVisuals notebook={n} />{n.differences.length ? <><h3>{c.differences}</h3>{n.differences.map((line, i) => <p key={i}>{line}</p>)}</> : null}</>,
-    observations: n.observations.length ? <Rows heads={c.observationHeads} rows={n.observations.map(observation => [observation.label, observation.at, observation.shown])} /> : blank,
-    results: (n.result_words || n.result) ? <p>{n.result_words || n.result}</p> : blank,
+    purpose: <RecordWording words={n.purpose_words} recordState={n.purpose_state} />,
+    methods: <><MethodRows notebook={n} />{n.condition_rows.length ? <><h3>{c.conditions}</h3><Rows heads={c.tableHeads} rows={n.condition_rows} /></> : null}{n.condition_note ? <p>{n.condition_note}</p> : null}<NotebookVisuals notebook={n} />{n.differences.length ? <><h3>{c.differences}</h3>{n.differences.map((line, i) => <p key={i}>{line}</p>)}</> : null}</>,
+    observations: <ObservationRows notebook={n} />,
+    results: <RecordWording words={n.result_words || n.result} recordState={n.result_state} />,
     interpretation_next: <div className='notebook-two-columns'><article><h3>{c.interpretation}</h3>{n.interpretation_words ? <p>{n.interpretation_words}</p> : blank}</article><article><h3>{c.next}</h3>{n.next_change ? <p>{n.next_change}</p> : blank}</article></div>,
     domain: <DomainNotebook notebook={n} reportId={reportId} editable={editable} refresh={refresh} />,
-    appendix: <><InventoryNotebook notebook={n} reportId={reportId} editable={editable} refresh={refresh} />{n.materials_words ? <p>{n.materials_words}</p> : null}<h3>{c.previous}</h3>{[n.previous_words, ...n.previous_lines].filter(Boolean).length ? [n.previous_words, ...n.previous_lines].filter(Boolean).map((line, i) => <p key={i}>{line}</p>) : blank}<h3>{c.confirmation}</h3><ul className='record-events'>{data.review.map(item => <ValueReview key={item.item_id} item={item} reportId={reportId} editable={editable && data.report.status !== 'in_progress'} refresh={refresh} />)}</ul><Rows rows={n.pi_rows} /><details><summary>{c.appendixRecords}</summary><Rows rows={n.appendix_step_rows} /><Rows rows={n.appendix_record_rows} /><p>{n.system_words}</p></details><h3>{c.source}</h3><p>{n.source_words}</p></>,
+    appendix: <><InventoryNotebook notebook={n} reportId={reportId} editable={editable} refresh={refresh} />{n.materials_words ? <p>{n.materials_words}</p> : null}<h3>{c.previous}</h3>{[n.previous_words, ...n.previous_lines].filter(Boolean).length ? [n.previous_words, ...n.previous_lines].filter(Boolean).map((line, i) => <p key={i}>{line}</p>) : blank}<h3>{c.confirmation}</h3>{review.length || n.pi_rows.length ? <><ul className='record-events'>{review.map(item => <ValueReview key={item.item_id} item={item} reportId={reportId} editable={editable && reportStatus !== 'in_progress'} refresh={refresh} />)}</ul><Rows rows={n.pi_rows} /></> : blank}<details><summary>{c.appendixRecords}</summary><Rows rows={n.appendix_step_rows} /><Rows rows={n.appendix_record_rows} /><p>{n.system_words}</p></details><h3>{c.source}</h3><p>{n.source_words}</p></>,
   };
   const template = n.section_template?.length === DEFAULT_NOTEBOOK_SECTIONS.length ? n.section_template : DEFAULT_NOTEBOOK_SECTIONS;
   return <>{template.map(section => <section className='record-section notebook-section' data-section={section.id} key={section.id}><h2>{section.name}</h2>{content[section.id]}</section>)}</>;
@@ -297,9 +356,29 @@ export function NotebookScreen({ sessionId, reportId, session }: { sessionId: st
       <h2>{n.title}</h2><Downloads key={reportId} reportId={reportId} />
       {!editable ? <p>{otherOwner ? c.readOnly : c.readOnlyGeneral}</p> : null}
       {session.account?.admin && labTemplate.data?.sections.length ? <NotebookTemplateEditor key={labTemplate.data.version} template={labTemplate.data.sections} refresh={refreshTemplate} /> : null}
-      <GroundedNotebookSections notebook={n} data={data} reportId={reportId} editable={editable} refresh={refresh} />
+      <GroundedNotebookSections notebook={n} review={data.review} reportStatus={data.report.status} reportId={reportId} editable={editable} refresh={refresh} />
       {session.account?.admin ? <PiConfirmation reportId={reportId} refresh={refresh} /> : null}
       <SharingComparison reportId={reportId} editable={editable} />
     </>}
+  </section>;
+}
+
+export function BinderScreen({ binderId }: { binderId: string }) {
+  const query = useQuery({ queryKey: ['notebook-binder', binderId], queryFn: () => recordsApi.binder(binderId) });
+  useSignOutOnExpiry(query.error);
+  const binder = query.data;
+  return <section className='records-screen notebook-screen binder-screen' data-testid='binder-screen'>
+    <a className='btn btn-quiet' href={routes.records}>{c.back}</a>
+    {query.isPending ? <LoadingBox label={c.loading} /> : query.isError ? <ErrorBox message={c.binderFailed} onRetry={() => void query.refetch()} /> : binder ? <>
+      <h1>{binder.topic_name}</h1><p className='page-why'>{c.binderDocumentWhy}</p>
+      <div className='record-downloads'><a className='btn btn-primary btn-big' href={`/api/notebook-binders/${encodeURIComponent(binder.binder_id)}.docx`}>{c.binderWord}</a><a className='btn' href={`/api/notebook-binders/${encodeURIComponent(binder.binder_id)}.pdf`}>{c.binderPdf}</a></div>
+      <section className='record-section'><h2>{c.binderToc}</h2><Rows heads={c.binderTocHeads} rows={binder.entries.map(entry => [entry.protocol_title, time(entry.started_at), time(entry.ended_at), state(entry.status)])} /></section>
+      {binder.entries.map(entry => <article className='binder-entry' key={entry.report_id}>
+        <h2>{entry.protocol_title}</h2><Rows rows={[[c.binderStart, time(entry.started_at)], [c.binderEnd, time(entry.ended_at)], [c.status, state(entry.status)], [c.binderRecord, entry.report_id]]} />
+        {entry.continuation ? <section className='record-section'><h3>{c.binderContinuation}</h3><p>{c.binderPrevious(entry.continuation.source_report_id || entry.continuation.source_session_id)}</p></section> : null}
+        {entry.condition_revisions.length ? <section className='record-section'><h3>{c.binderRevisions}</h3>{entry.condition_revisions.map((revision, index) => <div key={`${revision.label}-${index}`}><h4>{revision.label}</h4>{revision.recorded_at ? <p>{time(revision.recorded_at)}</p> : null}{revision.changes.length ? <ul>{revision.changes.map(change => <li key={change}>{change}</li>)}</ul> : <div className='notebook-blank'>{c.blank}</div>}</div>)}</section> : null}
+        <GroundedNotebookSections notebook={entry.notebook} review={[]} reportStatus={entry.status} reportId={entry.report_id} editable={false} refresh={() => undefined} />
+      </article>)}
+    </> : null}
   </section>;
 }

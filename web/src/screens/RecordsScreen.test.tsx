@@ -1,7 +1,7 @@
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
-import { RecordsScreen, RecordDetailScreen, NotebookScreen } from './RecordsScreen';
+import { BinderScreen, RecordsScreen, RecordDetailScreen, NotebookScreen } from './RecordsScreen';
 import { fakeFetch, renderWithClient, SESSION_DEV } from '../test/helpers';
 import { RECORDS, REPORT, TIMELINE, NOTEBOOK } from '../test/records';
 import type { AuthSession } from '../api/types';
@@ -18,6 +18,12 @@ function setup(overrides: Parameters<typeof fakeFetch>[0] = {}) { return fakeFet
   '/api/experiment-reports/report-rx3/sharing': { json: { report_id: 'report-rx3', shared: false, changed_at: null } },
   '/api/experiment-reports/report-rx3/comparisons': { json: { records: [], permission: { judgment: 'none' } } },
   '/api/notebook-template': { json: { version: 0, sections: [] } },
+  '/api/notebook-binders/candidates': { json: {
+    reports: [
+      { report_id: 'report-rx3', session_id: 'rx3-0', protocol_id: 'source-0', protocol_title: '세포 염색 견본', status: 'completed', started_at: '2026-10-25T01:00:00Z', ended_at: '2026-10-25T02:00:00Z' },
+      { report_id: 'report-rx3-2', session_id: 'rx3-2', protocol_id: 'source-2', protocol_title: '전극 코팅 견본', status: 'completed', started_at: '2026-10-27T01:00:00Z', ended_at: '2026-10-27T02:00:00Z' },
+    ], binders: [],
+  } },
   ...overrides,
 }); }
 it('lists three fields with exact completion counts, dates and saved rating; searches and filters', async () => {
@@ -50,6 +56,106 @@ it('renders the server notebook tables as text with unconfirmed labels and uncha
   setup(); renderWithClient(<NotebookScreen sessionId='rx3-0' reportId='report-rx3' session={SESSION_DEV as AuthSession} />);
   expect(await screen.findByText('원문 60 s → 실제 90 s [미확인]')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Word로 내려받기' })).toHaveAttribute('href', '/api/experiment-reports/report-rx3.docx');
+});
+it('shows checked Korean methods, record states, original wording, terminal event and compact empty sections', async () => {
+  setup({
+    '/api/experiment-reports/report-rx3/notebook': { json: {
+      ...NOTEBOOK,
+      notebook: {
+        ...NOTEBOOK.notebook,
+        purpose_words: '고친 목적',
+        purpose_state: { code: 'corrected', label: '정정됨', original: '처음 목적' },
+        result_words: '관찰 결과',
+        result_state: { code: 'read_back', label: '되읽음', original: '' },
+        observations: [{
+          label: '1', at: '10:01', kind: '관찰', shown: '맑음 [정정됨]', text: '맑음',
+          state: { code: 'corrected', label: '정정됨', original: '흐림' },
+        }],
+        method_rows: [{
+          label: '1', text_ko: '60초 동안 섞는다.', source_text: 'Mix for 60 s.',
+          translation_status: 'passed', translation_source: 'checked_translation',
+          actual_values: '', started_at: '10:00', ended_at: '10:01', timer: '',
+        }, {
+          label: '2', text_ko: '', source_text: 'Rejected source step.',
+          translation_status: 'rejected', translation_source: '', actual_values: '',
+          started_at: '', ended_at: '', timer: '',
+        }, {
+          label: '3', text_ko: '', source_text: 'Missing source step.',
+          translation_status: 'missing', translation_source: '', actual_values: '',
+          started_at: '', ended_at: '', timer: '',
+        }],
+        timeline: [{ at: '10:00', step_label: '', kind: 'completed', text: '실험 완료' }],
+        interpretation_words: '', next_change: '',
+        domain: { code: 'general', label: '공통', selected_by: 'source_analysis', fields: [] },
+      },
+    } },
+  });
+  renderWithClient(<NotebookScreen sessionId='rx3-0' reportId='report-rx3' session={SESSION_DEV as AuthSession} />);
+  expect(await screen.findByText('60초 동안 섞는다.')).toBeInTheDocument();
+  expect(screen.getByText('Mix for 60 s.')).toBeInTheDocument();
+  expect(screen.getByText('한국어 번역 검사 거절')).toBeInTheDocument();
+  expect(screen.getByText('한국어 번역 없음')).toBeInTheDocument();
+  expect(screen.getAllByText('정정됨').length).toBeGreaterThanOrEqual(2);
+  expect(screen.getByText('되읽음')).toBeInTheDocument();
+  expect(screen.getAllByText('처음 기록')).toHaveLength(2);
+  expect(screen.getByText('처음 목적')).toBeInTheDocument();
+  expect(screen.getByText('흐림')).toBeInTheDocument();
+  expect(screen.getByText('실험 완료')).toBeInTheDocument();
+  expect(screen.getAllByText('기록 없음').length).toBeGreaterThanOrEqual(2);
+  expect(screen.queryByRole('heading', { name: '공통' })).not.toBeInTheDocument();
+});
+
+const BINDER = {
+  binder_id: 'NB-ONE', topic_name: '막 조건 검토', date_from: '', date_to: '',
+  protocol_id: '', created_at: '2026-10-30T01:00:00Z',
+  audit: { ungrounded_numbers: 0, cross_experiment_mixing: 0 },
+  entries: [
+    {
+      report_id: 'report-rx3', session_id: 'rx3-0', protocol_id: 'source-0',
+      protocol_title: '세포 염색 견본', started_at: '2026-10-25T01:00:00Z',
+      ended_at: '2026-10-25T02:00:00Z', status: 'completed', notebook: NOTEBOOK.notebook,
+      continuation: null, condition_revisions: [],
+    },
+    {
+      report_id: 'report-rx3-2', session_id: 'rx3-2', protocol_id: 'source-2',
+      protocol_title: '전극 코팅 견본', started_at: '2026-10-27T01:00:00Z',
+      ended_at: '2026-10-27T02:00:00Z', status: 'completed', notebook: {
+        ...NOTEBOOK.notebook,
+        title: '전극 코팅 견본', observations: [{ label: '2', at: '11:00', kind: '관찰', shown: '전극만의 관찰', text: '전극만의 관찰' }],
+      },
+      continuation: { source_report_id: 'report-rx3', source_session_id: 'rx3-0' },
+      condition_revisions: [{ label: '연구실판 v1', recorded_at: '2026-10-27T00:50:00Z', changes: ['2단계 · 80 µL → 90 µL'] }],
+    },
+  ],
+};
+
+it('lets a person append a named binder from filtered owned reports', async () => {
+  const { calls } = setup({ '/api/notebook-binders': { json: BINDER, status: 201 } });
+  renderWithClient(<RecordsScreen session={SESSION_DEV as AuthSession} />);
+  await userEvent.type(await screen.findByLabelText('연구 주제 이름'), '막 조건 검토');
+  const choices = screen.getAllByRole('checkbox');
+  await userEvent.click(choices[0]); await userEvent.click(choices[1]);
+  await userEvent.click(screen.getByRole('button', { name: '묶음 노트 만들기' }));
+  const write = calls.find(call => call.path === '/api/notebook-binders' && call.init?.method === 'POST');
+  expect(JSON.parse(write!.init!.body as string)).toEqual({
+    topic_name: '막 조건 검토', date_from: '', date_to: '', protocol_id: '',
+    report_ids: ['report-rx3', 'report-rx3-2'],
+  });
+  expect(await screen.findByRole('link', { name: '막 조건 검토 열기' })).toHaveAttribute('href', '#/records/binders/NB-ONE');
+});
+
+it('renders binder TOC, isolated entries, continuation and lab revision with matching exports', async () => {
+  setup({ '/api/notebook-binders/NB-ONE': { json: BINDER } });
+  renderWithClient(<BinderScreen binderId='NB-ONE' />);
+  expect(await screen.findByRole('heading', { name: '막 조건 검토' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '목차' })).toBeInTheDocument();
+  expect(screen.getByText('저장 지점에서 이어서 시작')).toBeInTheDocument();
+  expect(screen.getByText('앞선 실험 기록 report-rx3')).toBeInTheDocument();
+  expect(screen.getByText('연구실판 v1')).toBeInTheDocument();
+  expect(screen.getByText('2단계 · 80 µL → 90 µL')).toBeInTheDocument();
+  expect(screen.getByText('전극만의 관찰')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: '묶음 Word 내려받기' })).toHaveAttribute('href', '/api/notebook-binders/NB-ONE.docx');
+  expect(screen.getByRole('link', { name: '묶음 PDF 내려받기' })).toHaveAttribute('href', '/api/notebook-binders/NB-ONE.pdf');
 });
 it('shows the recorded public-source disclosure in the experiment information section', async () => {
   setup({

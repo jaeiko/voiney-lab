@@ -16,19 +16,20 @@ export interface ReviewValue {
   item_id: string; step_label?: string; kind: string; text: string; confirmed: boolean;
   corrected?: boolean; original?: string;
 }
-export interface NotebookMethodRow { label: string; source_text: string; actual_values: string; started_at: string; ended_at: string; timer: string; source_page?: number | null }
+export interface NotebookRecordState { code: 'recorded' | 'read_back' | 'confirmed' | 'corrected'; label: string; original: string }
+export interface NotebookMethodRow { label: string; text_ko?: string; source_text: string; translation_status?: 'passed' | 'rejected' | 'missing'; translation_source?: string; actual_values: string; started_at: string; ended_at: string; timer: string; source_page?: number | null }
 export interface NotebookTimelineItem { at: string; step_label: string; kind: string; text: string }
 export interface NotebookValueBar { label: string; kind: string; source: string; actual: string; source_number: string; actual_number: string; unit: string; source_unit?: string; actual_unit?: string }
-export interface NotebookImage { kind: 'photo' | 'source_figure'; step_label: string; caption: string; url: string; media_type: string; asset_id: string; source_page?: number | null; interpretation_status?: string }
+export interface NotebookImage { kind: 'photo' | 'source_figure'; step_label: string; caption: string; url: string; media_type: string; asset_id: string; source_page?: number | null; interpretation_status?: string; source_document_id?: string; bounding_box?: number[] | null; caption_source?: string; source_session_id?: string }
 export interface NotebookDomainField { label: string; value: string; origin: 'source' | 'record' | 'calculated' | 'blank'; source_keys?: string[]; formula?: string }
 export interface NotebookInventoryItem { kind: string; name: string; vendor: string; catalog_number: string; lot_number: string; stage: string; source_keys?: string[] }
 export interface NotebookSection { id: string; name: string }
 export interface Notebook {
   title: string; subtitle: string; header_rows: string[][];
-  purpose_words: string; samples: Array<{ name: string; condition: string; control: boolean }>;
+  purpose_words: string; purpose_state?: NotebookRecordState; samples: Array<{ name: string; condition: string; control: boolean }>;
   condition_rows: string[][]; condition_note: string; materials_words: string;
-  observations: Array<{ label: string; at: string; kind: string; shown: string }>;
-  result: string; result_words: string; next_change: string; differences: string[];
+  observations: Array<{ label: string; at: string; kind: string; shown: string; text?: string; state?: NotebookRecordState }>;
+  result: string; result_words: string; result_state?: NotebookRecordState; next_change: string; differences: string[];
   previous_words: string; previous_lines: string[]; next_lines: string[]; pi_rows: string[][];
   appendix_step_rows: string[][]; appendix_record_rows: string[][]; source_words: string; system_words: string;
   method_rows?: NotebookMethodRow[]; timeline?: NotebookTimelineItem[]; value_bars?: NotebookValueBar[];
@@ -52,6 +53,19 @@ export interface ComparisonResponse {
   permission: { scope?: string; other_records?: string; withdrawal?: string; judgment: string };
 }
 export interface NotebookTemplate { version: number; sections: NotebookSection[]; created_at?: string | null }
+export interface NotebookBinderCandidate { report_id: string; session_id: string; protocol_id: string; protocol_title: string; status: string; started_at: string; ended_at: string }
+export interface NotebookBinderSummary { binder_id: string; topic_name: string; date_from: string; date_to: string; protocol_id: string; report_ids: string[]; created_at: string }
+export interface NotebookBinderEntry {
+  report_id: string; session_id: string; protocol_id: string; protocol_title: string;
+  started_at: string; ended_at: string; status: string; notebook: Notebook;
+  continuation: { source_report_id: string; source_session_id: string } | null;
+  condition_revisions: Array<{ label: string; recorded_at: string; changes: string[] }>;
+}
+export interface NotebookBinder {
+  binder_id: string; topic_name: string; date_from: string; date_to: string; protocol_id: string;
+  created_at: string; entries: NotebookBinderEntry[];
+  audit: { ungrounded_numbers: number; cross_experiment_mixing: number };
+}
 const enc = encodeURIComponent;
 export const experimentPath = (id: string, suffix = '') => `/api/workspace/experiments/${enc(id)}${suffix}`;
 export const reportPath = (id: string, suffix: string) => `/api/experiment-reports/${enc(id)}${suffix}`;
@@ -75,4 +89,16 @@ export const recordsApi = {
   saveNotebookTemplate: (sections: NotebookSection[]) => apiFetch<NotebookTemplate>('/api/notebook-template', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sections }),
   }),
+  binderCandidates: (dateFrom = '', dateTo = '', protocolId = '') => {
+    const query = new URLSearchParams();
+    if (dateFrom) query.set('date_from', dateFrom);
+    if (dateTo) query.set('date_to', dateTo);
+    if (protocolId) query.set('protocol_id', protocolId);
+    const suffix = query.toString();
+    return apiFetch<{ reports: NotebookBinderCandidate[]; binders: NotebookBinderSummary[] }>(`/api/notebook-binders/candidates${suffix ? `?${suffix}` : ''}`);
+  },
+  createBinder: (body: { topic_name: string; date_from: string; date_to: string; protocol_id: string; report_ids: string[] }) => apiFetch<NotebookBinder>('/api/notebook-binders', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }),
+  binder: (id: string) => apiFetch<NotebookBinder>(`/api/notebook-binders/${enc(id)}`),
 };
