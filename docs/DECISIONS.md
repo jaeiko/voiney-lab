@@ -16,6 +16,7 @@
 
 | 날짜 | 결정 | 이유 | 줄 | 코드에서 | 남은 질문 |
 |---|---|---|---|---|---|
+| 2026-10-29 | 말이 끝난 뒤의 짧은 타자·도구·피펫 충격은 제한된 PCM 창의 주기성·대역 에너지가 말 모양일 때만 침묵을 다시 열고, 충격음만인 덩어리는 STT 전에 `transient_noise`로 버린다. 바로 뒤 짧은 명령은 WebRTC 네 프레임과 말 모양을 함께 확인해 살린다. 1초 말 끝·15초 상한·상태 기계는 바꾸지 않는다. 새 VAD 모델은 같은 자료의 오프라인 평가 계획만 두고 제품 의존성은 넣지 않는다 | 사람 음성 시험 3의 새 화면에서 보인 버림 34개는 너무 짧음 11·빈 받아쓰기 8·받아쓰기 실패 14·쓸 수 없게 된 끼어들기 1이었고, 진단 원음의 충격 묶음이 침묵을 되열어 긴 빈 받아쓰기로 갔다 | LISTEN3 | `vad.py`의 transient gate, `ListenerSession`, `tests/test_lane_listen3_transient_noise.py`, `scripts/sim/run.py --impact-matrix` | 실제 타자·유리·피펫과 30 cm·1 m, 다양한 목소리에서 사람 재시험. 선택 VAD 후보의 CPU·지연·놓침 비교 |
 | 2026-10-02 (D1), 10-03 | 말 한 번은 한 줄로 간다: 앞단 규칙 → LLM 라우터(답하거나 도구로 바꾸기를 **제안**) → 서버 검증. 같은 말의 상태 바꿈을 두 길이 따로 정하면 안 된다 | 모델은 제안만 하고, 상태 기계는 하나(`CuratedProtocolSession`)여야 한다 | R, R2a | `curated_protocol.py` `CuratedProtocolSession.front_plan`, `apply_tool_proposal`; `llm_router.py` `route_turn_with_llm_router`, `validate_tool_proposals` | 파일럿에서 라우터를 켤지 |
 | 2026-08-19 | 음성은 Cascade(말 → 글 → 말) 하나뿐이다. Native/Realtime 길은 문서에도 설정에도 두지 않는다 | 실행되고 시험된 길만 문서에 쓴다 | — | `server.py` `ready` 의 `pipelines=["cascade"]` | — |
 | 2026-10-08 | **승인 단계가 없다.** 분석이 통과(원문 근거 검사 포함)하고 실험자가 시작을 누르면 실행된다. 검토자·관리자 승인, 회수, 연구실 변형은 없다 | MVP 줄이기. 사람 확인은 시작 하나이고 장부에 남는다 | DI (PR #52) | `experiment_protocol.py` `EXECUTION_BLOCKING_REASON_CODES`, `execution_blocking_reasons`; `protocol_catalog.py` `available_for_execution` | — |
