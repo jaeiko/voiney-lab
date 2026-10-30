@@ -19,6 +19,9 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT/'src'))
 
 from scripts.sim.corpus import load_corpus, generate_cases, CORPUS
+from scripts.sim.audio import (
+    IMPACT_DISTANCES_CM, IMPACT_NOISES, append_impact, impact_pcm, oracle_audio,
+)
 from scripts.sim.runner import run_case
 from scripts.sim.metrics import score_case, aggregate
 from scripts.sim.split import add_split_arguments, select_cases
@@ -100,6 +103,14 @@ def router_cost_estimate(
 
 async def evaluate(args: argparse.Namespace) -> dict:
     cases, split, catalog_counts, translation_coverage = prepare_cases(args)
+    conditions = (
+        tuple((kind, distance) for kind in IMPACT_NOISES for distance in IMPACT_DISTANCES_CM)
+        if args.impact_matrix else ((None, None),)
+    )
+    workload = [
+        (p.fixture.fixture_sha256, asdict(c), kind, distance)
+        for p, c in cases for kind, distance in conditions
+    ]
     rows = []
     router = None
     client = None
@@ -122,14 +133,52 @@ async def evaluate(args: argparse.Namespace) -> dict:
             return client
         try:
             for p,c in cases:
-                result = await run_case(p,c, router_settings=router, offline=not args.configured_router,
-                                        role_client=role_client if args.configured_router else None,
-                                        classifier=lambda frame: any(frame), oracle_environment=True)
-                row = score_case(c,result,source=' '.join(page.text for page in p.fixture.draft.extraction.pages))
-                row.update(protocol=p.code, noise='not_measured', snr='not_measured',voice='oracle_text',speed='not_measured')
-                rows.append(row)
-                if len(rows) % 25 == 0:
-                    print(json.dumps({'sim_completed':len(rows),'sim_total':len(cases)}),file=sys.stderr,flush=True)
+                for impact_kind, distance_cm in conditions:
+                    pcm = None
+                    if impact_kind is not None and distance_cm is not None:
+                        pcm = (
+                            impact_pcm(impact_kind, distance_cm, frames=20)
+                            if c.family == 'noise'
+                            else append_impact(oracle_audio(), impact_kind, distance_cm)
+                        )
+                    result = await run_case(
+                        p, c, router_settings=router,
+                        offline=not args.configured_router,
+                        role_client=role_client if args.configured_router else None,
+                        classifier=lambda frame: any(frame), oracle_environment=True,
+                        pcm=pcm,
+                        transient_noise_gate=(
+                            args.impact_matrix and args.impact_filter == 'current'),
+                    )
+                    row = score_case(
+                        c, result,
+                        source=' '.join(page.text for page in p.fixture.draft.extraction.pages),
+                    )
+                    row.update(
+                        protocol=p.code,
+                        noise=impact_kind or 'not_measured',
+                        distance_cm=(distance_cm if distance_cm is not None
+                                     else 'not_measured'),
+                        snr='not_measured', voice='oracle_text', speed='not_measured',
+                    )
+                    if args.impact_matrix:
+                        wearer_case = c.family != 'noise'
+                        row.update(
+                            impact_position=('after_speech' if wearer_case
+                                             else 'noise_only'),
+                            wearer_dropped=wearer_case and result['stt_calls'] == 0,
+                            noise_sent_to_stt=(not wearer_case
+                                               and result['stt_calls'] > 0),
+                            impact_reopened=wearer_case and any(
+                                frames > len(oracle_audio()) // 640
+                                for frames in result['endpoint_audio_frames']
+                            ),
+                        )
+                    rows.append(row)
+                    if len(rows) % 25 == 0:
+                        print(json.dumps(
+                            {'sim_completed':len(rows),'sim_total':len(workload)},
+                        ), file=sys.stderr, flush=True)
                 if budget is not None and budget.stopped:
                     break
         finally:
@@ -149,10 +198,12 @@ async def evaluate(args: argparse.Namespace) -> dict:
         'utc':datetime.now(timezone.utc).isoformat(),
         'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
         'corpus_sha256':hashlib.sha256(args.corpus.read_bytes()).hexdigest(),
-        'workload_sha256':hashlib.sha256(json.dumps([(p.fixture.fixture_sha256,asdict(c)) for p,c in cases],sort_keys=True,ensure_ascii=False).encode()).hexdigest(),
+        'workload_sha256':hashlib.sha256(json.dumps(workload,sort_keys=True,ensure_ascii=False).encode()).hexdigest(),
         'catalog':catalog_counts, 'provider_requests':budget.calls if budget else 0,
         'reserved_usd':round(budget.usd, 4) if budget else 0, 'split':split,
-        'budget_stopped':bool(budget and budget.stopped), 'planned_cases':len(cases),
+        'budget_stopped':bool(budget and budget.stopped), 'planned_cases':len(workload),
+        'impact_matrix':args.impact_matrix,
+        'impact_filter':args.impact_filter if args.impact_matrix else None,
         'translations_sha256':hashlib.sha256(args.translations.read_bytes()).hexdigest() if args.translations else None,
         'translation_coverage':translation_coverage,
         'router_cost_estimate':router_cost_estimate(
@@ -163,7 +214,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
     }
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--corpus', type=Path, default=CORPUS)
     parser.add_argument('--catalog-copy', type=Path)
@@ -174,6 +225,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--fail-on-wrong-state', action='store_true')
     parser.add_argument('--fail-on-emergency-miss', action='store_true')
     parser.add_argument('--translations', type=Path, help='source-identified stored Korean readings; no model call')
+    parser.add_argument('--impact-matrix', action='store_true',
+                        help='procedural typing/glass/pipette impacts at 30 cm and 1 m')
+    parser.add_argument('--impact-filter', choices=('legacy', 'current'), default='current',
+                        help='endpoint treatment for --impact-matrix before/after comparisons')
     parser.add_argument('--configured-router', action='store_true', help='plan an oracle-STT model comparison using shell router settings')
     parser.add_argument('--execute', action='store_true', help='execute the configured-router plan with real model requests')
     parser.add_argument('--max-calls', type=int, default=20)
@@ -189,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
         import math
         if args.execute and not args.configured_router:
             raise ValueError('--execute requires --configured-router')
+        if args.impact_matrix and args.configured_router:
+            raise ValueError('--impact-matrix is offline-only')
         if args.max_calls < 1 or any(not math.isfinite(x) or x <= 0 for x in (
             args.max_usd, args.reserve_usd_per_request, args.router_input_rate, args.router_output_rate)):
             raise ValueError('positive finite caps/rates required')
@@ -214,6 +271,20 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     return 1 if ((args.fail_on_wrong_state and report['overall']['wrong_state'])
                  or (args.fail_on_emergency_miss and report['overall']['emergency_miss'])) else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Product modules log content-free turn telemetry; the SIM report and its
+    # explicit progress records are the CLI's output contract. Restore the
+    # process-wide logging threshold because pytest calls this entry point in
+    # process before tests that assert production logs.
+    import logging
+    previous_disable = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        return _main(argv)
+    finally:
+        logging.disable(previous_disable)
 
 
 if __name__ == '__main__':
