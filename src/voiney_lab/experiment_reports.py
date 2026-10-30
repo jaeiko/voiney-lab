@@ -3391,6 +3391,7 @@ NO_SOURCE_VALUES_WORDS = "프로토콜 원문을 불러오지 못해 원문 값�
 NO_VALUED_STEPS_WORDS = "원문에 값(양·시간·온도·속도·농도)이 적힌 과정을 수행하지 않았다."
 NO_OBSERVATION_WORDS = "기록된 관찰이 없다."
 NO_PI_WORDS = "PI 확인: 아직 없음."
+NO_RECORD_WORDS = "기록 없음"
 NOTEBOOK_SUBTITLE = "실험 노트"
 #: Lane HELP: the event of the help given after a problem.
 PROBLEM_HELP_EVENT = "problem_help"
@@ -3458,6 +3459,15 @@ class NotebookValue:
 
 
 @dataclass(frozen=True)
+class NotebookRecordState:
+    """How a person's current notebook wording reached the append-only record."""
+
+    code: str  # recorded | read_back | confirmed | corrected
+    label: str
+    original: str = ""
+
+
+@dataclass(frozen=True)
 class NotebookObservation:
     label: str
     process: str
@@ -3466,6 +3476,9 @@ class NotebookObservation:
     shown: str  # as the table shows it (correction, marks)
     at: str
     kind: str
+    state: NotebookRecordState = field(default_factory=lambda: NotebookRecordState(
+        "recorded", "",
+    ))
 
 
 @dataclass(frozen=True)
@@ -3596,6 +3609,7 @@ class LabNotebook:
     header_rows: tuple[tuple[str, str], ...]
     purpose: str  # the purpose as said (""), its title form
     purpose_words: str  # the whole utterance
+    purpose_state: NotebookRecordState
     samples: tuple[NotebookSample, ...]
     values: tuple[NotebookValue, ...]
     condition_rows: tuple[tuple[str, str], ...]
@@ -3604,6 +3618,7 @@ class LabNotebook:
     observations: tuple[NotebookObservation, ...]
     result: str
     result_words: str
+    result_state: NotebookRecordState
     next_change: str
     differences: tuple[str, ...]
     previous_words: str  # "지난번: ..." or ""
@@ -4373,12 +4388,27 @@ def _notebook_visual_facts(
         "workflow_resumed": ("resume", "실험 다시 시작"),
         "observation": ("observation", "관찰·특이사항"),
         "photo_attached": ("photo", "사진"),
+        "workflow_completed": ("completed", "실험 완료"),
+        "session_stopped": ("stopped", "실험 중단"),
     }
     positions: list[NotebookPlatePosition] = []
     sample_records: dict[str, list[str]] = {}
     for event in events:
         event_type = str(event.get("event_type") or "")
         words = " ".join(str(event.get("user_wording") or "").split())
+        if event_type == "report_finalized" and not any(
+            item.kind in {"completed", "stopped"} for item in timeline
+        ):
+            payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+            status = str(payload.get("status") or "")
+            if status in {"completed", "stopped"}:
+                timeline.append(NotebookTimelineItem(
+                    at=_clock(_local(event.get("created_at"), facts.zone)),
+                    step_label=str(event.get("step_label") or ""),
+                    kind=status,
+                    text="실험 완료" if status == "completed" else "실험 중단",
+                    source_key=str(event.get("event_key") or ""),
+                ))
         if event_type in timeline_kinds:
             kind, fallback = timeline_kinds[event_type]
             timeline.append(NotebookTimelineItem(
@@ -4487,6 +4517,18 @@ def build_lab_notebook(
     def mark(key: str) -> str:
         return f" {UNCONFIRMED_MARK}" if key and key in unconfirmed_keys else ""
 
+    def record_state(index: int, *, corrected: bool = False, original: str = "") -> NotebookRecordState:
+        if corrected:
+            return NotebookRecordState("corrected", "정정됨", original)
+        confirmation = str(events[index].get("confirmation_state") or "")
+        if confirmation == "read_back":
+            return NotebookRecordState("read_back", "되읽음")
+        if confirmation in {"experimenter_confirmed", "experimenter_corrected"} or (
+            payloads[index].get("experimenter_confirmed") is True
+        ):
+            return NotebookRecordState("confirmed", "")
+        return NotebookRecordState("recorded", "")
+
     def process_words(step_labels: Sequence[str]) -> str:
         section = section_of.get(step_labels[0], "")
         runs = _label_runs(list(step_labels))
@@ -4511,12 +4553,17 @@ def build_lab_notebook(
 
     # Decision ②'s sayings: the purpose and samples, the result and the next change.
     purpose_words = ""
+    purpose_state = NotebookRecordState("recorded", "기록 없음")
     samples: list[NotebookSample] = []
     result_words = result = next_change = ""
+    result_state = NotebookRecordState("recorded", "기록 없음")
     for index, kind in enumerate(kinds):
         if kind == PURPOSE_RECORDED and not purpose_words:
             amended = keys[index] in latest_text
             purpose_words = latest_text.get(keys[index]) or wordings[index]
+            purpose_state = record_state(
+                index, corrected=amended, original=wordings[index] if amended else "",
+            )
             listed = payloads[index].get("samples") if not amended else None
             if isinstance(listed, (list, tuple)) and listed:
                 samples = [NotebookSample(
@@ -4530,6 +4577,9 @@ def build_lab_notebook(
         elif kind == RESULT_RECORDED and not result_words:
             amended = keys[index] in latest_text
             result_words = latest_text.get(keys[index]) or wordings[index]
+            result_state = record_state(
+                index, corrected=amended, original=wordings[index] if amended else "",
+            )
             payload = payloads[index]
             if not amended and ("result" in payload or "next_change" in payload):
                 result = " ".join(str(payload.get("result") or "").split())
@@ -4789,13 +4839,23 @@ def build_lab_notebook(
         if record.kind == "사진":
             text = "사진: " + text.removeprefix("사진 첨부 — ").removeprefix("사진 첨부").strip() if text != "사진 첨부" else "사진"
         shown = text
-        if record.status == "정정됨":
-            shown = f"{text} (정정됨 — 처음 “{record.original}”)"
+        event_index = index_by_key.get(record.key)
+        state = (
+            record_state(
+                event_index, corrected=record.status == "정정됨",
+                original=record.original if record.status == "정정됨" else "",
+            )
+            if event_index is not None else NotebookRecordState("recorded", "")
+        )
+        shown = text + (f" [{state.label}]" if state.label else "")
+        if state.original:
+            shown += f"\n처음 기록: {state.original}"
         shown += mark(record.key)
         sample = " ".join(str(payload.get("sample") or "").split()) or sample_in_text(record.text) or "—"
         observations.append(NotebookObservation(
             label=record.step_label, process=process_words([record.step_label]) if record.step_label != "—" else "—",
-            sample=sample, text=text, shown=shown, at=record.at or "—", kind=record.kind))
+            sample=sample, text=text, shown=shown, at=record.at or "—", kind=record.kind,
+            state=state))
 
     # What was done differently from the source, and the problems (decision ① 5).
     differences: list[NotebookDifference] = []
@@ -4995,9 +5055,11 @@ def build_lab_notebook(
     inventory = _notebook_inventory(facts, events)
     images = _notebook_photos(events, session_id)
     return LabNotebook(
-        title=title, subtitle=subtitle, header_rows=tuple(header), purpose=purpose, purpose_words=purpose_words,
+        title=title, subtitle=subtitle, header_rows=tuple(header), purpose=purpose,
+        purpose_words=purpose_words, purpose_state=purpose_state,
         samples=tuple(samples), values=tuple(values), condition_rows=tuple(rows), condition_note=condition_note,
-        materials_words=materials_words, observations=tuple(observations), result=result, result_words=result_words,
+        materials_words=materials_words, observations=tuple(observations), result=result,
+        result_words=result_words, result_state=result_state,
         next_change=next_change, differences=tuple(item.text for item in differences),
         previous_words=previous_words, previous_lines=tuple(previous_lines), next_lines=tuple(next_lines),
         pi_rows=tuple(pi_rows), appendix_step_rows=tuple(step_rows), appendix_record_rows=tuple(record_rows),
@@ -5903,7 +5965,16 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
             (sample.name, sample.condition, "예" if sample.control else "") for sample in book.samples)))
 
     blocks.append(("h1", NOTEBOOK_SECTIONS[1]))
-    blocks.append(("p", book.purpose_words))
+    if book.purpose_words:
+        blocks.append((
+            "p", book.purpose_words + (
+                f" [{book.purpose_state.label}]" if book.purpose_state.label else ""
+            ),
+        ))
+        if book.purpose_state.original:
+            blocks.append(("note", f"처음 기록: {book.purpose_state.original}"))
+    else:
+        blocks.append(("note", NO_RECORD_WORDS))
 
     blocks.append(("h1", NOTEBOOK_SECTIONS[2]))
     if book.method_rows:
@@ -5932,6 +6003,7 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
             "timer_cancel": "타이머 취소", "timer_restart": "타이머 처음부터",
             "timer_end": "타이머 끝", "pause": "실험 일시정지", "resume": "실험 다시 시작",
             "observation": "관찰·특이사항", "photo": "사진",
+            "completed": "실험 완료", "stopped": "실험 중단",
         }
         blocks += [("h2", "단계별 타임라인"), _table(TIMELINE_HEADER, tuple(
             (item.at, item.step_label or "—", timeline_words.get(item.kind, item.kind), item.text)
@@ -5950,19 +6022,37 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
         blocks.append(_table(OBSERVATION_HEADER, tuple(
             (item.process, item.sample, item.shown, item.at) for item in book.observations)))
     else:
-        blocks.append(("p", ""))
+        blocks.append(("note", NO_RECORD_WORDS))
 
     blocks.append(("h1", NOTEBOOK_SECTIONS[4]))
-    blocks.append(("p", book.result))
+    if book.result:
+        blocks.append((
+            "p", book.result + (
+                f" [{book.result_state.label}]" if book.result_state.label else ""
+            ),
+        ))
+        if book.result_state.original:
+            blocks.append(("note", f"처음 기록: {book.result_state.original}"))
+    else:
+        blocks.append(("note", NO_RECORD_WORDS))
 
     blocks.append(("h1", NOTEBOOK_SECTIONS[5]))
-    blocks.append(_table(("항목", "내용"), (
-        ("해석", book.interpretation_words),
-        ("다음 할 일", book.next_change),
-    )))
+    interpretation_rows = tuple(
+        (label, value) for label, value in (
+            ("해석", book.interpretation_words), ("다음 할 일", book.next_change),
+        ) if value
+    )
+    blocks.append(
+        _table(("항목", "내용"), interpretation_rows)
+        if interpretation_rows else ("note", NO_RECORD_WORDS)
+    )
 
     blocks.append(("h1", NOTEBOOK_SECTIONS[6]))
-    blocks.append(("h2", book.domain.label))
+    has_domain_content = bool(book.domain.fields or book.plate_positions or (
+        book.domain.code == "battery_materials" and book.sample_rows
+    ))
+    if has_domain_content:
+        blocks.append(("h2", book.domain.label))
     if book.domain.fields:
         blocks.append(_table(DOMAIN_HEADER, tuple(
             (item.label, item.value + (f"\n계산식: {item.formula}" if item.formula else ""),
@@ -5977,6 +6067,8 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
         blocks += [("h2", "셀·시료 번호별 기록"), _table(SAMPLE_RECORD_HEADER, tuple(
             (item.identifier, " · ".join(item.records)) for item in book.sample_rows
         ))]
+    if not has_domain_content:
+        blocks.append(("note", NO_RECORD_WORDS))
 
     blocks.append(("h1", NOTEBOOK_SECTIONS[7]))
     blocks.append(("appendix", None))
@@ -5995,10 +6087,10 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     else:
         blocks.append(("note", FIRST_RUN_WORDS))
     blocks.append(("h2", "확인 기록"))
-    confirm_rows = (("실험자", "", "", ""),) + (book.pi_rows or (("PI", "", "", ""),))
-    blocks.append(("sign", (CONFIRM_HEADER, confirm_rows, TABLE_WIDTHS[CONFIRM_HEADER])))
-    if not book.pi_rows:
-        blocks.append(("note", NO_PI_WORDS))
+    if book.pi_rows:
+        blocks.append(("sign", (CONFIRM_HEADER, book.pi_rows, TABLE_WIDTHS[CONFIRM_HEADER])))
+    else:
+        blocks.append(("note", NO_RECORD_WORDS))
     blocks.append(("h2", "단계 시각표"))
     blocks.append(_table(APPENDIX_STEP_HEADER, book.appendix_step_rows) if book.appendix_step_rows
                   else ("note", "기록된 단계가 없다."))

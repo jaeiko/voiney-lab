@@ -8,7 +8,15 @@ from types import SimpleNamespace
 
 from docx import Document
 
-from tests.lane_rp3_support import cell_protocol, cell_run, temporary
+from tests.lane_rp3_support import (
+    RecordWriter,
+    _start,
+    cell_protocol,
+    cell_run,
+    coating_protocol,
+    coating_run,
+    temporary,
+)
 from voiney_lab import experiment_reports as er
 from voiney_lab.report_projection import project_step_for_report
 
@@ -97,3 +105,97 @@ def test_only_explicit_step_visual_evidence_is_attached_and_never_repeated() -> 
     assert figures[0].caption == "세포 배치 그림"
     assert figures[0].caption_source == "Figure 1. Cell layout."
     assert len(document.inline_shapes) == 1
+
+
+def test_terminal_timeline_item_is_completed_or_stopped() -> None:
+    with temporary() as directory:
+        completed = cell_run(directory, session="session-note2-completed")
+        stopped = coating_run(directory)
+        completed_book = completed.store._narrative(
+            completed.report_id, None, cell_protocol(), start_check=None, previous=None,
+        ).facts.notebook
+        stopped_book = stopped.store._narrative(
+            stopped.report_id, None, coating_protocol(), start_check=None, previous=None,
+        ).facts.notebook
+
+    assert completed_book is not None and completed_book.timeline[-1].kind == "completed"
+    assert stopped_book is not None and stopped_book.timeline[-1].kind == "stopped"
+
+
+def test_readback_and_correction_states_keep_the_original_record() -> None:
+    with temporary() as directory:
+        record = RecordWriter(
+            directory, session="session-note2-record-state",
+            title="Cell viability assay after drug treatment",
+            protocol_id="protocol-rp3-cell",
+        )
+        _start(record, "기록자")
+        record.event("00:30", "session_started", "1")
+        purpose_key = record.event(
+            "00:31", "purpose_recorded", "1", user_wording="처음 목적",
+            confirmation_state="read_back", payload={"samples": []},
+        )
+        record.event("00:32", "record_corrected", "1", payload={"record_fix": {
+            "target_event_key": purpose_key, "text_before": "처음 목적",
+            "text_after": "고친 목적", "source": "voice",
+        }})
+        observation_key = record.event(
+            "00:33", "observation", "1", user_wording="처음 관찰",
+            category="appearance", confirmation_state="read_back",
+        )
+        record.event("00:34", "record_corrected", "1", payload={"record_fix": {
+            "target_event_key": observation_key, "text_before": "처음 관찰",
+            "text_after": "고친 관찰", "source": "voice",
+        }})
+        result_key = record.event(
+            "00:35", "result_recorded", "1", user_wording="처음 결과",
+            confirmation_state="read_back", payload={"result": "처음 결과", "next_change": ""},
+        )
+        record.event("00:36", "record_corrected", "1", payload={"record_fix": {
+            "target_event_key": result_key, "text_before": "처음 결과",
+            "text_after": "고친 결과", "source": "voice",
+        }})
+        record.event("00:37", "session_stopped", "1")
+        record.finalize("00:37", "stopped")
+        narrative = record.store._narrative(
+            record.report_id, None, cell_protocol(), start_check=None, previous=None,
+        )
+        book = narrative.facts.notebook
+        markdown = er.render_markdown(narrative)
+
+    assert book is not None
+    assert (book.purpose_words, book.purpose_state.code, book.purpose_state.original) == (
+        "고친 목적", "corrected", "처음 목적",
+    )
+    assert (book.result_words, book.result_state.code, book.result_state.original) == (
+        "고친 결과", "corrected", "처음 결과",
+    )
+    assert (book.observations[0].text, book.observations[0].state.code,
+            book.observations[0].state.original) == (
+        "고친 관찰", "corrected", "처음 관찰",
+    )
+    assert "정정됨" in markdown
+    assert "처음 기록: 처음 목적" in markdown
+    assert "처음 기록: 처음 결과" in markdown
+    assert "처음 기록: 처음 관찰" in markdown
+
+
+def test_empty_notebook_sections_use_one_honest_line_instead_of_blank_blocks() -> None:
+    with temporary() as directory:
+        record = RecordWriter(
+            directory, session="session-note2-empty",
+            title="Cell viability assay after drug treatment",
+            protocol_id="protocol-rp3-cell",
+        )
+        _start(record, "기록자")
+        record.event("00:30", "session_started", "1")
+        record.event("00:31", "session_stopped", "1")
+        record.finalize("00:31", "stopped")
+        narrative = record.store._narrative(
+            record.report_id, None, cell_protocol(), start_check=None, previous=None,
+        )
+        blocks = er.report_blocks(narrative)
+
+    assert not any(kind == "p" and value == "" for kind, value in blocks)
+    assert not any(kind == "sign" for kind, _value in blocks)
+    assert sum(kind == "note" and value == "기록 없음" for kind, value in blocks) >= 4
