@@ -1075,12 +1075,26 @@ class ExperimentReportStore:
                     return found
             if image.kind != "source_figure" or source_fixture is None:
                 return None
-            from voiney_lab import source_figures
-            found = source_figures.figure_content(
-                getattr(source_fixture, "source_pdf_path", None),
-                getattr(source_fixture, "source_pdf_sha256", None), image.asset_id,
-            )
-            return None if found is None else (found[1], found[0].mime_type)
+            visual_for_step = getattr(source_fixture, "visual_for_step", None)
+            visual_content = getattr(source_fixture, "visual_content", None)
+            if not callable(visual_for_step) or not callable(visual_content):
+                return None
+            matches = [
+                index for index in range(len(getattr(source_fixture, "steps", ()) or ()))
+                if (asset := visual_for_step(index)) is not None
+                and asset.asset_id == image.asset_id
+                and asset.source_document_id == image.source_document_id
+            ]
+            if not matches:
+                return None
+            # The analysis loader normally enforces one asset per step.  If a
+            # malformed fixture repeats the exact same identity, the notebook
+            # projector deduplicates it and the resolver may safely read the
+            # first identical crop.
+            asset, content = visual_content(matches[0])
+            if asset.asset_id != image.asset_id or asset.source_document_id != image.source_document_id:
+                return None
+            return content, asset.mime_type
 
         return render_docx(prepared, image_resolver=resolve)
 
@@ -1948,6 +1962,11 @@ def _source_steps_from_fixture(fixture: Any) -> list[dict[str, Any]]:
             origin = getattr(fixture, "localization_source", None)
             # Lane N, decision 6: a stored machine translation is shown as one.
             translation = (origin(step.step_id, "current_step") or "") if korean and callable(origin) else ""
+            failure_key = f"{step.step_id}/current_step"
+            failures = getattr(fixture, "translation_failures", None) or {}
+            translation_status = (
+                "passed" if korean else "rejected" if failure_key in failures else "missing"
+            )
             expected = [" ".join(str(item.source_text).split()) for item in step.expected_results]
             whole = [source]
             for action in getattr(step, "sub_actions", ()) or ():
@@ -1961,6 +1980,7 @@ def _source_steps_from_fixture(fixture: Any) -> list[dict[str, Any]]:
                 "section": title, "source_text": source,
                 "text": korean or source, "translated": bool(korean),
                 "translation": translation,
+                "translation_status": translation_status,
                 "expected": tuple(expected),
                 "timer": timers.get(step.step_id),
                 # Lane RP2, decision 1: the source page the step is on.
@@ -1978,7 +1998,8 @@ def _source_steps_from_context(context: "GroundedReportContext") -> list[dict[st
             "label": step.step_label, "step_id": step.step_id,
             "section": step.section_title if step.section_title != "Experiment Execution" else "",
             "source_text": step.instruction_source_text, "text": step.instruction_source_text,
-            "translated": False, "expected": tuple(step.expected_results), "timer": None,
+            "translated": False, "translation_status": "missing",
+            "expected": tuple(step.expected_results), "timer": None,
         }
         for step in context.all_protocol_steps
     ]
@@ -3460,7 +3481,10 @@ class NotebookMethodRow:
     """One source step beside the execution facts recorded for this run."""
 
     label: str
+    text_ko: str
     source_text: str
+    translation_status: str  # passed | rejected | missing
+    translation_source: str
     actual_values: str
     started_at: str
     ended_at: str
@@ -3552,6 +3576,9 @@ class NotebookImage:
     asset_id: str
     source_page: int | None = None
     interpretation_status: str = ""
+    source_document_id: str = ""
+    bounding_box: tuple[float, float, float, float] | None = None
+    caption_source: str = ""
 
 
 DEFAULT_NOTEBOOK_TEMPLATE = tuple(
@@ -4243,37 +4270,62 @@ def _notebook_photos(
 def _with_notebook_source_images(
     facts: ReportFacts, fixture: Any, report_data: Mapping[str, Any], *, maximum: int = 24,
 ) -> ReportFacts:
-    """Attach only deterministic crops of completed steps' source pages."""
+    """Attach only analysis-selected visual evidence for completed steps.
+
+    Page geometry is not step evidence: two steps on one page must not both
+    receive the same picture.  ``visual_for_step`` has already checked the
+    source page, crop location and caption reference against the immutable
+    analysis, and the identity fence below keeps even a malformed manifest
+    from repeating one crop across steps.
+    """
 
     if facts.notebook is None or fixture is None:
         return facts
     try:
-        from voiney_lab import source_figures
-
         steps = tuple(getattr(fixture, "steps", ()) or ())
         protocol_id = str(report_data.get("protocol_id") or getattr(fixture, "protocol_id", ""))
         revision_id = str(report_data.get("protocol_revision") or getattr(fixture, "revision_id", ""))
         completed = set(facts.completed_labels)
         found: list[NotebookImage] = []
+        seen: set[tuple[str, int, tuple[float, float, float, float] | None, str]] = set()
+        visual_for_step = getattr(fixture, "visual_for_step", None)
+        if not callable(visual_for_step):
+            return facts
         for index, step in enumerate(steps):
             label = str(getattr(step, "source_label", "") or (
                 facts.steps[index].label if index < len(facts.steps) else index + 1
             ))
             if label not in completed:
                 continue
-            for figure in source_figures.figures_for_step(fixture, index):
-                found.append(NotebookImage(
-                    kind="source_figure", step_label=label,
-                    caption=figure.caption or f"원문 그림 · PDF p.{figure.source_page}",
-                    url=(
-                        f"/api/protocols/{quote(protocol_id, safe='')}/revisions/"
-                        f"{quote(revision_id, safe='')}/figures/{quote(figure.figure_id, safe='')}"
-                    ),
-                    media_type=figure.mime_type, asset_id=figure.figure_id,
-                    source_page=figure.source_page,
-                ))
-                if len(found) >= maximum:
-                    break
+            asset = visual_for_step(index)
+            if asset is None:
+                continue
+            box_value = getattr(asset, "normalized_bounding_box", None)
+            box = tuple(box_value) if box_value is not None else None
+            identity = (
+                str(getattr(asset, "source_document_id", "")),
+                int(getattr(asset, "source_page")), box,
+                str(getattr(asset, "sha256", "")),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            asset_id = str(getattr(asset, "asset_id", ""))
+            caption = " ".join(str(getattr(asset, "caption_primary", "") or "").split())
+            caption_source = " ".join(str(getattr(asset, "caption_source", "") or "").split())
+            source_page = int(getattr(asset, "source_page"))
+            found.append(NotebookImage(
+                kind="source_figure", step_label=label,
+                caption=caption or f"원문 그림 · PDF p.{source_page}",
+                url=(
+                    f"/api/protocols/{quote(protocol_id, safe='')}/revisions/"
+                    f"{quote(revision_id, safe='')}/assets/{quote(asset_id, safe='')}"
+                ),
+                media_type=str(getattr(asset, "mime_type", "image/png")),
+                asset_id=asset_id, source_page=source_page,
+                source_document_id=identity[0], bounding_box=box,
+                caption_source=caption_source,
+            ))
             if len(found) >= maximum:
                 break
     except Exception as exc:  # noqa: BLE001 - a visual never fails the notebook
@@ -4384,7 +4436,16 @@ def _notebook_method_rows(
         timing = glance.get(label, ())
         rows.append(NotebookMethodRow(
             label=label,
+            text_ko=(
+                str(source.get("text") or "")
+                if source.get("translation_status") == "passed"
+                else "번역 검사를 통과하지 못해 원문을 보여 드려요."
+                if source.get("translation_status") == "rejected"
+                else "번역이 없어 원문을 보여 드려요."
+            ),
             source_text=str(source.get("source_text") or ""),
+            translation_status=str(source.get("translation_status") or "missing"),
+            translation_source=str(source.get("translation") or ""),
             actual_values=condition_by_label.get(label, AS_SOURCE_WORDS),
             started_at=str(timing[1]) if len(timing) > 1 else "",
             ended_at=str(timing[2]) if len(timing) > 2 else step.completed_at,
@@ -5848,7 +5909,7 @@ def report_blocks(narrative: ReportNarrative) -> list[tuple[str, Any]]:
     if book.method_rows:
         blocks.append(_table(METHOD_HEADER, tuple((
             f"{row.label}단계" + (f" · PDF p.{row.source_page}" if row.source_page else ""),
-            row.source_text,
+            StackedCell(row.text_ko, row.source_text),
             row.actual_values,
             " · ".join(part for part in (
                 f"{row.started_at}–{row.ended_at}" if row.started_at or row.ended_at else "",
