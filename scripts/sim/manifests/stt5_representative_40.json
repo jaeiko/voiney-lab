@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "name": "stt5-representative-40",
+  "case_ids": [
+    "pio_37443_passaging.current.0",
+    "pio_37443_passaging.current.1",
+    "pio_37443_passaging.current.2",
+    "pio_37443_passaging.complete.0",
+    "pio_37443_passaging.complete.1",
+    "pio_37443_passaging.complete.2",
+    "pio_37443_passaging.complete.3",
+    "pio_37443_passaging.timer_start.0",
+    "pio_37443_passaging.timer_start.1",
+    "pio_37443_passaging.timer_start.2",
+    "pio_37443_passaging.timer_remaining.0",
+    "pio_37443_passaging.timer_remaining.1",
+    "pio_37443_passaging.timer_remaining.2",
+    "pio_37443_passaging.term.1",
+    "pio_37443_passaging.term.2",
+    "pio_37443_passaging.observation.3",
+    "pio_67395_hek293t_transfection.current.0",
+    "pio_67395_hek293t_transfection.current.1",
+    "pio_67395_hek293t_transfection.current.2",
+    "pio_67395_hek293t_transfection.complete.0"
+  ]
+}
