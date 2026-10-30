@@ -7880,7 +7880,10 @@ class ListenerSession:
             classifier=self._vad_classifier,
             listening_onset=False,
         )
-        detector.enable_transient_noise_gate(self._transient_noise_gate)
+        detector.enable_transient_noise_gate(
+            self._transient_noise_gate
+            and detector.classifier is self._vad_classifier
+        )
         return detector
     def _restore_primary_detector(self,state:TurnState)->None:
         self.detector=EndpointDetector(
@@ -8043,7 +8046,10 @@ class ListenerSession:
         # relative gate keeps low continuous room sound from resetting the
         # 1000 ms endpoint forever.  Calibration and an explicit wearer line
         # retain their existing measured behaviour.
-        detector.enable_transient_noise_gate(self._transient_noise_gate)
+        detector.enable_transient_noise_gate(
+            self._transient_noise_gate
+            and detector.classifier is self._vad_classifier
+        )
         detector.enable_adaptive_noise_gate(
             self.level_reference is None and not self.calibration_pending)
         if detector.state is not TurnState.IDLE:
