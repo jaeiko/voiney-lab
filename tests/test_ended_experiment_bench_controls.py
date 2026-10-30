@@ -33,6 +33,7 @@ from tests.protocol_vocabulary_support import SOURCE_PDF, miniprep_fixture
 from tests.test_voice_pause_resume_persistence import VoiceSessionHarness
 from voiney_lab.curated_protocol import EXPERIMENT_ENDED_START_REPLY, CuratedProtocolSession
 from voiney_lab.runtime_routing import route_curated_runtime_turn
+from voiney_lab.server import ListenerSession
 
 
 def _turn(session: CuratedProtocolSession, text: str, turn_id: int):
@@ -120,6 +121,19 @@ class EndedSessionControlTests(unittest.TestCase):
         _turn(session, "시작", 10)
         self.assertFalse(session.experiment_ended)
         self.assertTrue(session.pause_workflow())
+
+    def test_listener_discards_microphone_bytes_after_the_experiment_ended(self) -> None:
+        workflow = CuratedProtocolSession(miniprep_fixture())
+        listener = ListenerSession(curated_protocol_session=workflow)
+        listener.start()
+        _turn(workflow, "시작", 1)
+        _turn(workflow, "실험 종료", 2)
+        _turn(workflow, "네", 3)
+        self.assertTrue(workflow.experiment_ended)
+        sequence = listener._microphone_chunk_sequence
+
+        self.assertEqual(listener.accept_chunk(b"\0" * 640), [])
+        self.assertEqual(listener._microphone_chunk_sequence, sequence)
 
 
 @unittest.skipUnless(

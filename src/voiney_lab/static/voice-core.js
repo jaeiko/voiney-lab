@@ -367,7 +367,7 @@ function onUserGesture(){resumeHeldAudio();if(screenWakeLockWanted&&!screenWakeL
 function onAudioVisibilityChange(){if(globalThis.document?.visibilityState!=="visible")return false;resumeHeldAudio();return renderAudioUnlock();}
 for(const kind of ["pointerup","touchend","click","keydown"])globalThis.document?.addEventListener?.(kind,onUserGesture,{capture:true,passive:true});
 globalThis.document?.addEventListener?.("visibilitychange",onAudioVisibilityChange);
-async function closeAudio(){
+async function closeMicrophone(){
  if(micReconnectTimer){clearTimeout(micReconnectTimer);micReconnectTimer=null;}
  if(micTrackWatched){try{micTrackWatched.removeEventListener?.("ended",onMicTrackEnded);}catch(_){}micTrackWatched=null;}
  hideMicRecovery();setText("mic-device-status","");micReportedIdentity=null;
@@ -379,6 +379,10 @@ async function closeAudio(){
  if(micSource){try{micSource.disconnect();}catch(_){}micSource=null;}
  if(micStream){try{for(const t of micStream.getTracks())t.stop();}catch(_){}micStream=null;}
  if(micContext){try{await micContext.close();}catch(_){}micContext=null;}
+ renderAudioUnlock();
+}
+async function closeAudio(){
+ await closeMicrophone();
  if(cascadeGain){try{cascadeGain.disconnect();}catch(_){}cascadeGain=null;}
  if(playContext){try{await playContext.close();}catch(_){}playContext=null;}
  renderAudioUnlock();

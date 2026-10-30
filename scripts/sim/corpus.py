@@ -153,6 +153,37 @@ def generate_development_cases(protocol: Protocol) -> tuple[Case, ...]:
             timer_setup,
             ('timer_status',),
         ),
+        *(
+            Case(
+                f'{protocol.code}.voice2_timer_remaining.{at}',
+                'timer_remaining',
+                text,
+                timer_index,
+                timer_setup,
+                ('timer_status',),
+            )
+            for at, text in enumerate((
+                '타임 얼마?', '타임 얼마나?', '타이머 얼마?',
+                '어, 그럼 타이머 얼마나 남았지?', '어... 타임, 얼마 남았어?',
+                '시간 몇 남았어?',
+            ))
+        ),
+        *(
+            Case(
+                f'{protocol.code}.voice2_step_question.{at}',
+                'step_question',
+                text,
+                0,
+                'active',
+                (action,),
+            )
+            for at, (text, action) in enumerate((
+                ('지금 몇 단계?', 'protocol_query'),
+                ('어, 지금 단계 몇이야?', 'protocol_query'),
+                ('다음 뭐야?', 'next_information'),
+                ('그럼 다음에 뭐 해?', 'next_information'),
+            ))
+        ),
         Case(
             f'{protocol.code}.safe1_purpose.0',
             'safe1_purpose',

@@ -147,9 +147,14 @@ generation is cancelled and its audio cleared (barge-in).
 4. Routing, one line (AGENTS rule 3):
    - `CuratedProtocolSession.front_plan` reads the turn first and never
      waits on a model (`FRONT_RULES`: transcript quality, pause and "종료",
-     yes/no to an open question, replies to an endpoint question, time left,
-     "그거", repeat, cancel, completion naming the current step, start, a
+     yes/no to an open question, replies to an endpoint question, time left
+     (including short timer/time-word + amount/remaining-word combinations),
+     current/next-step questions, "그거", repeat, cancel, completion naming the current step, start, a
      problem at the bench (`problem_help`), and the rest of the table).
+     These information questions leave every checkpoint unchanged. A direct
+     unblocked `다음` records the completion and answers with only the completed
+     label, the next checked Korean step summary and the undo word; `취소`
+     immediately after that still opens the existing revert confirmation.
    - Router off (`VOINEY_LAB_LLM_ROUTER_ENABLED`, default false): the rules'
      own route (`route_curated_runtime_turn` → `plan`).
    - Router on: `llm_router.route_turn_with_llm_router` makes one streamed

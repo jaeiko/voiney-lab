@@ -13,7 +13,7 @@ import { recordLines } from "./RecordsPanel";
 
 // The end of an experiment (lane RX4, person's decision 3 of 2026-10-26, after the
 // person's mock-up "실험 끝 · 피드백"): what was done at the top with the notebook
-// a press away, three numbers from the run itself, then one question -- five
+// a press away, record and unheard-word counts, then one question -- five
 // large tiles for how the guidance felt, chips for what it was like, a line of
 // words -- and [보내기] or [건너뛰기]. The answer goes where lane LOG's did
 // (POST /api/pilot/feedback, kept with the experiment record); the chips are
@@ -86,9 +86,7 @@ export function EndScreen({ snapshot, now = () => Date.now() }: { snapshot: RunS
     enabled: Boolean(experimentId),
     retry: false,
   });
-  const voiceCount = timeline.data ? recordLines(timeline.data.timeline).filter((line) => line.kind === "voice").length : null;
-  const changesCount = Array.isArray(protocol?.run_changes) ? protocol!.run_changes!.length : 0;
-  const helpCount = model.helpTurns.length;
+  const recordCount = timeline.data ? recordLines(timeline.data.timeline).length : null;
   const status = ended?.status ?? null;
   const sub = [protocol?.display_name ?? null, stepsWords(status, protocol), tookWords(protocol, endedAt)].filter((part): part is string => Boolean(part));
   const notebookHref = experimentId ? routes.record(experimentId) : routes.records;
@@ -122,9 +120,8 @@ export function EndScreen({ snapshot, now = () => Date.now() }: { snapshot: RunS
   }
 
   const counts: Array<{ key: string; label: string; value: number | null }> = [
-    { key: "voice", label: copy.end.counts.voice, value: voiceCount },
-    { key: "changes", label: copy.end.counts.changes, value: changesCount },
-    { key: "help", label: copy.end.counts.help, value: helpCount },
+    { key: "records", label: copy.end.counts.records, value: recordCount },
+    { key: "missed", label: copy.end.counts.missed, value: model.droppedCount },
   ];
 
   return (

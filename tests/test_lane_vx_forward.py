@@ -65,10 +65,12 @@ class ForwardTests(Session, unittest.TestCase):
         self.assertTrue(plan.reported_completion)
         self.assertEqual(self.label(), "4")
         self.assertEqual(self.session.last_front_rule, "forward_step")
-        self.assertTrue(plan.speech_text.startswith(
-            f"3단계 완료로 기록했어요. {FIRST_HINT} 4단계로 이동했습니다."), plan.speech_text)
-        self.assertIn(f"3단계 완료로 기록했어요. {FIRST_HINT}", plan.display_text)
-        # The hint is said once in a session; the record line every time.
+        self.assertEqual(
+            plan.speech_text,
+            "3단계 완료. 4단계: 화면에서 확인해 주세요. 잘못이면 '취소'.",
+        )
+        # The short reply replaces the old long hint; later move phrases keep
+        # their established acknowledgement wording.
         plan = self.say("다음 단계로")
         self.assertEqual(self.label(), "5")
         self.assertTrue(plan.speech_text.startswith(
@@ -86,7 +88,13 @@ class ForwardTests(Session, unittest.TestCase):
                 plan = self.say(said)
                 self.assertTrue(plan.state_changed)
                 self.assertEqual(self.label(), "4")
-                self.assertTrue(plan.speech_text.startswith("3단계 완료로 기록했어요."))
+                if said == "다음":
+                    self.assertEqual(
+                        plan.speech_text,
+                        "3단계 완료. 4단계: 화면에서 확인해 주세요. 잘못이면 '취소'.",
+                    )
+                else:
+                    self.assertTrue(plan.speech_text.startswith("3단계 완료로 기록했어요."))
 
     def test_a_named_completion_says_the_same_record_line(self) -> None:
         self.open_with(index_of("3"))
@@ -237,7 +245,10 @@ class StillAskedWashTests(unittest.TestCase):
         plan = turns.say("다음")
         self.assertTrue(plan.state_changed)
         self.assertEqual(turns.label(), "3")
-        self.assertTrue(plan.speech_text.startswith("2단계 완료로 기록했어요."))
+        self.assertEqual(
+            plan.speech_text,
+            "2단계 완료. 3단계: 화면에서 확인해 주세요. 잘못이면 '취소'.",
+        )
 
     def test_a_timer_not_started_does_not_ask(self) -> None:
         turns = wash_session()

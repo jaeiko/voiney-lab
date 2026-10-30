@@ -8359,6 +8359,11 @@ class ListenerSession:
         return False
     def accept_chunk(self,chunk:bytes)->list[ListenerEvent]:
         if not self.active:return []
+        if (
+            self.curated_protocol_session is not None
+            and getattr(self.curated_protocol_session,"experiment_ended",False)
+        ):
+            return []
         self._microphone_chunk_sequence+=1
         # Lane HEAR, decision 4: a turn opened outside this method (speech
         # kept when the turn before it was dropped) is announced here.

@@ -47,6 +47,12 @@ def test_voice1_development_regressions_keep_confirmation_and_timer_queries_read
         assert {case.text for case in timer_cases} == {
             '타임 얼마나 남았어? 어',
             '시간 얼마나 남았어 음',
+            '타임 얼마?',
+            '타임 얼마나?',
+            '타이머 얼마?',
+            '어, 그럼 타이머 얼마나 남았지?',
+            '어... 타임, 얼마 남았어?',
+            '시간 몇 남았어?',
         }
         for case in timer_cases:
             result = asyncio.run(run_case(protocol, case))
