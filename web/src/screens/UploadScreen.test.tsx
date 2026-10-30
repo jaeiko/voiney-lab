@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthSession, UploadResponse } from "../api/types";
+import { ApiError } from "../api/client";
 import { ENTRY_READY, ENTRY_UPLOADED, fakeFetch, renderWithClient, SESSION_ACCOUNTS, SOURCE_PAGES, UPLOAD_ANSWER } from "../test/helpers";
 import { afterUpload, UploadScreen, uploadErrorWords } from "./UploadScreen";
 
@@ -131,6 +132,7 @@ describe("UploadScreen", () => {
     await user.upload(screen.getByTestId("file-input"), pdf("secret.pdf"));
     expect(await screen.findByTestId("upload-error")).toHaveTextContent("암호가 걸린 PDF는 올릴 수 없어요. 암호 없는 원본을 골라 주세요.");
     expect(screen.getByTestId("file-pick")).toBeInTheDocument();
+    expect(uploadErrorWords(new ApiError(413, "pasted_methods_too_large"))).toBe("Methods 문단이 너무 길어요. 256 KiB 이하로 붙여 넣어 주세요.");
     expect(uploadErrorWords(new TypeError("x"))).toBe("올리지 못했어요. 다시 해 주세요.");
   });
 

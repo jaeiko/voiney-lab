@@ -560,6 +560,7 @@ export const upload = {
   errors: {
     unsupported_pdf_media_type: "PDF · Word(.docx) · 사진(JPG · PNG · HEIC) 또는 Methods 문단만 올릴 수 있어요.",
     protocol_pdf_too_large: "파일이 너무 커요. 64 MB 보다 작은 파일을 골라 주세요.",
+    pasted_methods_too_large: "Methods 문단이 너무 길어요. 256 KiB 이하로 붙여 넣어 주세요.",
     invalid_pdf: "파일이 깨졌거나 다 받지 못했어요. 원본을 다시 받아 골라 주세요.",
     encrypted_pdf: "암호가 걸린 PDF는 올릴 수 없어요. 암호 없는 원본을 골라 주세요.",
     docx_conversion_unavailable: "이 앱은 지금 Word 파일을 받지 못해요. PDF 로 바꿔 올려 주세요.",

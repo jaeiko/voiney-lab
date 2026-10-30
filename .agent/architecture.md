@@ -287,9 +287,10 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
 - A pasted UTF-8 Methods paragraph is an immutable source too. The ingress
   accepts bounded `text/plain`, rejects empty text and control characters,
   records the text checksum, and uses the same bounded PDF-engine child to
-  make a born-digital PDF (`write_text_document_in_process`) without splitting ordinary scientific tokens. From
-  registration onward it takes the same analysis, source-evidence and review
-  path as another source; pasted text is not a model-created protocol.
+  make a born-digital PDF (`write_text_document_in_process`) without splitting
+  ordinary scientific tokens. From registration onward it takes the same
+  analysis, source-evidence and review path as another source; pasted text is
+  not a model-created protocol.
 - HTTP callers cannot choose an OCR provider; the server injects one
   (`_install_protocol_ocr_provider`). OCR results must match the source's
   SHA-256 and cover every page once, in order.

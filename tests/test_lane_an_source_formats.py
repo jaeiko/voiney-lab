@@ -492,6 +492,7 @@ class ServerUploadTests(unittest.IsolatedAsyncioTestCase):
     async def test_refusals_name_their_reason(self) -> None:
         cases = (
             (b"\x00not methods", "notes.txt", "text/plain", 422, "invalid_source_file"),
+            (b"x" * (256 * 1024 + 1), "too-long.txt", "text/plain", 413, "pasted_methods_too_large"),
             (photo_bytes(fmt="PNG"), "a.jpg", "image/jpeg", 422, "invalid_source_file"),
             (b"plain", "p.docx", DOCX_MEDIA_TYPE, 422, "invalid_source_file"),
             (photo_bytes(), "../a.jpg", "image/jpeg", 400, "protocol_registration_invalid"),

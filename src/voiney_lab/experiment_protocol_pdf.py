@@ -702,6 +702,10 @@ class ProtocolSourceTooLargeError(ProtocolPdfError):
     code = "protocol_image_too_large"
 
 
+class ProtocolPastedMethodsTooLargeError(ProtocolSourceTooLargeError):
+    code = "pasted_methods_too_large"
+
+
 class ProtocolSourceConversionUnavailableError(ProtocolPdfError):
     """This server lacks what turns the upload into a PDF (a system install)."""
 
@@ -789,7 +793,7 @@ def methods_text_to_pdf(source: str | Path, destination: str | Path) -> SourceCo
     source = Path(source)
     sha256, byte_size = _file_identity(source)
     if byte_size > MAX_PASTED_METHODS_BYTES:
-        raise ProtocolSourceTooLargeError("Pasted Methods text is too large.")
+        raise ProtocolPastedMethodsTooLargeError("Pasted Methods text is too large.")
     try:
         text = source.read_bytes().decode("utf-8", "strict")
     except UnicodeDecodeError as exc:
