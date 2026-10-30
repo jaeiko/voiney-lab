@@ -105,6 +105,12 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         workflow.active = True
         workflow._workflow_status = 'running'
         workflow.current_index = case.index
+        if case.setup == 'purpose_question':
+            workflow.open_notebook_question('purpose')
+        if case.setup == 'result_question':
+            workflow.active = False
+            workflow._workflow_status = 'completed'
+            workflow.open_notebook_question('result')
         if case.setup == 'completion_pending':
             workflow.confirm_mode = 'confirm'
             primed = workflow.front_plan(

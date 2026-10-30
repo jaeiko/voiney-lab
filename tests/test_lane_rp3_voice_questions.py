@@ -109,8 +109,12 @@ class StartQuestionTests(_Voice):
                 {"name": "2번 샘플", "condition": "처리군", "control": False},
                 {"name": "3번 샘플", "condition": "대조군", "control": True},
             ],
+            "confirmation_state": "read_back",
         })
-        self.assertEqual(plan.speech_text, "목적과 시료 3개를 기록했어요.")
+        self.assertEqual(
+            plan.speech_text,
+            f"목적을 '{PURPOSE}'라고 기록했어요. 틀리면 '정정'이라고 말해 주세요.",
+        )
         self.assertIsNone(self.session.notebook_question_open())
         recorded = [e for e in self.events() if e[0] == "purpose_recorded"]
         self.assertEqual(len(recorded), 1)
@@ -127,8 +131,14 @@ class StartQuestionTests(_Voice):
     def test_a_purpose_without_samples_is_recorded_as_said(self) -> None:
         self.say("프로토콜 시작해줘")
         plan = self.say("오늘은 세척만 해 볼게")
-        self.assertEqual(plan.notebook_record, {"kind": "purpose", "text": "오늘은 세척만 해 볼게", "samples": []})
-        self.assertEqual(plan.speech_text, "목적을 기록했어요.")
+        self.assertEqual(plan.notebook_record, {
+            "kind": "purpose", "text": "오늘은 세척만 해 볼게", "samples": [],
+            "confirmation_state": "read_back",
+        })
+        self.assertEqual(
+            plan.speech_text,
+            "목적을 '오늘은 세척만 해 볼게'라고 기록했어요. 틀리면 '정정'이라고 말해 주세요.",
+        )
         self.assertIn("# 세척만 해 볼게\n", self.markdown())
         self.assertIn("## 목적\n\n오늘은 세척만 해 볼게", self.markdown())
 
@@ -194,7 +204,10 @@ class ObservationQuestionTests(_Voice):
         answer = self.say("밴드가 투명하고 깨끗해")
         self.assertFalse(answer.state_changed)
         self.assertEqual(self.session.current_index, 5)
-        self.assertEqual(answer.speech_text, "관찰을 기록했어요.")
+        self.assertEqual(
+            answer.speech_text,
+            "관찰을 '밴드가 투명하고 깨끗해'라고 기록했어요. 틀리면 '정정'이라고 말해 주세요.",
+        )
         self.assertEqual(answer.notebook_record["kind"], "observation")
         self.assertEqual(answer.notebook_record["step_label"], "5")
         observed = [e for e in self.events() if e[0] == "observation" and e[2] == "밴드가 투명하고 깨끗해"]
@@ -263,10 +276,16 @@ class EndQuestionTests(_Voice):
         plan = self.say("밴드가 깨끗하게 나왔어. 다음에는 세척을 한 번 더 할게")
         self.assertFalse(plan.state_changed)
         self.assertFalse(self.session.active)
-        self.assertEqual(plan.speech_text, "결과와 다음에 바꿀 점을 기록했어요.")
+        self.assertEqual(
+            plan.speech_text,
+            "결과를 '밴드가 깨끗하게 나왔어. 다음에는 세척을 한 번 더 할게'라고 기록했어요. "
+            "틀리면 '정정'이라고 말해 주세요.",
+        )
         self.assertEqual(plan.notebook_record, {
             "kind": "result", "text": "밴드가 깨끗하게 나왔어. 다음에는 세척을 한 번 더 할게",
-            "result": "밴드가 깨끗하게 나왔어.", "next_change": "세척을 한 번 더 할게"})
+            "result": "밴드가 깨끗하게 나왔어.", "next_change": "세척을 한 번 더 할게",
+            "confirmation_state": "read_back",
+        })
         recorded = [e for e in self.events() if e[0] == "result_recorded"]
         self.assertEqual(len(recorded), 1)
         self.assertEqual((recorded[0][3]["result"], recorded[0][3]["next_change"]),
@@ -296,7 +315,10 @@ class FixTests(_Voice):
         plan = self.say("목적 고쳐: 약물 X 생존율 실험, 시료 3개")
         self.assertFalse(plan.state_changed)
         self.assertEqual(plan.speech_text, "목적을 고쳤어요.")
-        self.assertEqual(plan.notebook_record, {"kind": "fix", "target": "purpose", "text": "약물 X 생존율 실험, 시료 3개"})
+        self.assertEqual(plan.notebook_record, {
+            "kind": "fix", "target": "purpose", "text": "약물 X 생존율 실험, 시료 3개",
+            "confirmation_state": "experimenter_corrected",
+        })
         fixes = [e for e in self.events() if e[0] == "record_corrected"]
         self.assertEqual(len(fixes), 1)
         purpose_key = next(e for e in self.listener.experiment_report_store.get_report(
@@ -345,7 +367,7 @@ class NotAnAnswerTests(_Voice):
         plan = self.say("어 그러니까 음 지금 이 단계에서 쓰는")
         self.assertIsNone(plan.notebook_record)
         self.assertEqual(self.session.notebook_question_open(), "purpose")
-        self.assertEqual(self.say(PURPOSE).speech_text, "목적과 시료 3개를 기록했어요.")
+        self.assertIn(PURPOSE, self.say(PURPOSE).speech_text)
 
     def test_a_request_is_a_command_whatever_the_rules_make_of_it(self) -> None:
         for words in ("원문 그림 띄워 줘", "관찰 메모해 줘 멤브레인이 살짝 말랐어", "이 단계 다시 읽어 주세요"):
@@ -368,7 +390,7 @@ class NotAnAnswerTests(_Voice):
         self.assertEqual(picked.display_text, "이 단계의 Buffer B는 30 µL예요.")
         self.assertIsNone(picked.notebook_record)
         self.assertEqual(self.session.notebook_question_open(), "purpose")
-        self.assertEqual(self.say(PURPOSE).speech_text, "목적과 시료 3개를 기록했어요.")
+        self.assertIn(PURPOSE, self.say(PURPOSE).speech_text)
 
 
 class ServedTests(VoiceNotesHarness, unittest.TestCase):
@@ -378,7 +400,8 @@ class ServedTests(VoiceNotesHarness, unittest.TestCase):
         socket = self.turns("프로토콜 시작해줘", "오늘은 세척 실험이에요. 시료 2개에 대조군 1개", "1단계 완료했어")
         replies = shown(socket)
         self.assertTrue(replies[1].endswith(cp.PURPOSE_QUESTION_KO), replies[1])
-        self.assertEqual(replies[2], "목적과 시료 3개를 기록했어요.")
+        self.assertIn("오늘은 세척 실험이에요. 시료 2개에 대조군 1개", replies[2])
+        self.assertIn("틀리면 '정정'", replies[2])
         recorded = [e for e in self.report()["events"] if e["event_type"] == "purpose_recorded"]
         self.assertEqual(len(recorded), 1)
         self.assertEqual([s["name"] for s in recorded[0]["payload"]["samples"]], ["1번 시료", "2번 시료", "대조군"])
@@ -391,7 +414,8 @@ class ServedTests(VoiceNotesHarness, unittest.TestCase):
         self.assertTrue(replies[7].endswith(cp.RESULT_QUESTION_KO), replies[7])
         self.assertIn("화면에서", replies[7])
         self.assertLess(replies[7].index("화면에서"), replies[7].index(cp.RESULT_QUESTION_KO))
-        self.assertEqual(replies[8], "결과와 다음에 바꿀 점을 기록했어요.")
+        self.assertIn("밴드가 깨끗했어. 다음엔 세척을 더 할게", replies[8])
+        self.assertIn("틀리면 '정정'", replies[8])
         recorded = [e for e in self.report()["events"] if e["event_type"] == "result_recorded"]
         self.assertEqual((recorded[0]["payload"]["result"], recorded[0]["payload"]["next_change"]),
                          ("밴드가 깨끗했어.", "세척을 더 할게"))

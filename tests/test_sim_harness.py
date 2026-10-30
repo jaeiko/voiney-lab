@@ -55,6 +55,27 @@ def test_voice1_development_regressions_keep_confirmation_and_timer_queries_read
             assert score_case(case, result)['wrong_state'] is False
 
 
+def test_safe1_development_regressions_stage_uncertain_records_without_writing():
+    from scripts.sim.corpus import generate_development_cases
+
+    for protocol in load_corpus():
+        cases = [
+            case for case in generate_development_cases(protocol)
+            if case.family.startswith('safe1_')
+        ]
+        assert {case.family for case in cases} == {
+            'safe1_purpose', 'safe1_result', 'safe1_observation',
+        }
+        for case in cases:
+            result = asyncio.run(run_case(protocol, case))
+            assert result['action'] == 'clarify_completion'
+            assert result['intent_kind'] in {
+                'notebook_confirmation_required', 'note_confirmation_required',
+            }
+            assert result['step_after'] == result['step_before']
+            assert score_case(case, result)['wrong_state'] is False
+
+
 def test_existing_mixed_command_must_stage_completion_confirmation():
     protocol=load_corpus()[0]
     case=next(c for c in generate_cases(protocol) if c.family=='mixed' and '왜' in c.text)

@@ -1,0 +1,23 @@
+[
+  {
+    "case_id": "actual-purpose-short-transcript",
+    "setup": "purpose_question",
+    "transcript": "편. 편.",
+    "expected_intent": "notebook_confirmation_required",
+    "must_not_record": "purpose_recorded"
+  },
+  {
+    "case_id": "actual-result-contextless-numbers",
+    "setup": "result_question",
+    "transcript": "1.7 100",
+    "expected_intent": "notebook_confirmation_required",
+    "must_not_record": "result_recorded"
+  },
+  {
+    "case_id": "live-sim-temperature-note",
+    "setup": "active_run",
+    "transcript": "관찰 기록해 줘: 측정값 37 °C",
+    "expected_intent": "note_confirmation_required",
+    "must_not_record": "observation"
+  }
+]
