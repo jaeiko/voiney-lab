@@ -371,7 +371,9 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   Report events carry `read_back`, `experimenter_confirmed`, or correction
   evidence, and notebook number provenance admits record prose only with one
   of those human-intent states (ordinary observations retain
-  `user_reported`).
+  `user_reported`). The notebook projection exposes that state beside
+  purpose, result and observations and preserves correction-before text; it
+  never derives the state from display prose.
 
 ### Page evidence segments and known analysis limits
 
@@ -714,14 +716,17 @@ build fails. It keeps the old hash routes (`#/home`, `#/protocols`) and has its 
 `#/protocols/<id>/changes` — lane RX1; `#/start`, `#/start/<id>`,
 `#/experiment`, `#/settings`, `#/welcome` — lane RX2); the full protocol detail (`#/protocols/<id>`) reads the existing review, reagent-table and review-version APIs. Only an unknown route uses the old screen at `/index.html?legacy=1`. Records and notebooks have their own routes
 (`#/records`, `#/records/<session>`,
-`#/records/<session>/notebook/<report>`). The read-only
+`#/records/<session>/notebook/<report>`,
+`#/records/binders/<binder>`). The read-only
 `GET /api/experiment-reports/{report}/notebook` returns the existing
 export notebook projection, review items and ledger events without preparing
 prose. The experiment list adds only the last owner rating of an accessible
 report. The notebook projection is the renderer-neutral authority shared by
 the screen and Word/Markdown/PDF: eight complete sections, source step to
-actual value/time rows, deterministic timeline/value bars, recorded photos,
-source-PDF figure crops, one source-selected/person-overridable domain profile,
+actual value/time rows, deterministic timeline/value bars through terminal
+completion/stop, recorded photos, only source-PDF figure assets that analysis
+explicitly linked to that step by page/geometry/caption evidence, one
+source-selected/person-overridable domain profile,
 and the source inventory plus optional vendor/catalog/Lot facts. Purpose and
 result are person-authored only and interpretation is blank; model-prepared
 prose is not added to this notebook body. `audit_notebook_number_provenance`
@@ -730,6 +735,16 @@ events or the bounded calculations named by the projection. DOCX/PDF image
 resolution reuses the authenticated workspace evidence reader and the
 content-addressed source-figure cache; a missing image leaves its grounded
 caption rather than creating a replacement.
+
+Notebook binders are append-only selections, not a second report or workflow
+store. An owner selects 2–50 of their ended reports by topic name, date and
+protocol through `/api/notebook-binders`; the stable selection event lives in
+the first selected report ledger. Before that event is appended, every report
+is projected and number-audited independently, then
+`audit_notebook_binder_isolation` verifies event keys, report/session-linked
+photos and source-document-linked figures. Screen, DOCX and PDF read that same
+date-ordered binder projection with per-experiment start/end/status,
+checkpoint continuation and the applied lab-adapted revision history.
 
 Notebook presentation and comparison mutations are append-only and never
 touch workflow state. A same-organization admin may append a complete
