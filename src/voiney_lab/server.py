@@ -80,6 +80,7 @@ from voiney_lab.experiment_protocol_pdf import (
     PDF_MEDIA_TYPE,
     MAX_PROTOCOL_PDF_BYTES,
     SOURCE_MEDIA_TYPES,
+    TEXT_MEDIA_TYPE,
     ProtocolPdfEncryptedError,
     ProtocolPdfError,
     ProtocolPdfMalformedError,
@@ -5073,6 +5074,11 @@ async def _register_protocol_pdf(
     page_range=_requested_page_range(first_page,last_page)
     media_type=source_media_type(request.headers.get("content-type",""))
     if media_type not in SOURCE_MEDIA_TYPES:
+        raise HTTPException(status_code=415,detail="unsupported_pdf_media_type")
+    # A browser Methods paste has an explicit .txt name. Do not reinterpret a
+    # non-PDF body renamed as .pdf as pasted Methods merely because its
+    # Content-Type is text/plain; that established upload remains unsupported.
+    if media_type==TEXT_MEDIA_TYPE and Path(filename).suffix.casefold()!=".txt":
         raise HTTPException(status_code=415,detail="unsupported_pdf_media_type")
     length=request.headers.get("content-length")
     if length is not None:
