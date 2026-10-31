@@ -7,6 +7,7 @@ import math
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Sequence
 
 from scripts.sim.corpus import Case, Protocol
@@ -20,6 +21,56 @@ class Partition:
     development: tuple[Pair, ...]
     holdout: tuple[Pair, ...]
     manifest: str
+
+
+@dataclass(frozen=True)
+class CaseIdManifest:
+    name: str
+    case_ids: tuple[str, ...]
+    sha256: str
+
+
+def load_case_id_manifest(path: Path) -> CaseIdManifest:
+    """Read one bounded, versioned list of public SIM case identities."""
+
+    raw = path.read_bytes()
+    if not raw or len(raw) > 64 * 1024:
+        raise ValueError("case-id manifest must be between 1 byte and 64 KiB")
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("case-id manifest must be UTF-8 JSON") from exc
+    if not isinstance(value, dict) or set(value) != {"schema", "name", "case_ids"}:
+        raise ValueError("invalid case-id manifest schema")
+    name = value["name"]
+    case_ids = value["case_ids"]
+    if value["schema"] != 1:
+        raise ValueError("unsupported case-id manifest schema")
+    if (
+        not isinstance(name, str)
+        or not name
+        or len(name) > 80
+        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789._-" for character in name)
+    ):
+        raise ValueError("invalid case-id manifest name")
+    if (
+        not isinstance(case_ids, list)
+        or not case_ids
+        or len(case_ids) > 1000
+        or any(
+            not isinstance(case_id, str)
+            or not case_id
+            or len(case_id) > 200
+            for case_id in case_ids
+        )
+        or len(set(case_ids)) != len(case_ids)
+    ):
+        raise ValueError("case-id manifest needs unique bounded case ids")
+    return CaseIdManifest(
+        name=name,
+        case_ids=tuple(case_ids),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
 
 
 def partition_cases(pairs: Sequence[Pair], *, seed: int = SPLIT_SEED,
@@ -93,7 +144,32 @@ def select_cases(protocols: Sequence[Protocol], args: object) -> tuple[list[Pair
         )
     )
     partition = partition_cases(pairs, seed=args.split_seed, holdout_fraction=args.holdout_fraction)
-    if args.split == 'all':
+    manifest_path = getattr(args, "case_ids", None)
+    case_manifest = (
+        load_case_id_manifest(manifest_path) if manifest_path is not None else None
+    )
+    if case_manifest is not None:
+        if (
+            args.split != "all"
+            or getattr(args, "emergency_matrix", False)
+            or args.protocol
+            or args.family
+            or args.limit is not None
+        ):
+            raise ValueError(
+                "--case-ids cannot be combined with split, filters, or --limit"
+            )
+        indexed = {
+            case.code: (protocol, case)
+            for protocol, case in pairs + development_regressions
+        }
+        missing = [
+            case_id for case_id in case_manifest.case_ids if case_id not in indexed
+        ]
+        if missing:
+            raise ValueError("case-id manifest contains unknown case ids")
+        selected = tuple(indexed[case_id] for case_id in case_manifest.case_ids)
+    elif args.split == 'all':
         selected = pairs + development_regressions
     elif args.split == 'development':
         selected = partition.development + development_regressions
@@ -115,4 +191,11 @@ def select_cases(protocols: Sequence[Protocol], args: object) -> tuple[list[Pair
     if args.split != 'holdout':
         metadata['development_cases'] += len(development_regressions)
         metadata['development_regression_cases'] = len(development_regressions)
+    if case_manifest is not None:
+        metadata["name"] = "case_ids"
+        metadata["case_id_manifest"] = {
+            "name": case_manifest.name,
+            "sha256": case_manifest.sha256,
+            "cases": len(case_manifest.case_ids),
+        }
     return result, metadata

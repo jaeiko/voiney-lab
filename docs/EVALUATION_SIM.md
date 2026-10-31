@@ -131,6 +131,22 @@ python scripts/sim/live.py --limit 20 --max-calls 200 --max-usd 5 \
   --output ~/reports/sim/chirp3-first.json
 ```
 
+같은 표본을 다시 비교할 때는 `--limit` 대신 저장소의 versioned case-id manifest를
+쓴다. manifest 순서대로 정확히 같은 공개 case id를 고르므로 corpus에 문장이
+추가되거나 생성 순서가 바뀌어도 표본이 달라지지 않는다. `--case-ids`는
+`--limit`·분할·프로토콜/갈래 필터와 함께 쓰지 않으며, 알 수 없는 id가 하나라도
+있으면 호출 전에 실패한다. STT5 대표 표본은 20문장에 아래 두 소음 조건을 곱한
+40건이다.
+
+```bash
+python scripts/sim/live.py \
+  --case-ids scripts/sim/manifests/stt5_representative_40.json \
+  --voices ko-KR-Chirp3-HD-Charon --speeds 1 \
+  --conditions quiet,centrifuge:10 --distances 30 --denoise on \
+  --max-calls 200 --max-usd 20 \
+  --output ~/reports/sim/stt5-fixed-plan.json
+```
+
 사람이 실제로 돌리는 명령:
 
 ```bash
@@ -269,6 +285,9 @@ python scripts/sim/diagnostics.py ~/voiney-lab/data/runtime/stt-diagnostics \
 
 실측에서 STT 호출 경계에 도달한 입력만 CER·WER와 숫자·단위·숫자+단위·용어 정확도를 낸다. VAD에서 버린 입력은 STT 분모에서 제외하고 버림으로 센다. 공급자 실패는 실패 요청으로 남긴다. 실제 받아쓰기 응답이 하나도 없으면 STT 측정 완료로 표시하지 않는다. 기준 문장이 없는 소음만의
 입력은 STT 분모를 만들지 않는다. 버린 말의 이유 코드·미종료 턴·취소 이벤트와 강제 종료·여러 조각으로 나뉜 입력도 센다.
+`cut_off`는 15초 강제 종료 또는 나뉜 endpoint가 실제로 둘 이상의 STT 입력이 된 경우다.
+여러 endpoint가 생겨도 continuation join 뒤 STT 호출이 하나라면 `endpoint_count`에는
+남기되 `cut_off`로 세지 않는다.
 첫 소리·STT·TTS·서버 처리 지연은 p50/p95와 표본 수를 함께 본다. 의도하지 않은 음절
 잘림은 STT 오류에 나타날 수 있지만 여기의 취소 이벤트 수가 모든 음향 잘림을 포착하지는 않는다.
 
