@@ -487,6 +487,13 @@ class EndpointResult:
     #: none for the endpoint time), "level" (voiced, but quieter than the
     #: wearer for that long) or "forced" (the maximum utterance length).
     endpoint: str | None = None
+    #: Lane SAFE2: of the frames the end trimmed, those the classifier still
+    #: called voiced (the relative gate or the wearer's level overruled them),
+    #: up to the last such frame -- nothing in a quiet room. Not sent to
+    #: speech recognition on their own; a continuation that joins this
+    #: utterance puts them back between the two pieces, so a sentence whose
+    #: quieter middle counted as silence in steady noise is heard whole.
+    trailing: bytes = b""
 
 
 #: Lane SP2, decision 1: the share of the last endpoint-silence's frames the
@@ -520,6 +527,8 @@ class EndpointDetector:
         self.last_frame_level_db: float | None = None
         self.last_frame_voiced = False
         self._prefix: deque[tuple[bytes, bool]] = deque(maxlen=self.config.prefix_frames)
+        #: Lane SAFE2: the classifier's verdicts of the latest frames (see process()).
+        self._recent_raw_voiced: deque[bool] = deque(maxlen=200)
         #: Lane SP1, decision 1: each voiced frame's level, measured as it
         #: arrives (about 25 µs a frame) so a commit only takes a median;
         #: None for a frame the VAD called silent. Kept beside _prefix and
@@ -809,6 +818,10 @@ class EndpointDetector:
         # The room floor records the classifier's original verdict.  The
         # adaptive gate changes only what may keep an utterance open.
         self.last_frame_voiced = raw_voiced
+        # Lane SAFE2: the classifier's own verdicts of the latest frames, for
+        # the end to tell which trimmed frames it overruled (the classifier
+        # is stateful, so it is never asked again about a frame).
+        self._recent_raw_voiced.append(raw_voiced)
         voiced = self._adaptive_endpoint_voiced(raw_voiced, frame_level)
         level = frame_level if voiced else None
         if self.state == TurnState.IDLE:
@@ -1006,6 +1019,18 @@ class EndpointDetector:
             trim = self.consecutive_silence_frames
         kept = self._utterance[:-trim] if trim else self._utterance[:]
         kept_levels = self._utterance_levels[:-trim] if trim else self._utterance_levels[:]
+        # Lane SAFE2: of the trimmed frames, those the classifier itself still
+        # called voiced -- the ones the relative gate or the wearer's level
+        # overruled -- up to the last of them. In a quiet room that is
+        # nothing; in steady noise it is the sentence's quieter stretch (the
+        # speech-shape test does not pass quiet Korean under centrifuge
+        # noise, so it is not applied here; the tail is at most the end's
+        # own second).
+        trimmed = [frame for frame, _ in self._utterance[-trim:]] if trim else []
+        raw = list(self._recent_raw_voiced)[-len(trimmed):] if trimmed else []
+        raw = [False] * (len(trimmed) - len(raw)) + raw
+        last_voiced = max((index for index, flag in enumerate(raw) if flag), default=-1)
+        trailing = b"".join(trimmed[:last_voiced + 1]) if last_voiced >= 0 else b""
         # An end by level leaves the VAD's count over the room's voice after
         # the wearer's words; count what is kept.
         voiced_frames = (
@@ -1040,6 +1065,7 @@ class EndpointDetector:
             ),
             voiced_level_db=_median_level(kept_levels) if accepted else None,
             endpoint=kind or ("forced" if forced else "silence"),
+            trailing=trailing if accepted else b"",
         )
         if result.rejected:
             self.reset()
