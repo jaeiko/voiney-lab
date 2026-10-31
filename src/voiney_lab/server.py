@@ -1,7 +1,6 @@
 """Voice Workflow Agent: hands-free voice cascade with M2 Dispatcher tools."""
 from __future__ import annotations
 import asyncio, base64, collections, contextvars, hashlib, hmac, importlib.util, json, logging, math, os, re, secrets, sqlite3, stat, tempfile, textwrap, threading, time, unicodedata
-from collections import deque
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field, replace
@@ -8223,7 +8222,6 @@ class ListenerSession:
         self._interrupt_candidate_diagnostics={}
     def _reset_turn_identity(self)->None:
         self._joinable_turn=None
-        self._since_end_frames:deque[bytes]=deque(maxlen=self.SINCE_END_FRAMES_KEPT)
         self._pending_listener_events=[]
         for task in tuple(self.visual_tasks):
             task.cancel()
@@ -8749,37 +8747,26 @@ class ListenerSession:
         curated=self.curated_protocol_session
         return (getattr(curated,"_revision",None) if curated is not None else None,
                 self.experiment_state_version)
-    #: Lane SAFE2: how many frames heard after a turn's end are kept for a
-    #: continuation to put between the pieces (the join windows are 1.5--2 s).
-    SINCE_END_FRAMES_KEPT=200
     def _keep_turn_audio(self,turn_id:int,generation:int,pcm:bytes,trailing:bytes=b"")->None:
         """The last committed turn's audio and the run's revision then, for a continuation to join.
 
-        ``trailing`` (lane SAFE2) is what its end trimmed -- the endpoint
-        silence, or the quieter stretch an end by level trimmed. A join puts
-        it, and the frames heard since, between the two pieces.
+        ``trailing`` (lane SAFE2) is what its end trimmed and the classifier
+        still called voiced -- the quieter stretch the relative gate or the
+        wearer's level overruled. A join puts it between the two pieces.
         """
 
         self._joinable_turn={"identity":(turn_id,generation),"pcm":bytes(pcm),
                              "tail":bytes(trailing),"revision":self._workflow_revision()}
-        self._since_end_frames.clear()
-    def _gap_pcm(self,exclude_frames:int)->bytes:
-        """The frames heard since the kept turn's end, less the ``exclude_frames`` already in the words under way."""
-
-        frames=list(self._since_end_frames)
-        keep=max(0,len(frames)-max(0,int(exclude_frames)))
-        return b"".join(frames[:keep])
-    def _lead_for_join(self,kept:Mapping[str,Any],exclude_frames:int)->bytes:
+    @staticmethod
+    def _lead_for_join(kept:Mapping[str,Any])->bytes:
         """The kept turn's words and the voiced frames its end trimmed: what goes in front of a continuation.
 
-        The gap heard since (``_gap_pcm``) is not put in: between a sentence's
-        two pieces in noise the quieter words are the trimmed frames, while
-        what follows the end is a pause, or typing (lane LIVE3) -- and the
-        joined utterance stays as short as it was, plus at most the end's
-        second.
+        What was heard after the end is not put in: between a sentence's two
+        pieces in noise the quieter words are the trimmed frames, while what
+        follows the end is a pause, or typing (lane LIVE3) -- so the joined
+        utterance is as it was, plus at most the end's own second.
         """
 
-        del exclude_frames
         return bytes(kept["pcm"])+bytes(kept.get("tail",b""))
     def _continuation_gap(
         self,identity:tuple[int,int],*,started_at:float|None=None,
@@ -8848,9 +8835,9 @@ class ListenerSession:
         joined_turn_id=self.next_turn_id; self.next_turn_id+=1
         self.active_turn_id=joined_turn_id
         self.turn_generations[joined_turn_id]=self.generation
-        # Lane SAFE2: the first piece, what its end trimmed and the gap since
+        # Lane SAFE2: the first piece and the quieter frames its end trimmed
         # go in front, so the sentence's quiet middle is heard too.
-        pcm=self._lead_for_join(kept,detector.buffered_frames)
+        pcm=self._lead_for_join(kept)
         detector.prepend_utterance(
             pcm[i:i+FRAME_BYTES] for i in range(0,len(pcm)-FRAME_BYTES+1,FRAME_BYTES))
         self.detector=detector
@@ -8894,8 +8881,8 @@ class ListenerSession:
         joined_turn_id=self.next_turn_id; self.next_turn_id+=1
         self.active_turn_id=joined_turn_id
         self.turn_generations[joined_turn_id]=self.generation
-        # Lane SAFE2: the first piece, what its end trimmed and the gap since.
-        pcm=self._lead_for_join(kept,result.total_frames)
+        # Lane SAFE2: the first piece and the quieter frames its end trimmed.
+        pcm=self._lead_for_join(kept)
         kept_frames=[pcm[i:i+FRAME_BYTES] for i in range(0,len(pcm)-FRAME_BYTES+1,FRAME_BYTES)]
         kept_voiced=sum(1 for frame in kept_frames if self._vad_classifier(frame))
         joined_result=replace(
@@ -8960,8 +8947,6 @@ class ListenerSession:
         self._apply_endpoint_threshold(detector)
         frames=framer.push(chunk)
         for index,frame in enumerate(frames):
-            # Lane SAFE2: what is heard after the end, for a join to keep.
-            self._since_end_frames.append(frame)
             result=detector.process(frame)
             pending=self._interrupt_join_pending
             if (
