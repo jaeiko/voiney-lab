@@ -291,7 +291,11 @@ class HelpTurnTests(_TurnHarness, unittest.TestCase):
     def test_only_public_material_says_the_sources_had_none_then_the_piece(self) -> None:
         source, _client = _source([_wiki_ko()])
         session = self._session(supplemental=False, public=source)
-        reply, spoken, _explained, _sent = self._turn(session, "아세토나이트릴 침전이 생겼는데 어떡해")
+        # Lane SAFE2 (2026-10-31): a problem said as having happened and then
+        # asked about ("…생겼는데 어떡해") is recorded and gets lane QA1's
+        # grounded answer, which takes no public material; the public tier's
+        # order is shown on a problem asked about alone.
+        reply, spoken, _explained, _sent = self._turn(session, "아세토나이트릴 침전이 왜 생기지?")
         self.assertIn(NOTHING_FOUND["ko"], reply)
         self.assertLess(reply.index(NOTHING_FOUND["ko"]), reply.index("공개 자료 · 일반 참고 — 위키백과"))
         self.assertIn(PUBLIC_WIKI_ONLY["ko"], reply)
