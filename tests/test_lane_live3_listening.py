@@ -141,7 +141,7 @@ class RelativeGateFloorTests(unittest.TestCase):
 
     def test_steady_room_sound_still_defines_the_floor(self) -> None:
         # Lane HEAR2's case: a constant room sound the classifier calls speech
-        # from the first frame has no speech shape and no level spread.
+        # from the first frame has no level spread.
         room = array("h", [184] * SAMPLES).tobytes()
         rise = array("h", [420] * SAMPLES).tobytes()
         result = self.commit(
@@ -152,7 +152,7 @@ class RelativeGateFloorTests(unittest.TestCase):
         self.assertFalse(result.forced)
         self.assertLess(result.total_frames, 200)
 
-    def test_a_varying_sound_without_speech_shape_defines_no_floor(self) -> None:
+    def test_a_varying_sound_defines_no_floor(self) -> None:
         # Room frames whose level swings more than the steady spread -- a
         # bench being used, not a fan -- are not a floor the wearer is cut by.
         swinging = [

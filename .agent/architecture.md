@@ -93,8 +93,7 @@ generation is cancelled and its audio cleared (barge-in).
    of those voiced levels may keep the endpoint open after one frame actually
    reaches that rise. Lane LIVE3: that second must be steady room sound --
    its voiced levels' 20th-to-80th percentile spread within
-   `ADAPTIVE_NOISE_STEADY_SPREAD_DB` (6 dB) and no speech shape in its PCM
-   (`_contains_speech_shape`, checked at most once a second) -- so the
+   `ADAPTIVE_NOISE_STEADY_SPREAD_DB` (6 dB) -- so the
    wearer's own first second never defines the floor that would then trim
    the quiet end of the sentence. It does not alter PCM,
    the 1000 ms silence, or the 15 s safety bound. For production WebRTC input
