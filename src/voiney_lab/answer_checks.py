@@ -344,6 +344,50 @@ def outside_pdf_violations(
         violations.append("answer_states_safety")
     if display_label_violations(body):
         violations.append("answer_has_display_label")
+    violations.extend(supposition_violations(body, question=question))
+    return tuple(violations)
+
+
+# --- What general knowledge may say of a problem (lane GEN1, 2026-10-31) ----------
+
+#: A past or finished event: "생겼을 수 있어요", "변했어요", "has formed", "may
+#: have". Said of a supposition, it tells what was only supposed as having
+#: happened (the 10/31 voice test: "침전이 생겼을 수 있어요" for "… 생기면").
+_PAST_EVENT = re.compile(
+    r"[았었였했됐겼났졌왔갔봤샜쳤렸켰웠렀뤘](?:을|던|다|어요|어|습니다|는데|기|으니)"
+    r"|\b(?:has|have|had)\s+(?:formed|happened|occurred|appeared|turned|changed|been)\b"
+    r"|\b(?:may|might|could|must)\s+have\b|\b(?:formed|occurred|happened)\b",
+    re.I,
+)
+#: A cause named: "때문이에요", "원인은 …", "탓", "because", "due to", "caused by".
+_CAUSE = re.compile(
+    r"때문|탓|원인|(?:로|으로)\s*인해|\bbecause\b|\bdue\s+to\b|\bcaus(?:e|ed|es)\b"
+    r"|\bresult(?:s|ed)?\s+(?:of|from)\b",
+    re.I,
+)
+
+
+def supposition_violations(text: str, *, question: str, problem: bool = False) -> tuple[str, ...]:
+    """Why general knowledge (a supplemental model's) may not be said of a
+    question about a problem: it names a cause as certain, or it tells a
+    supposition ("여기서 침전이 생기면") as having happened. ``problem`` says
+    the question is a problem whatever its words (the possible causes, ③).
+    The order of the reply -- that the source has nothing on it, first -- is
+    the caller's and is not changed here.
+    """
+
+    from voiney_lab.intent_arbitration import problem_reading, supposed_problem_reading, supposes
+
+    body = " ".join(text.split())
+    if not body:
+        return ()
+    violations: list[str] = []
+    if problem or supposed_problem_reading(question) is not None or problem_reading(question) is not None:
+        if any(_CAUSE.search(sentence) and not _HEDGED.search(sentence)
+               for sentence in _SENTENCE_END.split(body) if sentence.strip()):
+            violations.append("cause_asserted")
+    if supposes(question) and _PAST_EVENT.search(body):
+        violations.append("supposed_told_as_happened")
     return tuple(violations)
 
 
@@ -903,7 +947,7 @@ def problem_help_violations(text: str, *, quoted: Iterable[str]) -> tuple[str, .
 
 
 def possible_cause_violations(
-    text: str, *, sources_text: str, protocol_text: str,
+    text: str, *, sources_text: str, protocol_text: str, problem: str = "",
 ) -> tuple[str, ...]:
     """Why a model's possible causes (③) may not be said; empty when they may.
 
@@ -943,6 +987,9 @@ def possible_cause_violations(
                 break
     if any(not _HEDGED.search(sentence) for sentence in _SENTENCE_END.split(body) if sentence.strip()):
         violations.append("not_hedged")
+    # Lane GEN1: a cause is never said as certain; with the problem's own
+    # words, nothing supposed is told as having happened.
+    violations.extend(supposition_violations(body, question=problem, problem=True))
     return tuple(dict.fromkeys(violations))
 
 

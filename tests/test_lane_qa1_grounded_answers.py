@@ -57,7 +57,6 @@ class GroundedQuestionRoutingTests(unittest.TestCase):
         for words in (
             "AMBIC가 무엇인지 설명해 줄 수 있어?",
             "다음에 뭐 하면 돼?",
-            "쏟으면 어떡해?",
             "튜브가 무엇인지 설명해 줄 수 있어?",
             "끝났다고 하면 어떻게 돼?",
             "거품이 왜 생기지?",
@@ -67,6 +66,11 @@ class GroundedQuestionRoutingTests(unittest.TestCase):
                     arbitrate_request(words).reason_code,
                     "problem_contingency_question",
                 )
+
+    def test_a_supposed_spill_is_a_grounded_question(self) -> None:
+        # Lane GEN1 (person's decision 2026-10-31): "쏟으면 어떡해?" kept its
+        # earlier route above until then; a supposition is now grounded.
+        self.assertEqual(arbitrate_request("쏟으면 어떡해?").reason_code, "problem_contingency_question")
 
     def test_all_ten_public_protocols_use_the_read_only_problem_help_path(self) -> None:
         protocols = load_corpus()

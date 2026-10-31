@@ -127,14 +127,19 @@ _SHORT_KOREAN_DISCOURSE_ALIASES = {
 }
 
 
-#: The terms admitted when no protocol is attached. With a protocol, the
-#: protocol's own terms take their place (``known_terms``).
+#: The words admitted as terms when no protocol is attached (lane GEN1):
+#: general laboratory nouns and units, never one document's reagents. With a
+#: protocol, its own terms take their place (``known_terms``). An acronym
+#: written in capitals ("PCR", "HPLC") is a term by its form either way.
 _DEFAULT_SCIENTIFIC_TERMS = frozenset({
-    "ambic", "ammonium", "bicarbonate", "hplc", "water", "acetonitrile",
-    "dtt", "iodoacetamide", "trypsin", "sds", "page", "sds-page", "gel",
-    "thermomixer", "rpm", "evotip", "formic", "acid", "lc-ms", "lc", "ms",
-    "solution", "a", "b", "plug", "band", "keratin", "contamination",
+    "water", "buffer", "solution", "reagent", "sample", "gel", "band", "tube", "plate",
+    "pellet", "acid", "base", "salt", "rpm", "ph", "ml", "ul", "mg", "a", "b", "c",
+    # General techniques and instruments, said in lower case by STT.
+    "sds", "page", "sds-page", "pcr", "qpcr", "rt-pcr", "lc", "ms", "lc-ms", "gc", "gc-ms",
+    "hplc", "nmr", "uv", "elisa",
 })
+#: A token written as an acronym: two to six capitals or digits, a hyphen allowed.
+_ACRONYM = re.compile(r"[A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]{1,5})?")
 
 
 def _known_term_tokens(terms: tuple[str, ...]) -> frozenset[str]:
@@ -197,13 +202,19 @@ def classify_korean_admission(
             clarification_required=False,
         )
 
-    # Known technical terminology alone (e.g. "AMBIC", "HPLC water") is a term.
-    tokens = [t.casefold() for t in re.findall(r"[0-9A-Za-z_-]+", cleaned)]
+    # Known technical terminology alone (a protocol's term, an acronym, a
+    # laboratory noun) is a term.
+    raw_tokens = re.findall(r"[0-9A-Za-z_-]+", cleaned)
+    tokens = [t.casefold() for t in raw_tokens]
     scientific_known = (
         _DEFAULT_SCIENTIFIC_TERMS if known_terms is None
         else _known_term_tokens(known_terms)
     )
-    if tokens and all(t in scientific_known or t.isdigit() for t in tokens):
+    if tokens and all(
+        folded in scientific_known or folded.isdigit()
+        or (known_terms is None and _ACRONYM.fullmatch(raw) is not None)
+        for raw, folded in zip(raw_tokens, tokens)
+    ):
         return KoreanTranscriptionAdmission(
             raw_text=raw_text,
             admitted_text=raw_text,
@@ -334,16 +345,17 @@ _CANONICAL_COMMAND_TERMS = (
     "프로토콜 시작", "현재 단계", "다음 단계", "다음 단계 미리보기",
     "완료", "현재 단계 완료", "완료했어요", "다 했어요", "완료 조건",
     "네", "아니요", "다시 알려줘", "프로토콜 중단", "이상 사항 기록",
-    "관찰 결과", "완전히 탈색", "투명해요", "투명한가요", "흰색으로 변했어요",
-    "아직 색이 남아 있어요",
+    "관찰 결과",
     # English workflow terms / STT translations
     "protocol start", "proton start", "pro protocol start", "current step", "current stage",
     "next step", "next stage", "next step preview", "preview step", "step preview",
     "complete", "current step complete", "current stage complete", "i did it",
     "complete condition", "completion condition", "yes", "no", "tell me again",
     "protocol interruption", "protocol stop", "anomaly record", "abnormality record",
-    "observation result", "completely decontaminated", "completely destained",
-    "transparent", "white changed", "color is still there", "stain still remains",
+    "observation result",
+    # Lane GEN1: one document's endpoint phrases (in-gel's "완전히 탈색",
+    # "흰색으로 변했어요") are no command; a protocol's own words arrive as
+    # its keyterms.
 )
 
 

@@ -245,6 +245,9 @@ def test_diagnostic_replay_outputs_anonymous_aggregate_counts(
         os.utime(stem.with_suffix(".json"), (stamp + index, stamp + index))
 
     class FakeSession:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
         def start(self) -> None:
             pass
 
@@ -253,11 +256,12 @@ def test_diagnostic_replay_outputs_anonymous_aggregate_counts(
                 return []
             if pcm.startswith(b"\x01\x00"):
                 return [SimpleNamespace(
-                    kind="speech.end", result=SimpleNamespace(rejection_reason=None),
+                    kind="speech.end",
+                    result=SimpleNamespace(rejection_reason=None, total_frames=1),
                 )]
             return [SimpleNamespace(
                 kind="speech.rejected",
-                result=SimpleNamespace(rejection_reason="transient_noise"),
+                result=SimpleNamespace(rejection_reason="transient_noise", total_frames=0),
             )]
 
     monkeypatch.setattr(bench, "ListenerSession", FakeSession)
@@ -267,6 +271,8 @@ def test_diagnostic_replay_outputs_anonymous_aggregate_counts(
         ended_at=datetime.fromtimestamp(stamp + 2, timezone.utc),
     )
 
+    # LIVE3 added the chain, candidate, length and tail counters; the
+    # anonymous contract (counts only) is unchanged.
     assert result == {
         "mode": "diagnostic_wav_replay",
         "clips": 2,
@@ -275,6 +281,12 @@ def test_diagnostic_replay_outputs_anonymous_aggregate_counts(
         "empty_transcript_clips": 1,
         "empty_transcript_stt_bound": 0,
         "rejections": {"transient_noise": 1},
+        "continuation_joins": 0,
+        "candidates_rejected": 0,
+        "longest_utterance_frames": 1,
+        "single_utterance_clips": 1,
+        "word_bearing_frames_lost": 0,
+        "end_delay_ms_max": 0,
     }
     assert "private" not in json.dumps(result)
     assert "must not be returned" not in json.dumps(result)

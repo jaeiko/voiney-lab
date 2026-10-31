@@ -217,6 +217,64 @@ def generate_development_cases(protocol: Protocol) -> tuple[Case, ...]:
     )
 
 
+#: Lane GEN1 (2026-10-31): a problem supposed, not reported, in each field's
+#: words. Both sides are written here once and fixed; rules are tuned on the
+#: development wording only and the holdout is scored, not read. The same
+#: words go to every protocol of the field; nothing names one document.
+SUPPOSED_QUESTIONS: dict[str, dict[str, tuple[str, ...]]] = {
+    'biology': {
+        'development': ('세포가 안 떨어지면 어떡해?', '만약 배지 색이 노랗게 변하면 어떻게 해?', '여기서 거품이 생기면'),
+        'holdout': ('혹시 세포가 뭉치면 어떻게 돼?', '웰에 기포가 생기면 어떡하지', '만약 밴드가 안 보이면'),
+    },
+    'chemistry': {
+        'development': ('용액이 탁해지면 어떻게 해?', '혹시 침전이 생기면', '만약 색이 변하면 어떻게 돼?'),
+        'holdout': ('시약이 넘치면 어떡해?', '만약 온도가 너무 높아지면', '혹시 용액에 결정이 생기면 어떻게 하지?'),
+    },
+    'materials': {
+        'development': ('필름에 금이 가면 어떡해?', '만약 기판이 깨지면', '혹시 막이 뿌옇게 되면 어떻게 해?'),
+        'holdout': ('코팅이 벗겨지면 어떡하지?', '만약 표면에 얼룩이 생기면 어떻게 돼?', '혹시 결정이 안 생기면'),
+    },
+    'soil': {
+        'development': ('여과가 너무 느리면 어떡해?', '만약 추출액이 탁해지면', '혹시 시료가 덜 마르면 어떻게 해?'),
+        'holdout': ('흙이 다 안 풀리면 어떡하지?', '만약 거품이 넘치면 어떻게 돼?', '혹시 침전이 생기면 어떻게 하지?'),
+    },
+}
+
+
+def development_fixture_protocol() -> Protocol:
+    """The in-gel development fixture as one more SIM protocol (lane GEN1).
+
+    Development material only: it needs the externally licensed source PDF
+    (condition A) and is never part of the public partition.
+    """
+
+    from voiney_lab.curated_protocol import load_curated_protocol_fixture
+
+    data = ROOT / 'data/fixtures/development_protocols'
+    fixture = load_curated_protocol_fixture(
+        data / 'candidate_a_curated_analysis.json',
+        data / 'candidate_a_curated_analysis.provenance.json',
+        ROOT / 'data/runtime/candidate-a-source/in-gel-digestion.pdf',
+    )
+    return Protocol('in_gel_development', 'biology', fixture)
+
+
+def generate_supposed_cases(protocol: Protocol, split: str) -> tuple[Case, ...]:
+    """The field's supposed problems at the protocol's second step (lane GEN1).
+
+    Read-only grounded help is expected and nothing may change: a supposition
+    that is recorded as an anomaly is the error this family counts.
+    """
+
+    texts = SUPPOSED_QUESTIONS.get(protocol.field, SUPPOSED_QUESTIONS['chemistry'])[split]
+    index = min(1, len(protocol.fixture.steps) - 1)
+    return tuple(
+        Case(f'{protocol.code}.supposed_{split}.{n}', 'supposed_question', text, index,
+             'active', ('problem_help',), ('grounded_problem_question',), ())
+        for n, text in enumerate(texts)
+    )
+
+
 def generate_cases(protocol: Protocol) -> tuple[Case, ...]:
     cases = []
     session = CuratedProtocolSession(protocol.fixture)

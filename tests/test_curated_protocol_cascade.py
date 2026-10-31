@@ -622,9 +622,10 @@ class CuratedProtocolSessionTests(unittest.TestCase):
             ("에이엠빅이 뭐야?","ambic",("definition",)),
             ("여기서 솔루션 A는 뭐야?","solution_a",("definition",)),
             ("솔루션 B 구성은 뭐야?","solution_b",("definition","composition")),
-            ("PLC water is what?","hplc_water",("definition",)),
-            ("H PLC water가 뭐야?","hplc_water",("definition",)),
-            ("HPLC 워터가 뭐야?","hplc_water",("definition",)),
+            # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+            ("PLC water is what?","hplc water",("definition",)),
+            ("H PLC water가 뭐야?","hplc water",("definition",)),
+            ("HPLC 워터가 뭐야?","hplc water",("definition",)),
             ("겨야 할 안전 수칙은 뭐야?",None,("definition","safety")),
             ("지켜야 할 안전 수칙은 뭐야?",None,("definition","safety")),
         )
@@ -4140,7 +4141,8 @@ class CuratedProtocolServerCascadeTests(unittest.TestCase):
         )
         self.assertEqual(intent.action, CuratedProtocolAction.RELATED_QUESTION)
         self.assertIn("stained_protein_band", intent.requested_entities)
-        self.assertIn("ambic", intent.requested_entities)
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+        self.assertIn("AMBIC", intent.requested_entities)
         plan = curated_session.plan(prompt, turn_id=1, language="ko")
         envelope = curated_session.protocol_answer_envelope(plan, language="ko")
         # Each entity is spoken as the PDF spells it.

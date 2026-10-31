@@ -564,13 +564,27 @@ class SpillFrontRuleTests(unittest.TestCase):
                 self.assertEqual(outcome.plan.anomaly_text, said)
 
     def test_a_spill_asked_supposed_or_denied_is_still_handed_on(self) -> None:
-        for said in ("흘려도 돼?", "쏟으면 어떡해?", "시료를 흘렸어?", "흘리지 않게 조심해야 돼?",
+        for said in ("흘려도 돼?", "시료를 흘렸어?", "흘리지 않게 조심해야 돼?",
                      "안 흘렸어", "흘린 거 아니야"):
             with self.subTest(said=said):
                 session = _miniprep(3)
                 self.assertIsNone(session.front_plan(
                     said, turn_id=2, language="ko", configuration_id=1, generation=1,
                 ))
+
+    def test_a_supposed_spill_gets_the_grounded_answer_and_is_not_recorded(self) -> None:
+        # Lane GEN1 (person's decision 2026-10-31): a supposition ("쏟으면
+        # 어떡해?") goes to lane QA1's grounded answer, router or not; it was
+        # handed on to the router above until then. Nothing is recorded.
+        session = _miniprep(3)
+        plan = session.front_plan(
+            "쏟으면 어떡해?", turn_id=2, language="ko", configuration_id=1, generation=1,
+        )
+        self.assertIsNotNone(plan)
+        self.assertIs(plan.action, CuratedProtocolAction.PROBLEM_HELP)
+        self.assertEqual(plan.intent_kind, "grounded_problem_question")
+        self.assertFalse(plan.reported_anomaly)
+        self.assertIsNone(session._pending_anomaly)
 
     def test_other_problems_stay_with_the_router(self) -> None:
         # Only lane R7's spill reading moved to the front rules.

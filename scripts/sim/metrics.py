@@ -25,6 +25,11 @@ EXPECTED_ACTIONS = {
     'chat': ('off_topic', 'agent_meta'), 'term': ('question', 'related_question', 'clarify_parameter'),
 }
 
+#: LIVE3: an end found more than this long after the wearer's last frame is
+#: late -- the 1000 ms endpoint silence, the continuous impact that may hold
+#: the resume window (200 ms) and one window step of slack.
+LATE_END_MS = 1500
+
 _ROUTER_USAGE_KEYS = (
     'prompt_tokens', 'completion_tokens', 'total_tokens',
     'cached_prompt_tokens', 'cache_write_tokens', 'reasoning_tokens',
@@ -133,6 +138,9 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
         'case': case.code, 'family': case.family, 'understood': bool(understood), 'wrong_state': wrong,
         'emergency_miss':bool((case.family == 'emergency' or case.family.startswith('emergency_')) and result['route'] != 'deterministic_emergency'),
         'false_alarm':bool(case.family == 'negative_control' and result['route'] == 'deterministic_emergency'),
+        # Lane GEN1: a supposition recorded as an anomaly (it has not happened).
+        'supposed_misrecorded':bool(case.family == 'supposed_question' and (
+            result['action'] == 'report_anomaly' or 'anomaly' in changed)),
         'error_codes':result.get('error_codes',[]), 'action': result['action'], 'intent_kind': result['intent_kind'], 'route': result['route'],
         'changed_fields': sorted(changed), 'invalid_state': result.get('invalid_state',[]), 'english_copy': english, 'duplicate_label': duplicate,
         'korean': korean, 'drops': result['drop_reasons'], 'interrupted': result.get('interrupted', False),
@@ -164,6 +172,8 @@ def aggregate(rows: list[dict]) -> dict:
                     timings[key].append(val)
         def percentiles(values: list[float]) -> dict:
             values = sorted(values)
+            if not values:
+                return {'p50': None, 'p95': None, 'n': 0}
             return {p: values[max(0, math.ceil(len(values)*q)-1)] for p,q in [('p50', .5),('p95', .95)]} | {'n':len(values)}
         counts = Counter()
         measured = 0
@@ -213,11 +223,21 @@ def aggregate(rows: list[dict]) -> dict:
             'wrong_state': sum(r['wrong_state'] for r in group), 'english_copy': sum(r['english_copy'] for r in group),
             'emergency_miss':sum(r.get('emergency_miss', False) for r in group),
             'false_alarm':sum(r.get('false_alarm', False) for r in group),
+            'supposed_misrecorded':sum(r.get('supposed_misrecorded', False) for r in group),
             'duplicate_label': sum(r['duplicate_label'] for r in group), 'incomplete': sum(r['incomplete'] for r in group),
             'cut_off':sum(r.get('cut_off',False) for r in group), 'interrupted': sum(r['interrupted'] for r in group),
             'wearer_dropped':sum(r.get('wearer_dropped',False) for r in group),
             'noise_sent_to_stt':sum(r.get('noise_sent_to_stt',False) for r in group),
             'impact_reopened':sum(r.get('impact_reopened',False) for r in group),
+            # LIVE3: turns the impacts chained (joined and restarted), and
+            # how late after the wearer's last frame the end was found.
+            'continuation_joins':sum(int(r.get('continuation_joins',0) or 0) for r in group),
+            'late_end':sum(
+                1 for r in group
+                if isinstance(r.get('end_delay_ms'),(int,float)) and r['end_delay_ms']>LATE_END_MS),
+            'end_delay_ms':percentiles([
+                r['end_delay_ms'] for r in group
+                if isinstance(r.get('end_delay_ms'),(int,float)) and math.isfinite(r['end_delay_ms'])]),
             'grounding_cases':sum(r.get('grounding_measured',False) for r in group),
             'grounded_answers':sum(r.get('grounded_answer',False) for r in group),
             'grounding_accuracy':(
@@ -236,7 +256,7 @@ def aggregate(rows: list[dict]) -> dict:
             'router': router,
         }
     tables = {}
-    for dimension in ('protocol', 'family', 'protocol_family', 'noise', 'snr', 'effective_snr_db', 'distance_cm', 'denoise', 'voice', 'speed'):
+    for dimension in ('protocol', 'field', 'family', 'protocol_family', 'noise', 'snr', 'effective_snr_db', 'distance_cm', 'denoise', 'voice', 'speed'):
         groups = defaultdict(list)
         for row in rows:
             key = f'{row.get("protocol")}/{row.get("family")}' if dimension == 'protocol_family' else str(row.get(dimension, 'not_measured'))

@@ -8028,6 +8028,10 @@ class ListenerSession:
         self._interrupt_candidate_started_at:float|None=None
         self._interrupt_candidate_endpoint_at:float|None=None
         self._interrupt_candidate_diagnostics:dict[str,int|bool]={}
+        #: LIVE3: a candidate opened during the answer's preparation that
+        #: may still join the turn before it once it shows speech shape --
+        #: the turn's identity and when the sound began.
+        self._interrupt_join_pending:dict[str,Any]|None=None
         self._microphone_chunk_sequence=0
         self.greeting_emitted=False
         self.greeting_audio_ready=False
@@ -8151,6 +8155,7 @@ class ListenerSession:
         self._interrupt_detector=self._new_interrupt_detector(playback=playback)
         self._interrupt_framer=FrameBuffer()
         self._interrupt_candidate_identity=None
+        self._interrupt_join_pending=None
         self._interrupt_candidate_started_at=None
         self._interrupt_candidate_endpoint_at=None
         self._interrupt_candidate_diagnostics={}
@@ -8685,19 +8690,17 @@ class ListenerSession:
 
         self._joinable_turn={"identity":(turn_id,generation),"pcm":bytes(pcm),
                              "revision":self._workflow_revision()}
-    def _join_continuation(
-        self,identity:tuple[int,int],detector:EndpointDetector,framer:FrameBuffer,
-        result:EndpointResult,
-    )->list[ListenerEvent]|None:
-        """Join speech that began soon after the last end to it (decision 4); None to interrupt as before.
+    def _continuation_gap(
+        self,identity:tuple[int,int],*,started_at:float|None=None,
+    )->float|None:
+        """How long after the kept turn's end these words began, when they may still join it; else None.
 
-        Only while the turn is still being answered (not playing), within
-        CONTINUATION_JOIN_SECONDS of its end (FRAGMENT_JOIN_SECONDS when its
-        words were held as unfinished or are still being written down), and
-        when it has changed nothing --
-        the run's revision and its record's version are as they were. The
-        turn is cancelled; its audio goes in front of the words now under
-        way, which carry on as the listener's own utterance of a new turn.
+        The join's conditions (lane HEAR, decision 4; lane HEAR2, decision 2;
+        lane RA, decision (d)) apart from what the sound is: the turn is
+        still being answered (not playing), its audio is kept, the words
+        began within the window of its end and it has changed nothing.
+        ``started_at`` is when the words began (LIVE3: a join decided a few
+        frames after the onset still measures from the onset).
         """
 
         kept=self._joinable_turn
@@ -8722,12 +8725,34 @@ class ListenerSession:
             # not known yet, and nothing has been done with them.
             or (progress is not None and progress.state in {"listening","transcribing"})
             else CONTINUATION_JOIN_SECONDS)
-        gap=self.clock()-committed
+        gap=(started_at if started_at is not None else self.clock())-committed
         if gap>window or kept["revision"]!=self._workflow_revision():
             return None
+        return gap
+    def _join_continuation(
+        self,identity:tuple[int,int],detector:EndpointDetector,framer:FrameBuffer,
+        result:EndpointResult,*,started_at:float|None=None,
+    )->list[ListenerEvent]|None:
+        """Join speech that began soon after the last end to it (decision 4); None to interrupt as before.
+
+        Only while the turn is still being answered (not playing), within
+        CONTINUATION_JOIN_SECONDS of its end (FRAGMENT_JOIN_SECONDS when its
+        words were held as unfinished or are still being written down), and
+        when it has changed nothing --
+        the run's revision and its record's version are as they were. The
+        turn is cancelled; its audio goes in front of the words now under
+        way, which carry on as the listener's own utterance of a new turn.
+        """
+
+        gap=self._continuation_gap(identity,started_at=started_at)
+        if gap is None:
+            return None
+        kept=self._joinable_turn
+        assert kept is not None
         self._interrupted_generations.add(identity)
         self._held_fragment=None
         self._joinable_turn=None
+        self._interrupt_join_pending=None
         self.generation+=1
         joined_turn_id=self.next_turn_id; self.next_turn_id+=1
         self.active_turn_id=joined_turn_id
@@ -8752,6 +8777,55 @@ class ListenerSession:
                 joined_turn_id,self.generation,reason="continued_speech"),
             ListenerEvent("speech.start",joined_turn_id,result,self.generation),
         ]
+    def _join_committed_candidate(
+        self,identity:tuple[int,int],result:EndpointResult,*,started_at:float,
+    )->list[ListenerEvent]|None:
+        """Join a committed candidate's whole utterance to the turn before it (LIVE3).
+
+        The same join as ``_join_continuation`` -- the turn is cancelled and
+        its kept audio goes in front -- for words whose speech shape showed
+        only in the committed whole: the joined utterance ends here, as one
+        turn, with one transcription.
+        """
+
+        gap=self._continuation_gap(identity,started_at=started_at)
+        if gap is None or result.utterance is None:
+            return None
+        kept=self._joinable_turn
+        assert kept is not None
+        self._interrupted_generations.add(identity)
+        self._held_fragment=None
+        self._joinable_turn=None
+        self._interrupt_join_pending=None
+        self.generation+=1
+        joined_turn_id=self.next_turn_id; self.next_turn_id+=1
+        self.active_turn_id=joined_turn_id
+        self.turn_generations[joined_turn_id]=self.generation
+        pcm=kept["pcm"]
+        kept_frames=[pcm[i:i+FRAME_BYTES] for i in range(0,len(pcm)-FRAME_BYTES+1,FRAME_BYTES)]
+        kept_voiced=sum(1 for frame in kept_frames if self._vad_classifier(frame))
+        joined_result=replace(
+            result,
+            utterance=b"".join(kept_frames)+result.utterance,
+            voiced_frames=result.voiced_frames+kept_voiced,
+            total_frames=result.total_frames+len(kept_frames),
+        )
+        self._restore_primary_detector(TurnState.PROCESSING)
+        self.framer=FrameBuffer()
+        self.endpoint_at=self.clock()
+        self.turn_committed_at[joined_turn_id]=self.endpoint_at
+        self._keep_turn_audio(joined_turn_id,self.generation,joined_result.utterance)
+        self._reset_interrupt_input()
+        log.info(
+            "speech.continued turn_id=%s joined_turn_id=%s gap_ms=%d joined_ms=%d at_end=true",
+            identity[0],joined_turn_id,round(gap*1000),len(pcm)//32)
+        return [
+            ListenerEvent(
+                "assistant.interrupted",identity[0],result,identity[1],
+                joined_turn_id,self.generation,reason="continued_speech"),
+            ListenerEvent("speech.start",joined_turn_id,joined_result,self.generation),
+            ListenerEvent("speech.end",joined_turn_id,joined_result,self.generation),
+        ]
     def interrupt_candidate_open(self,turn_id:int,generation:int)->bool:
         """Whether words that began during this turn are still being heard or checked."""
 
@@ -8774,6 +8848,7 @@ class ListenerSession:
         self._interrupt_detector=self._new_interrupt_detector()
         self._interrupt_framer=FrameBuffer()
         self._interrupt_candidate_identity=None
+        self._interrupt_join_pending=None
         self._interrupt_candidate_started_at=None
         self._interrupt_candidate_endpoint_at=None
         self._interrupt_candidate_diagnostics={}
@@ -8792,6 +8867,30 @@ class ListenerSession:
         frames=framer.push(chunk)
         for index,frame in enumerate(frames):
             result=detector.process(frame)
+            pending=self._interrupt_join_pending
+            if (
+                pending is not None
+                and not result.speech_started
+                and detector.state is TurnState.USER_SPEAKING
+                and detector.speech_shape_seen
+            ):
+                # LIVE3: the words heard during the answer's preparation have
+                # shown speech shape: they join the turn before them now,
+                # measured from their onset, with every frame heard so far.
+                self._interrupt_join_pending=None
+                joined=self._join_continuation(
+                    pending["identity"],detector,framer,
+                    EndpointResult(
+                        speech_started=True,voiced_frames=detector.voiced_frames,
+                        total_frames=detector.buffered_frames,
+                        prefix_frames_retained=int(
+                            self._interrupt_candidate_diagnostics.get(
+                                "prefix_frames_retained",0))),
+                    started_at=pending["started_at"])
+                if joined is not None:
+                    output.extend(joined)
+                    output.extend(self._accept_primary_frames(frames[index+1:]))
+                    return output
             if result.speech_started:
                 interrupted_turn_id=self.active_turn_id
                 if interrupted_turn_id is None:
@@ -8802,12 +8901,23 @@ class ListenerSession:
                 identity=(interrupted_turn_id,interrupted_generation)
                 if identity in self._interrupted_generations:
                     continue
-                joined=self._join_continuation(identity,detector,framer,result)
-                if joined is not None:
-                    # The rest of this chunk is the joined utterance's.
-                    output.extend(joined)
-                    output.extend(self._accept_primary_frames(frames[index+1:]))
-                    return output
+                now=self.clock()
+                if self._continuation_gap(identity,started_at=now) is not None:
+                    if not self._transient_noise_gate or detector.speech_shape_seen:
+                        joined=self._join_continuation(identity,detector,framer,result)
+                        if joined is not None:
+                            # The rest of this chunk is the joined utterance's.
+                            output.extend(joined)
+                            output.extend(self._accept_primary_frames(frames[index+1:]))
+                            return output
+                    else:
+                        # LIVE3: a sound that opened like speech during the
+                        # answer's preparation joins the turn before it only
+                        # once it shows speech shape; a bench impact (typing,
+                        # a pipette, a rack) never does, so it no longer
+                        # cancels that turn and chains it to the 10 s bound.
+                        self._interrupt_join_pending={
+                            "identity":identity,"started_at":now}
                 self._interrupt_candidate_identity=identity
                 self._interrupt_candidate_started_at=self.clock()
                 self._interrupt_candidate_diagnostics={
@@ -8850,6 +8960,17 @@ class ListenerSession:
                     self._reset_interrupt_input(
                         playback=self.state==TurnState.AGENT_SPEAKING)
                     continue
+                pending=self._interrupt_join_pending
+                if (
+                    pending is not None and pending["identity"]==candidate
+                    and detector.speech_shape_seen
+                ):
+                    # LIVE3: the shape showed only in the committed whole.
+                    joined=self._join_committed_candidate(
+                        candidate,result,started_at=pending["started_at"])
+                    if joined is not None:
+                        output.extend(joined)
+                        break
                 if self.ignores_level(result.voiced_level_db):
                     # Lane SP1, decision 1: another person's voice while the
                     # agent speaks or thinks -- playback goes on, nothing is

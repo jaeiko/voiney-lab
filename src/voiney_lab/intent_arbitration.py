@@ -274,6 +274,143 @@ def vague_check_reading(text: str) -> bool:
         re.fullmatch(pattern, normalized) for pattern in _VAGUE_CHECK)
 
 
+#: Lane GEN1 (2026-10-31): words that set a supposition up front ("만약 …",
+#: "가정하면") and words a supposition ends in: a word ending in -면 / -다면
+#: / -라면 ("생기면", "생긴다면", "흰색이면", "생기면요"), "… 경우", "… 수(도)
+#: 있", and the English "if".
+_SUPPOSITION_LEAD = re.compile(r"(?<![가-힣])(?:만약|만일|가령|가정)|\b(?:if|suppose|in\s+case)\b")
+_SUPPOSITION_WORD = re.compile(r"[가-힣]+(?:다면|라면|면)(?:은|는|요)?$")
+_SUPPOSITION_PHRASE = re.compile(
+    r"(?:[가-힣](?:을|ㄹ)?\s*경우|[을를ㄹ길날될갈할질]\s*수(?:도)?\s*있)"
+)
+#: Words ending in 면 that are no supposition: nouns ("표면에" has its
+#: particle, "표면" alone does not), "그러면" (then), "아니면" (or else) and
+#: "-려면" (in order to).
+_NOT_SUPPOSITION_WORDS = frozenset({
+    "표면", "단면", "측면", "화면", "전면", "후면", "평면", "곡면", "이면", "내면", "외면",
+    "수면", "지면", "양면", "정면", "반면", "방면", "국면", "장면", "라면", "면",
+    "그러면", "그럼", "그렇다면", "아니면", "그러면은", "안그러면", "그렇지않으면",
+})
+#: Said as having happened, after the supposition: a past or ongoing
+#: predicate ("봤는데 침전이 생겼어", "섞었더니 거품이 나고 있어").
+_HAPPENED = re.compile(
+    r"(?:[았었였했됐겼났졌왔갔봤샜쳤렸켰웠렀뤘]|던)(?:어요|어|네요|네|는데|다|습니다|음|고|지|더니|으니까|으니)?(?=$|[\s,.!?~])"
+    r"|고\s*있(?:어|어요|네|는데|다|습니다)|\b(?:formed|appeared|happened|turned|became|is\s+now)\b"
+)
+#: The rest of a supposition asks or wishes, it does not report: "… 어떡해?",
+#: "… 어떻게 돼?", "… 괜찮아?", "… 좋겠어".
+_SUPPOSITION_ASKS = re.compile(
+    r"[?？]|어떡|어떻게|어쩌|뭐|무엇|무슨|왜|이유|원인|괜찮|문제\s*(?:없|있|돼|되)|돼$|되나|될까|되는|"
+    r"하나요|할까|하지|해야|나요$|까요?$|지요?$|는지|은지|가요?$|맞아|좋겠|바라|싶|"
+    r"\b(?:what|how|why|should|would|could|can|do\s+i)\b"
+)
+#: A command or a request after the supposition: it is not a problem.
+_SUPPOSITION_REQUESTS = re.compile(r"(?:줘|주세요|줄래|주실래|가자|하자|해라|넘어가|알려)")
+#: What goes wrong at a bench, named in any protocol: an unwanted thing seen
+#: (a precipitate, foam, a colour), a thing that breaks, spills or will not
+#: do what it should, or a failure. Never a reagent's or a document's own word.
+_TROUBLE = re.compile(
+    r"문제|이상|실패|오류|에러|잘못|틀리|틀려|침전|거품|기포|덩어리|응집|결정이|얼룩|이물질|부유물|알갱이|"
+    r"곰팡이|균열|금이|오염|연기|냄새|(?<![검탐수])색|탁해|탁하|뿌옇|뿌얘|흐려지|흐려져|변색|변하|변해|바뀌|"
+    r"굳어|굳으|깨지|깨져|터지|터져|부서|막히|막혀|넘치|넘쳐|흘리|흘려|쏟|엎지|엎으|새면|새어|새는|누출|"
+    r"타\s*버리|탔|그을|과열|끓어\s*넘|녹아\s*버리|말라\s*버리|떨어져\s*나|덜\s*[가-힣]|"
+    r"안\s*(?:돼|되|나오|보이|녹|섞|빠|붙|떨어|생기|맞|풀|굳|마르|말라)|"
+    r"\b(?:precipitat\w*|foam\w*|bubbl\w*|cloudy|turbid|fail\w*|contaminat\w*|leak\w*|spill\w*|crack\w*"
+    r"|clog\w*|burn\w*|smok\w*|colou?r)\b",
+    re.IGNORECASE,
+)
+
+
+def _supposition_split(normalized: str) -> tuple[str, str] | None:
+    """(the supposed part, the rest) when the words suppose something, else None.
+
+    The supposed part runs to the last word that ends a supposition; the rest
+    is what is said of it. With only a lead ("만약 …") the whole is supposed.
+    None too when the words before that word report something as having
+    happened ("침전이 생겼는데 이러면 어떡해?"): a problem said, then asked about.
+    """
+
+    words = normalized.split()
+    last = None
+    for index, word in enumerate(words):
+        bare = word.strip(",.!?~")
+        if not bare or bare in _NOT_SUPPOSITION_WORDS or bare.endswith(("려면", "으려면", "면서")):
+            continue
+        if _SUPPOSITION_WORD.fullmatch(bare):
+            last = index
+    if last is not None:
+        if _HAPPENED.search(" ".join(words[:last])):
+            return None
+        return " ".join(words[: last + 1]), " ".join(words[last + 1:])
+    phrase = None
+    for match in _SUPPOSITION_PHRASE.finditer(normalized):
+        phrase = match
+    if phrase is not None:
+        if _HAPPENED.search(normalized[:phrase.start()]):
+            return None
+        return normalized[: phrase.end()], normalized[phrase.end():]
+    lead = _SUPPOSITION_LEAD.search(normalized)
+    if lead is not None:
+        # "만약 …" with no word ending it: what follows is both the
+        # supposition and what is said of it ("만약을 위해 봤는데 침전이 생겼어").
+        return normalized[lead.start():lead.end()], normalized[lead.end():]
+    return None
+
+
+def supposes(text: str) -> bool:
+    """Whether the words suppose something and say nothing has happened (lane GEN1).
+
+    "여기서 침전이 생기면", "타이머 끝나면 다음으로 가자", "침전이 안 생기면
+    좋겠어": nothing is reported, so nothing may be recorded as having
+    happened. "만약을 위해 봤는데 침전이 생겼어" reports it (said after the
+    supposition, in the past); so do "표면에 거품이 생겼어" (a noun) and
+    "저으면서 보니까 침전이 생겼어" (-면서 is "while").
+    """
+
+    normalized = normalize_request_text(text)
+    split = _supposition_split(normalized) if normalized else None
+    return split is not None and not _HAPPENED.search(split[1])
+
+
+def supposed_problem_reading(text: str) -> str | None:
+    """A problem supposed rather than reported (lane GEN1, 2026-10-31).
+
+    "supposed": a trouble at the bench put as a supposition and asked, wished
+    or left there ("여기서 침전이 생기면" -- a transcript cut after -면 too --,
+    "혹시 거품이 나면 어떡해?", "만약 색이 변하면 어떻게 돼?", "침전이 생길
+    수도 있어?"). It is answered from the protocol and never recorded.
+    "unclear": a supposition said as a plain statement of what then happens
+    ("섞으면 침전이 생겨"): it may be what happened just now, so it is asked
+    once. None: nothing supposed, nothing troubled, a past report after it,
+    or a request ("다 녹으면 알려줘").
+    """
+
+    normalized = normalize_request_text(text)
+    if not normalized:
+        return None
+    split = _supposition_split(normalized)
+    if split is None:
+        return None
+    supposed, rest = split
+    if _HAPPENED.search(rest):
+        return None
+    asks = bool(_SUPPOSITION_ASKS.search(rest) or re.search(r"[?？]\s*$", text))
+    if not asks and rest and _SUPPOSITION_REQUESTS.search(rest):
+        return None
+    if not (_troubled(supposed) or _troubled(rest)):
+        return None
+    if rest.strip() and not asks and _troubled(rest):
+        return "unclear"
+    return "supposed"
+
+
+def _troubled(words: str) -> bool:
+    """Whether the words name a trouble: the general list, or a problem shape."""
+
+    return bool(words.strip()) and bool(
+        _TROUBLE.search(words) or any(_matches(words, (pattern,)) for _, pattern in _PROBLEM_SHAPES))
+
+
 @dataclass(frozen=True)
 class ProblemReading:
     """A problem said or asked about, and which shape read it."""
@@ -292,7 +429,9 @@ def problem_reading(text: str) -> ProblemReading | None:
     """
 
     normalized = normalize_request_text(text)
-    if not normalized or _matches(normalized, (_NOT_A_PROBLEM,)):
+    if not normalized or _matches(normalized, (_NOT_A_PROBLEM,)) or supposes(text):
+        # Lane GEN1: a problem supposed ("여기서 침전이 생기면") has not
+        # happened; ``supposed_problem_reading`` reads it.
         return None
     asked = _matches(normalized, (_PROBLEM_QUESTION,))
     shape = next((name for name, pattern in _PROBLEM_SHAPES if _matches(normalized, (pattern,))), None)
@@ -344,6 +483,17 @@ def arbitrate_request(text: str) -> RequestArbitration:
             RequestIntent.TROUBLESHOOTING,
             1.0,
             "problem_vague_check",
+            ("troubleshooting",),
+        )
+
+    supposed = supposed_problem_reading(text)
+    if supposed is not None:
+        # Lane GEN1 (2026-10-31): a problem supposed is answered from the
+        # source and never recorded; one that may be what just happened
+        # ("섞으면 침전이 생겨") is asked about once.
+        return RequestArbitration(
+            normalized, RequestIntent.TROUBLESHOOTING, 1.0,
+            "problem_contingency_question" if supposed == "supposed" else "problem_supposed_or_happened",
             ("troubleshooting",),
         )
 

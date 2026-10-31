@@ -47,6 +47,8 @@ from voiney_lab.intent_arbitration import (
     RequestIntent,
     arbitrate_request,
     problem_reading,
+    supposed_problem_reading,
+    supposes,
     vague_check_reading,
 )
 from voiney_lab.answer_checks import (
@@ -1421,6 +1423,9 @@ class CuratedControlIntent:
     count_reply: int | str | None = None
     #: Lane CF, decision 1: a value note the experimenter confirmed ("네").
     note_confirmed: bool = False
+    #: Lane GEN1: the earlier words a reply to "지금 생긴 일인가요, 생기면
+    #: 어떻게 하는지 묻는 건가요?" is about -- recorded, or answered, as those words.
+    supposed_words: str | None = None
 
 
 class DiscourseFocusKind(str, Enum):
@@ -1497,7 +1502,8 @@ class StepActionBinding:
 class StepRatioBinding:
     ratio_id: str
     mixture_id: str
-    components: tuple[tuple[str, int], ...]
+    #: (what, how many parts in the source's words): ("25mM AMBIC", "2 parts").
+    components: tuple[tuple[str, str], ...]
     evidence_id: str
     source_page: int
 
@@ -1939,10 +1945,13 @@ def _entity_key(term_text: str) -> str:
 @functools.lru_cache(maxsize=1)
 def _known_entity_keys() -> frozenset[str]:
     """Entity keys the answer, report and research tables already have words
-    for (``INTERNAL_NAME_WORDS``, ``CANONICAL_RESEARCH_ENTITIES``, the lab
-    lexicon). Naming only: whether a term is heard never depends on it."""
+    for (``INTERNAL_NAME_WORDS``, the lab lexicon; a labelled reagent's key
+    is put in words by its form). Naming only: whether a term is heard never
+    depends on it."""
 
-    return frozenset((*INTERNAL_NAME_WORDS, *CANONICAL_RESEARCH_ENTITIES, *(row[0] for row in _LAB_LEXICON)))
+    # Lane GEN1: no one document's reagents (the in-gel research table is a
+    # development reference, ``CANONICAL_RESEARCH_ENTITIES``, and names nothing).
+    return frozenset((*INTERNAL_NAME_WORDS, *(row[0] for row in _LAB_LEXICON)))
 
 
 def _entity_name(term_text: str) -> str:
@@ -1953,7 +1962,8 @@ def _entity_name(term_text: str) -> str:
     taken out of a sentence (``hide_internal_names``) or searched as is."""
 
     key = _entity_key(term_text)
-    return key if key in _known_entity_keys() else " ".join(term_text.split())
+    known = key in _known_entity_keys() or _LABELLED_REAGENT_KEY.fullmatch(key) is not None
+    return key if known else " ".join(term_text.split())
 
 
 #: Hangul syllable -> (initial, medial, final) indexes, for a one-jamo miss.
@@ -2032,7 +2042,7 @@ _LAB_LEXICON: tuple[tuple[str, tuple[str, ...], tuple[str, ...], bool], ...] = (
     ("agarose", ("agarose",), ("아가로스", "아가로즈"), False),
     ("antibody", ("antibod",), ("항체",), True),
     ("membrane", ("membrane",), ("멤브레인", "막"), False),
-    ("gel_plug", ("gel plug", "plug of a stained protein band"), ("젤 플러그", "겔 플러그", "젤 플럭"), False),
+    ("gel_plug", ("gel plug",), ("젤 플러그", "겔 플러그", "젤 플럭"), False),
     ("stained_protein_band", ("stained protein band", "protein band", "gel band"),
      ("염색된 단백질 밴드", "단백질 겔 밴드", "단백질 젤 밴드", "염색된 밴드", "단백질 밴드", "젤 밴드", "겔 밴드"), False),
     ("primary_antibody", ("primary antibod",), ("1차 항체", "일차 항체"), True),
@@ -2110,6 +2120,12 @@ _STATE_LEXICON: tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ..
     ("swollen", ("swell", "swollen"), ("부풀", "팽창"), ()),
     ("shrunk", ("shrink", "shrunk"), ("줄어", "수축"), ()),
 )
+#: Whole English reports of a state, as the Korean paraphrases are ("color
+#: is gone" for destained): read where the source names the state.
+_STATE_ENGLISH_PARAPHRASES: dict[str, tuple[str, ...]] = {
+    "destained": (r"colou?r\s+is\s+(?:now\s+)?gone",),
+    "colorless": (r"colou?r\s+is\s+(?:now\s+)?gone",),
+}
 _STATE_KOREAN_WORDS = tuple(dict.fromkeys(
     word for _, _, korean, paraphrases in _STATE_LEXICON for word in (*korean, *paraphrases)
 ))
@@ -3644,8 +3660,10 @@ def _observation_predicate(endpoint: EndpointWords | None, transcript: str) -> s
         rf"fully\s+(?:{english})[a-z]*",
         rf"(?:is|looks?|turned|became)\s+(?:now\s+)?(?:{english})[a-z]*",
     ]
-    if "destain" in endpoint.positive_en:
-        frames.append(r"colou?r\s+is\s+(?:now\s+)?gone")
+    for state in endpoint.positive_keys:
+        # Lane GEN1: the state's English reports, from the lexicon by the
+        # state the source names, not by one document's word.
+        frames.extend(_STATE_ENGLISH_PARAPHRASES.get(state, ()))
     positive = re.search("(?:" + "|".join(frames) + ")", key)
     if positive is None:
         return None
@@ -5205,21 +5223,37 @@ PARAMETER_ROLE_WORDS: dict[str, tuple[str, str]] = {
     "solution_volume": ("사용 용액 부피", "solution volume"),
     "concentration": ("용액 농도", "solution concentration"),
     "vessel_capacity": ("튜브 용량", "tube capacity"),
-    "gel_piece_size": ("젤 조각 크기", "gel-piece size"),
+    "piece_size": ("조각 크기", "piece size"),
 }
 #: Other identifiers that have reached a sentence, in the experimenter's words.
 INTERNAL_NAME_WORDS: dict[str, tuple[str, str]] = {
     **PARAMETER_ROLE_WORDS,
-    "solution_a": ("용액 A", "solution A"),
-    "solution_b": ("용액 B", "solution B"),
-    "hplc_water": ("HPLC 물", "HPLC water"),
-    "gel_plug": ("젤 플러그", "gel plug"),
-    "stained_protein_band": ("염색된 단백질 밴드", "stained protein band"),
-    "formic_acid": ("포름산", "formic acid"),
-    "sds_page": ("SDS-PAGE", "SDS-PAGE"),
-    "mass_spectrometry": ("질량분석", "mass spectrometry"),
     "current_step": ("현재 단계", "current step"),
 }
+
+
+def _identifier_words(name: str) -> tuple[str, str] | None:
+    """(Korean, English) words for an internal name, or None (lane GEN1).
+
+    The table above; a labelled reagent by its form ("solution_b" -> 용액 B,
+    "buffer_2" -> 버퍼 2); a lab-lexicon word by the lexicon's own Korean and
+    English. No one document's reagent is listed.
+    """
+
+    known = INTERNAL_NAME_WORDS.get(name)
+    if known is not None:
+        return known
+    match = re.fullmatch(r"(solution|buffer|reagent)_([a-z0-9])", name)
+    if match is not None:
+        mark = match.group(2).upper()
+        return (f"{_LABEL_NOUNS[match.group(1)][1]} {mark}", f"{match.group(1)} {mark}")
+    if name in _LAB_LEXICON_KOREAN:
+        label = _LAB_LEXICON_LABEL[name]
+        if re.fullmatch(r"[a-z]{2,5}(?:-[a-z]{2,5})+", label):
+            # An acronym by its form ("sds-page") is written as one: SDS-PAGE.
+            return (label.upper(), label.upper())
+        return (_LAB_LEXICON_KOREAN[name][0], label)
+    return None
 #: A step fact's evidence id ("note_1", "expected_result_2") in words.
 _EVIDENCE_KIND_WORDS: dict[str, tuple[str, str]] = {
     "current_step": ("현재 단계", "current step"),
@@ -5272,7 +5306,7 @@ def hide_internal_names(text: str, language: str = "ko") -> str:
     index = 0 if language == "ko" else 1
 
     def replace(match: re.Match[str]) -> str:
-        known = INTERNAL_NAME_WORDS.get(match.group(0))
+        known = _identifier_words(match.group(0))
         if known is not None:
             return known[index]
         return "\x00"
@@ -6078,7 +6112,14 @@ _ANOMALY_PATTERNS = (
         r"(?:오염(?:된\s*것\s*같|됐|된\s*것이\s*보|을\s*발견)|"
         r"(?:sample|시료).*(?:contaminated|오염됐))"
     ), "contamination_concern"),
-    (re.compile(r"(?:장비|기기|thermomixer|교반기|speedvac).*(?:멈췄|고장|이상|안\s*돌아가|이상한\s*소리)"), "equipment_issue"),
+    # Lane GEN1: equipment by general words, not one document's brands.
+    (re.compile(r"(?:장비|기기|기계|교반기|원심분리기|믹서|오븐|machine|instrument|equipment|device|mixer|centrifuge)"
+                r".*(?:멈췄|고장|이상|안\s*돌아가|이상한\s*소리)"), "equipment_issue"),
+    # An instrument named in Latin letters, as protocols name them (a brand
+    # or a model), that stopped: "speedvac이 멈췄어".
+    (re.compile(r"(?<![a-z0-9])(?!(?:timer|app|mic|screen|phone|wifi)(?![a-z0-9]))"
+                r"[a-z][a-z0-9\-]{2,}\s*(?:이|가|은|는)?\s*"
+                r"(?:멈췄|멈춰\s*버렸|고장\s*났|고장났|안\s*돌아가|이상한\s*소리)"), "equipment_issue"),
     (re.compile(r"(?:타이머|시간|온도).*(?:끝|지났|벗어|이상|너무\s*높|너무\s*낮)"), "timing_temperature_deviation"),
     (re.compile(r"(?:노출|spill|쏟|누출|피부|눈에|튀었)"), "spill_exposure_safety_event"),
     (re.compile(r"(?:깨졌|부서졌|금이\s*갔|터졌)"), "sample_deviation"),
@@ -6135,10 +6176,21 @@ _PROBLEM_KNOWLEDGE: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDicti
 _PROBLEM_KNOWLEDGE_LOCK = threading.Lock()
 #: Lane HELP: the record's category of a problem no anomaly pattern names.
 PROBLEM_CATEGORY = "unexpected_result"
+#: Lane GEN1 (2026-10-31): a supposition said as what then happens ("섞으면
+#: 침전이 생겨") may be what just happened, so it is asked once, in these words.
+SUPPOSED_OR_HAPPENED = "problem_supposed_or_happened"
+SUPPOSED_OR_HAPPENED_QUESTION = "지금 생긴 일인가요, 생기면 어떻게 하는지 묻는 건가요?"
+#: A reply to it: it happened ("지금 생겼어", "응, 방금"), or it was asked
+#: ("생기면 어떻게 하는지 물어본 거야", "아니, 묻는 거야").
+_SUPPOSED_REPLY_HAPPENED = re.compile(
+    r"^(?:(?:응|어|네|예|맞아|그래|아니)\s*,?\s*)?(?:지금|방금|이미|벌써|실제로|진짜|아까)"
+    r"|(?:생겼|났|됐|일어났|벌어졌|그랬|생긴\s*(?:거|일|것)|일어난\s*(?:거|일))(?!.*(?:면|물어|묻|질문))"
+)
+_SUPPOSED_REPLY_ASKED = re.compile(r"물어|묻는|묻고|질문|궁금|생기면|만약|가정|아직\s*(?:안|아니)")
 #: The intents the problem reader makes (front rule "problem_help").
 _PROBLEM_HELP_KINDS = frozenset({
     "grounded_problem_question", "problem_question", "problem_report",
-    "problem_not_yet", "vague_check",
+    "problem_not_yet", "vague_check", SUPPOSED_OR_HAPPENED,
 })
 #: What the rules made of a move said with a claim before lane SAY (decision
 #: 6): the claim answered alone, or nothing; the move was dropped.
@@ -6667,7 +6719,7 @@ _VALUE_ACTION_NAMES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bdestain|탈색", re.I), "탈색"),
     (re.compile(r"\bwash|\brinse|세척|헹", re.I), "세척"),
     (re.compile(r"\bheat|\bboil|\bdenatur|가열|끓", re.I), "가열"),
-    (re.compile(r"\bdry|\bdried|\bspeedvac|건조|말리", re.I), "건조"),
+    (re.compile(r"\bdry|\bdried|\bvacuum|건조|말리", re.I), "건조"),
     (re.compile(r"\bcool|\bchill|식히|냉각", re.I), "냉각"),
     (re.compile(r"\bstain|염색", re.I), "염색"),
     (re.compile(r"\bshak|\bagitat|\brock|\bstir|흔들|교반|저어", re.I), "교반"),
@@ -7508,7 +7560,7 @@ def _parameter_role(unit: str, text: str) -> str:
     if normalized == "mm":
         return "concentration"
     if normalized == "mm³":
-        return "gel_piece_size"
+        return "piece_size"
     return "operational_parameter"
 
 
@@ -7529,17 +7581,75 @@ def _action_type(text: str) -> str | None:
 
 
 def _target_from_text(text: str) -> str | None:
+    """What a step's action handles: the labelled reagent its sentence names
+    ("Solution B", "Buffer 2"), read off the source for any protocol (lane
+    GEN1), else the sample or material it names, else nothing."""
+
+    labelled = _LABELLED_REAGENT.search(text)
+    if labelled is not None:
+        return _entity_key(labelled.group(0))
     lowered = text.casefold()
-    for target, terms in (
-        ("solution_a", ("solution a",)),
-        ("solution_b", ("solution b",)),
-        ("gel_plug", ("gel plug", "gel band", "stained protein band")),
-        ("acetonitrile", ("acetonitrile",)),
-        ("sample_material", ("material", "sample")),
-    ):
-        if any(term in lowered for term in terms):
-            return target
+    if any(term in lowered for term in ("material", "sample")):
+        return "sample_material"
     return None
+
+
+def _abbreviated(words: str) -> str:
+    """Source words said short: a long form the words define said by its
+    abbreviation ("25mM ammonium bicarbonate (AMBIC)" -> "25mM AMBIC"), and
+    any other parenthesis ("(made up in HPLC water)") left out."""
+
+    out = re.sub(r"\s*\((?![A-Z][A-Z0-9]+\))[^)]*\)", "", words)
+    for match in re.finditer(r"\(([A-Z][A-Z0-9]+)\)", out):
+        long_form = _source_abbreviation(match.group(1), (out,))
+        if long_form:
+            out = re.sub(
+                re.escape(long_form) + r"\s*\(" + re.escape(match.group(1)) + r"\)",
+                match.group(1), out)
+    return " ".join(out.split())
+
+
+#: How a labelled reagent's noun is said ("Solution B", "B 용액", "버퍼 2").
+_LABEL_NOUNS = {
+    "solution": ("solution", "용액", "솔루션"),
+    "buffer": ("buffer", "버퍼", "완충액"),
+    "reagent": ("reagent", "시약"),
+}
+
+
+def _says_labelled_reagent(key: str, entity: str) -> bool:
+    """Whether the words name the labelled reagent ``entity`` by its label:
+    "solution b", "b 용액", "용액 비", "버퍼 2" (lane GEN1, any protocol's)."""
+
+    match = re.fullmatch(r"(solution|buffer|reagent)_([a-z0-9])", entity or "")
+    if match is None:
+        return False
+    mark = match.group(2)
+    marks = "|".join(re.escape(item) for item in (mark, _LETTER_NAMES.get(mark, "")) if item)
+    nouns = "|".join(re.escape(item) for item in _LABEL_NOUNS[match.group(1)])
+    edge = r"(?:은|는|이|가|을|를|의|도|로|와|과)?(?![a-z0-9가-힣])"
+    return bool(re.search(
+        rf"(?<![a-z0-9])(?:(?:{nouns})\s*(?:{marks}){edge}|(?:{marks})\s*(?:{nouns}))", key))
+
+
+def labelled_reagent_label(entity: str) -> str | None:
+    """A labelled reagent's key in words ("solution_b" -> "Solution B"), else None."""
+
+    match = re.fullmatch(r"(solution|buffer|reagent)_([a-z0-9])", entity or "")
+    if match is None:
+        return None
+    return f"{match.group(1).capitalize()} {match.group(2).upper()}"
+
+
+#: Lane GEN1: a mixture the source states in parts -- "Solution A: 2 parts of
+#: X ... mixed with 1 part Y", "3 parts X to 1 part Y" -- read for any
+#: protocol, each part in the source's own words and numbers.
+_PARTS_RATIO = re.compile(
+    r"(?P<first>\d+(?:\.\d+)?)\s+(?P<first_unit>parts?)\s+(?:of\s+)?(?P<x>(?:[^.;]|(?<=\d)\.(?=\d))+?)\s+"
+    r"(?:mixed\s+)?(?:with|and|to|plus)\s+(?P<second>\d+(?:\.\d+)?)\s+(?P<second_unit>parts?)\s+(?:of\s+)?"
+    r"(?P<y>[A-Za-z][A-Za-z0-9\-]*(?:\s+(?!(?i:solution|buffer|reagent)\s+[A-Z0-9]\b)[A-Za-z][A-Za-z0-9\-]*){0,3})",
+    re.I | re.S,
+)
 
 
 def steps_anchoring_a_repetition(
@@ -7620,18 +7730,21 @@ def build_step_semantic_frame(
                 source_page=fact.source_page,
                 source_approved_alternative=fact.kind == "note",
             ))
-        ratio = re.search(
-            r"(?P<first>\d+)\s+parts?\s+of\s+25\s*mM\s+ammonium\s+bicarbonate"
-            r".*?mixed\s+with\s+(?P<second>\d+)\s+part\s+acetonitrile",
-            derived,
-            re.I | re.S,
-        )
-        if ratio:
+        for ratio in _PARTS_RATIO.finditer(derived):
+            # Lane GEN1: the mixture is the labelled reagent defined right
+            # before the parts ("Solution A: 2 parts of ..."), else the step's.
+            defined = [
+                match for match in _LABELLED_REAGENT.finditer(derived[:ratio.start()])
+            ]
+            mixture = _entity_key(defined[-1].group(0)) if defined else "step_mixture"
+            first = _abbreviated(ratio.group("x"))
             ratios.append(StepRatioBinding(
-                ratio_id=f"{fact.fact_id}:solution_a_ratio",
-                mixture_id="solution_a",
-                components=(("ambic_solution", int(ratio.group("first"))),
-                            ("acetonitrile", int(ratio.group("second")))),
+                ratio_id=f"{fact.fact_id}:{mixture}_ratio",
+                mixture_id=mixture,
+                components=(
+                    (first, f"{ratio.group('first')} {ratio.group('first_unit')}"),
+                    (ratio.group("y").strip(), f"{ratio.group('second')} {ratio.group('second_unit')}"),
+                ),
                 evidence_id=fact.fact_id,
                 source_page=fact.source_page,
             ))
@@ -7715,6 +7828,8 @@ def assess_transcript_plausibility(
             for parameter in parameter_matches
         )
         and not re.match(r"\s*(?:단계|step\b)", key[match.end():])
+        # Lane GEN1: the mark of a labelled reagent ("buffer 2") is a name.
+        and not re.search(r"(?:solution|buffer|reagent|용액|버퍼|시약|솔루션)\s*$", key[:match.start()])
     )
     operational_frame = bool(re.search(
         r"(?:섞|비율|넣|사용|설정|온도|시간|회전|단계|해도\s*돼|"
@@ -8491,7 +8606,9 @@ def classify_curated_control_intent(
         elif spill == "not_reported" and _SPILL_WORD.search(match.group(0)):
             # The spilling words asked, supposed or denied: "쏟으면 어떡해?".
             continue
-        elif _ANOMALY_NON_ASSERTION.search(key):
+        elif _ANOMALY_NON_ASSERTION.search(key) or supposes(transcript):
+            # Lane GEN1: "용액이 탁해지면", "타이머 끝나면 다음으로 가자":
+            # supposed, so nothing has happened to record.
             continue
         return CuratedControlIntent(
             intent_kind="record_anomaly",
@@ -8714,6 +8831,14 @@ def curated_intent_from_arbitration(
             target_step='authoritative_current_step', question_kind='troubleshooting',
             **common,
         )
+    if decision.reason_code == "problem_supposed_or_happened":
+        # Lane GEN1: asked once whether it happened; nothing recorded yet.
+        return CuratedControlIntent(
+            intent_kind=SUPPOSED_OR_HAPPENED,
+            action=CuratedProtocolAction.PROBLEM_HELP,
+            target_step="authoritative_current_step", question_kind="troubleshooting",
+            **common,
+        )
     if decision.intent is RequestIntent.LEARNING:
         warning_only = decision.reason_code == "current_step_warning"
         return CuratedControlIntent(
@@ -8874,37 +8999,13 @@ _VERIFIED_FACT_QUESTION_RULES = {
     "필요한 재료는": ("kind", "material", ()),
     "사용할 장비는": ("kind", "equipment", ()),
     "예상 결과는": ("kind", "expected_result", ()),
-    "용액 a는 어떻게 준비해": (
-        "fact_id", "current_step", ("solution a", "prepare"),
-    ),
-    "용액 에이는 어떻게 준비해": (
-        "fact_id", "current_step", ("solution a", "prepare"),
-    ),
 }
-
-_SOLUTION_A_QUESTION_KEYS = frozenset({
-    "용액 a는 어떻게 준비해",
-    "용액 에이는 어떻게 준비해",
-})
-
-
-def _localized_solution_a_presentation(
-    source_text: str,
-    source_page: int,
-) -> tuple[str, str]:
-    """Keep the verified source visible while failing closed on localization."""
-
-    display = (
-        f"원문\n{source_text}\n\n한국어 참고 번역\n"
-        "검증된 한국어 참고 번역을 사용할 수 없습니다. "
-        f"원문 {source_page}페이지를 확인해 주세요."
-    )
-    speech = (
-        "요청하신 용액 A 준비 방법을 화면에 표시했습니다. "
-        "검증된 한국어 참고 번역을 사용할 수 없어 "
-        f"원문 {source_page}페이지를 확인해 주세요."
-    )
-    return display, speech
+#: Lane GEN1: "용액 A는 어떻게 준비해", "버퍼 2는 어떻게 준비해" -- how any
+#: labelled reagent is prepared, answered by the current step's sentence that
+#: names it and says "prepare" (in-gel's two "용액 a/에이" keys before).
+_PREPARE_LABELLED_QUESTION = re.compile(
+    r"^(?P<noun>용액|솔루션|버퍼|완충액|시약)\s*(?P<mark>[a-z0-9]|[가-힣]{1,2}?)(?:은|는)\s*어떻게\s*준비해$"
+)
 
 
 def _display_contract(
@@ -9290,7 +9391,15 @@ def _select_verified_fact(
     transcript: str,
     facts: tuple[CuratedProtocolFact, ...],
 ) -> CuratedProtocolFact | None:
-    rule = _VERIFIED_FACT_QUESTION_RULES.get(_utterance_key(transcript))
+    key = _utterance_key(transcript)
+    rule = _VERIFIED_FACT_QUESTION_RULES.get(key)
+    asked = _PREPARE_LABELLED_QUESTION.fullmatch(key) if rule is None else None
+    if asked is not None:
+        noun = next(name for name, said in _LABEL_NOUNS.items() if asked.group("noun") in said)
+        mark = asked.group("mark")
+        mark = next((letter for letter, name in _LETTER_NAMES.items() if name == mark), mark)
+        if re.fullmatch(r"[a-z0-9]", mark):
+            rule = ("fact_id", "current_step", (f"{noun} {mark}", "prepare"))
     if rule is None:
         return None
     field, expected, required_terms = rule
@@ -9424,6 +9533,12 @@ def _step_reply(
     return f"{prefix} {noun}{label}단계: {text}"
 
 
+#: Development reference for the in-gel fixture only (lane GEN1, category
+#: c): hand-written research wording for its reagents, kept for the
+#: development tests that read it. Nothing in production reads it -- no
+#: entity is named by it and no plan uses it; a session's research plan is
+#: made from the active protocol's own text
+#: (``CuratedProtocolSession.canonical_research_plan``).
 CANONICAL_RESEARCH_ENTITIES: dict[str, dict[str, Any]] = {
     "ambic": {
         "requested_label": "AMBIC",
@@ -11884,16 +11999,35 @@ class CuratedProtocolSession:
         )
 
     def canonical_research_plan(self, entity_key: str) -> dict[str, Any]:
-        norm = entity_key.strip().casefold().replace(" ", "_")
-        if norm in CANONICAL_RESEARCH_ENTITIES:
-            return CANONICAL_RESEARCH_ENTITIES[norm]
-        label = entity_key.replace("_", " ").title()
+        """A research plan for an entity, made from the active protocol's
+        own text (lane GEN1): its spelling, the long form the protocol
+        defines it with, the Korean the translation glossary gives it, and
+        the first source sentence naming it. Nothing is written in from
+        outside the protocol."""
+
+        vocabulary = self._protocol_vocabulary()
+        label = vocabulary.label(entity_key)
+        long_forms = vocabulary.long_forms(entity_key)
+        canonical = long_forms[0] if long_forms else label
+        korean = tuple(name for name, entity in vocabulary.korean_names if entity == entity_key)
+        texts = tuple(
+            fact.text
+            for index in range(len(self.fixture.steps))
+            for fact in self.fixture.facts_for_step(index)
+        )
+        relation = next(
+            (" ".join(text.split())[:200] for text in texts if _names_entity(text, entity_key, vocabulary)),
+            f"Laboratory reagent or material: {label}",
+        )
         return {
             "requested_label": label,
-            "canonical_name": label,
-            "aliases": (),
-            "protocol_relation": f"Laboratory reagent or material: {label}",
-            "query_variants": (f"{label} laboratory scientific reference",),
+            "canonical_name": canonical,
+            "aliases": tuple(dict.fromkeys((*((label,) if canonical != label else ()), *korean))),
+            "protocol_relation": relation,
+            "query_variants": tuple(dict.fromkeys((
+                f"{canonical} laboratory reagent",
+                f"{canonical} laboratory scientific reference",
+            ))),
             "visual_intents": ("general_reference",),
         }
 
@@ -13938,8 +14072,18 @@ class CuratedProtocolSession:
             compose_problem_help,
         )
 
+        if intent.intent_kind == SUPPOSED_OR_HAPPENED:
+            # Lane GEN1: asked once, nothing recorded; the words are kept on
+            # the plan for the reply to be about.
+            return replace(
+                self._words_plan(
+                    SUPPOSED_OR_HAPPENED_QUESTION, intent_kind=SUPPOSED_OR_HAPPENED,
+                    action=CuratedProtocolAction.CLARIFY_REFERENCE),
+                question_kind="troubleshooting",
+                normalized_transcript=" ".join(transcript.split())[:400],
+            )
         marker = self._problem_help_marker(
-            transcript,
+            intent.supposed_words or transcript,
             kind=(
                 "grounded_question"
                 if intent.intent_kind == "grounded_problem_question"
@@ -17015,8 +17159,8 @@ class CuratedProtocolSession:
         )
         if len(matching_actions) == 1:
             action = matching_actions[0]
-            target_label = "Solution B" if action.target_id == "solution_b" else "Solution A" if action.target_id == "solution_a" else "지정된 용액"
-            target_label_en = "Solution B" if action.target_id == "solution_b" else "Solution A" if action.target_id == "solution_a" else "the specified solution"
+            target_label = labelled_reagent_label(action.target_id or "") or "지정된 용액"
+            target_label_en = labelled_reagent_label(action.target_id or "") or "the specified solution"
             action_answer = (
                 f"활성 프로토콜은 {target_label}를 제거해 버리라고 지시합니다."
                 if language == "ko" and action.action_type == "remove_discard" else
@@ -17031,7 +17175,7 @@ class CuratedProtocolSession:
             )
             if action.target_id:
                 target_entity = action.target_id
-                target_name = "Solution B" if target_entity == "solution_b" else "Solution A" if target_entity == "solution_a" else target_entity
+                target_name = labelled_reagent_label(target_entity) or self._protocol_vocabulary().label(target_entity)
                 add(
                     ClaimTargetType.ENTITY, target_entity, "handling",
                     evidence_ids=(action.evidence_id,),
@@ -17072,10 +17216,11 @@ class CuratedProtocolSession:
         if ratio_words and len(frame.ratios) == 1:
             ratio = frame.ratios[0]
             first, second = ratio.components
+            mixture = labelled_reagent_label(ratio.mixture_id)
             answer = (
-                f"Solution A의 비율은 25 mM AMBIC 용액 {first[1]} parts 대 acetonitrile {second[1]} part입니다."
+                f"{mixture or '이 혼합액'}의 비율은 {first[0]} {first[1]} 대 {second[0]} {second[1]}입니다."
                 if language == "ko" else
-                f"Solution A uses {first[1]} parts 25 mM AMBIC solution to {second[1]} part acetonitrile."
+                f"{mixture or 'The mixture'} uses {first[0]} {first[1]} to {second[0]} {second[1]}."
             )
             add(
                 ClaimTargetType.RATIO, ratio.ratio_id, "value",
@@ -17282,44 +17427,63 @@ class CuratedProtocolSession:
             )
         ):
             return None
-        explicit_a = bool(re.search(
-            r"(?:solution\s*a|a\s*용액|용액\s*a|에이\s*용액|용액\s*에이)", key
-        ))
-        explicit_b = bool(re.search(
-            r"(?:solution\s*b|b\s*용액|용액\s*b|비\s*용액|용액\s*비)", key
-        ))
-        vague = bool(re.search(r"(?:(?:그|해당)\s*용액|그거|방금\s*말한\s*것)", key))
-        mentions_ambic = bool(re.search(
-            r"(?<![a-z0-9])ambic(?![a-z0-9])", key
-        ))
-        if not (explicit_a or explicit_b or vague or mentions_ambic):
-            return None
-        entity = (
-            "solution_a" if explicit_a else
-            "solution_b" if explicit_b else
-            named_here[0]
+        # Lane GEN1: any labelled reagent of the protocol named by its label
+        # ("solution b", "B 용액", "버퍼 2"), not only in-gel's two.
+        named = tuple(
+            entity for entity in (
+                term.entity for term in self._protocol_vocabulary().terms
+                if _LABELLED_REAGENT_KEY.fullmatch(term.key) is not None
+            )
+            if _says_labelled_reagent(key, entity)
         )
+        vague = bool(re.search(r"(?:(?:그|해당)\s*용액|그거|방금\s*말한\s*것)", key))
+        # A word of the current solution's own definition ("AMBIC" for
+        # Solution A, made of it) names it too.
+        component = not named and not vague and any(
+            re.search(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", key)
+            for word in self._definition_words(named_here[0])
+        )
+        if not (named or vague or component):
+            return None
+        entity = named[0] if len(named) == 1 else named_here[0]
         defining = self._solution_definition(entity)
         if defining is None or defining[0] == self.current_index:
             return None
         source_index, fact = defining
         if fact.fact_id != "current_step":
             return None
-        if mentions_ambic and not (explicit_a or explicit_b or vague) and (
-            "ambic" not in _derived_source_text(fact.text).casefold()
-        ):
-            return None
         return source_index, fact, entity
+
+    def _definition_words(self, entity: str) -> tuple[str, ...]:
+        """The protocol terms the definition of a labelled reagent names,
+        casefolded: what a question may name it by (lane GEN1)."""
+
+        defining = self._solution_definition(entity)
+        if defining is None:
+            return ()
+        text = _derived_source_text(defining[1].text).casefold()
+        return tuple(
+            term.text.casefold() for term in self._protocol_vocabulary().terms
+            if _LABELLED_REAGENT_KEY.fullmatch(term.key) is None
+            and re.search(rf"(?<![a-z0-9]){re.escape(term.text.casefold())}(?![a-z0-9])", text)
+        )
+
+    def _labelled_reagents_here(self) -> tuple[str, ...]:
+        """The labelled reagents the current step's sentence names, in words."""
+
+        current_text = _derived_source_text(
+            self.fixture.steps[self.current_index].instruction_source_text)
+        return tuple(dict.fromkeys(
+            labelled_reagent_label(_entity_key(match.group(0))) or match.group(0)
+            for match in _LABELLED_REAGENT.finditer(current_text)
+        ))
 
     def _needs_solution_clarification(self, transcript: str) -> bool:
         key = _semantic_utterance_key(transcript)
-        current_text = _derived_source_text(
-            self.fixture.steps[self.current_index].instruction_source_text
-        ).casefold()
         return bool(
-            # A step that names both solutions leaves "그 용액" ambiguous.
-            "solution a" in current_text
-            and "solution b" in current_text
+            # A step that names two labelled reagents or more leaves "그 용액"
+            # ambiguous (lane GEN1: any protocol's, read off its sentence).
+            len(self._labelled_reagents_here()) >= 2
             and re.search(r"(?:(?:그|해당)\s*용액|그거|방금\s*말한\s*것)", key)
             and any(term in key for term in ("어떻게", "준비", "만들", "구성", "비율"))
         )
@@ -17607,6 +17771,9 @@ class CuratedProtocolSession:
             and self._discourse_context.workflow_revision == self._revision
             else None
         )
+        supposed = self._supposition_reply(transcript, language=language)
+        if supposed is not None:
+            return supposed
         time_key = _utterance_key(transcript)
         if self.active and _TIMER_ELAPSED_QUESTION.search(time_key):
             # "몇 분 지났어?" (lane PT, decision 3): the running timer's time
@@ -17694,6 +17861,61 @@ class CuratedProtocolSession:
             # step's timer, as these words did before (they were start words).
             intent = replace(intent, intent_kind="start_step_timer", action=CuratedProtocolAction.START_TIMER)
         return intent
+
+    def _supposition_asked(self) -> str | None:
+        """The words the last turn asked "지금 생긴 일인가요, …" about, if it
+        asked it (lane GEN1); read from the last plan, so nothing is kept."""
+
+        if not self.active or not self._replay:
+            return None
+        last = self._replay[max(self._replay)]
+        if last.intent_kind != SUPPOSED_OR_HAPPENED:
+            return None
+        return last.normalized_transcript or None
+
+    def _supposition_reply(self, transcript: str, *, language: str) -> CuratedControlIntent | None:
+        """The reply to "지금 생긴 일인가요, 생기면 어떻게 하는지 묻는 건가요?".
+
+        It happened ("지금 생겼어"): the earlier words are recorded as a
+        problem is. It was asked ("물어본 거야"), or the same supposition is
+        said again (it is asked once only): they are answered from the
+        source. Anything else is read as words of its own.
+        """
+
+        asked = self._supposition_asked()
+        if asked is None:
+            return None
+        said = " ".join(transcript.split())
+        if not said:
+            return None
+        key = _utterance_key(transcript)
+        if (
+            _SUPPOSED_REPLY_ASKED.search(said)
+            or said == asked
+            or supposed_problem_reading(said) is not None
+        ):
+            return CuratedControlIntent(
+                intent_kind="grounded_problem_question",
+                action=CuratedProtocolAction.PROBLEM_HELP,
+                target_step="authoritative_current_step",
+                question_kind="troubleshooting",
+                language=language,
+                normalized_transcript=key,
+                question_dimensions=("troubleshooting",),
+                supposed_words=asked,
+            )
+        if _SUPPOSED_REPLY_HAPPENED.search(said):
+            return CuratedControlIntent(
+                intent_kind="problem_report",
+                action=CuratedProtocolAction.REPORT_ANOMALY,
+                question_kind="anomaly",
+                language=language,
+                reported_anomaly=True,
+                anomaly_category=PROBLEM_CATEGORY,
+                normalized_transcript=key,
+                supposed_words=asked,
+            )
+        return None
 
     def _names_own_endpoint(self, transcript: str) -> bool:
         """Whether the words name the current step's endpoint ("탈색이 안 됐어"
@@ -20136,6 +20358,7 @@ class CuratedProtocolSession:
         arbitration = arbitration or arbitrate_request(transcript)
         if (
             language == "ko" and transcript_quality is None
+            and self._supposition_asked() is None
             and is_question_or_speculation(transcript, punctuation=False, literal_record=True)
             and arbitration.intent not in {
                 RequestIntent.LEARNING, RequestIntent.PROTOCOL_AUDIT,
@@ -22912,12 +23135,16 @@ class CuratedProtocolSession:
                     ),
                 }.get(language, "이상 사항 추가 내용을 확인했습니다.")
             else:
+                # Lane GEN1: a reply that it happened records the words it
+                # is about, with the reply beside them.
+                recorded = (intent.supposed_words or transcript).strip()[:800]
                 self._pending_anomaly = {
                     "category": category,
-                    "text": transcript.strip()[:800],
+                    "text": recorded,
                     "step_label": step.source_label,
                     "step_id": step.step_id,
-                    "notes": [transcript.strip()[:800]],
+                    "notes": list(dict.fromkeys(
+                        note for note in (recorded, transcript.strip()[:800]) if note)),
                 }
                 if intent.intent_kind == "observation_with_anomaly":
                     # Short, as it is spoken; nothing is said to be recorded
@@ -22970,14 +23197,14 @@ class CuratedProtocolSession:
                 intent_kind=intent.intent_kind,
                 reported_anomaly=True,
                 anomaly_category=category,
-                anomaly_text=transcript.strip()[:800],
+                anomaly_text=(intent.supposed_words or transcript).strip()[:800],
                 # Lane HELP, decision 1: a new problem recorded -- by the
                 # rules, the router's confirmed proposal or the spill rule --
                 # is helped after it is read back; more words for a pending
                 # one, or a problem said with an endpoint, are not.
                 problem_help=(
                     self._problem_help_marker(
-                        transcript, kind="statement", category=category,
+                        intent.supposed_words or transcript, kind="statement", category=category,
                         safety=intent.spill_reported)
                     if intent.intent_kind not in {"enrich_pending_anomaly", "observation_with_anomaly"}
                     else None
@@ -23375,17 +23602,13 @@ class CuratedProtocolSession:
                 if any(number in fact.text for number in requested_numbers)
             )
             if not supported and intent.requested_entities:
-                entity_labels = {
-                    "ambic": ("ambic", "ammonium bicarbonate"),
-                    "hplc_water": ("hplc water",),
-                    "solution_a": ("solution a",),
-                    "solution_b": ("solution b",),
-                    "acetonitrile": ("acetonitrile",),
-                }
+                # Lane GEN1: how the protocol spells each entity, and the
+                # long form it defines it with -- any protocol's.
+                vocabulary = self._protocol_vocabulary()
                 requested_labels = tuple(
                     label
                     for entity in intent.requested_entities
-                    for label in entity_labels.get(entity, ())
+                    for label in _entity_surfaces(entity, vocabulary)
                 )
                 supported = tuple(
                     fact for fact in step_facts
@@ -24380,14 +24603,8 @@ class CuratedProtocolSession:
         elif command is CuratedProtocolAction.CLARIFY_REFERENCE:
             step = steps[self.current_index] if self.active else None
             candidates = intent.requested_entities
-            labels = {
-                "solution_a": "Solution A", "solution_b": "Solution B",
-                "hplc_water": "HPLC water", "ambic": "AMBIC",
-                "acetonitrile": "acetonitrile", "gel_plug": "gel plug",
-                "stained_protein_band": "stained protein band",
-                "dtt": "DTT", "iodoacetamide": "iodoacetamide",
-                "trypsin": "trypsin", "formic_acid": "formic acid",
-            }
+            # Lane GEN1: each entity as the active protocol spells it.
+            labels = {item: self._protocol_vocabulary().label(item) for item in candidates}
             if intent.intent_kind == "underspecified_result_request":
                 response = (
                     "어떤 결과를 말씀하시나요? 현재 단계의 예상 관찰 결과, 지금까지의 실험 기록, 또는 최근 질의 답변 중 원하시는 내용을 말씀해 주세요."
@@ -24424,12 +24641,13 @@ class CuratedProtocolSession:
             )
         elif self._needs_solution_clarification(transcript):
             step = steps[self.current_index]
-            self._pending_clarification = "solution_a_or_b"
+            self._pending_clarification = "labelled_reagent"
+            here = self._labelled_reagents_here()
             response = {
-                "en": "Do you mean Solution A or Solution B? No protocol state changed.",
-                "vi": "Bạn muốn hỏi Solution A hay Solution B? Trạng thái quy trình không thay đổi.",
-                "ko": "Solution A와 Solution B 중 어느 용액을 말씀하시나요? 프로토콜 상태는 변경하지 않았습니다.",
-            }.get(language, "Solution A와 Solution B 중 어느 용액인지 말씀해 주세요.")
+                "en": f"Do you mean {' or '.join(here)}? No protocol state changed.",
+                "vi": f"Bạn muốn hỏi {' hay '.join(here)}? Trạng thái quy trình không thay đổi.",
+                "ko": f"{'와 '.join(here)} 중 어느 용액을 말씀하시나요? 프로토콜 상태는 변경하지 않았습니다.",
+            }.get(language, f"{'와 '.join(here)} 중 어느 용액인지 말씀해 주세요.")
             plan = CuratedProtocolTurnPlan(
                 action=CuratedProtocolAction.CLARIFY_REFERENCE,
                 display_text=response,
@@ -24814,13 +25032,15 @@ class CuratedProtocolSession:
             if plan.state_changed or plan.action is CuratedProtocolAction.STOP:
                 self._pending_observation_confirmation = None
         self._replay[turn_id] = plan
+        # Lane GEN1: the protocol's own terms the reply's facts name (its
+        # labelled reagents, abbreviations and materials), any protocol's.
+        terms = self._protocol_vocabulary().terms if plan.facts else ()
         for fact in plan.facts:
             lowered = fact.text.casefold()
-            for entity in (
-                "solution a", "solution b", "ambic", "acetonitrile",
-                "gel plug", "stained protein band",
-            ):
-                if entity in lowered and entity not in self._recent_verified_entities:
+            for term in terms:
+                entity = term.text.casefold()
+                if (entity not in self._recent_verified_entities
+                        and re.search(rf"(?<![a-z0-9]){re.escape(entity)}(?![a-z0-9])", lowered)):
                     self._recent_verified_entities.append(entity)
         self._recent_verified_entities = self._recent_verified_entities[-8:]
         if (

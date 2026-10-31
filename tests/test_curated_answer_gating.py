@@ -184,7 +184,8 @@ class CuratedExplanationGateTests(unittest.TestCase):
         for protocol_id in (CANDIDATE_A_PROTOCOL_ID, OTHER_PROTOCOL_ID):
             with self.subTest(protocol_id=protocol_id):
                 plan, _ = _answer(protocol_id, "AMBIC가 무엇인지 설명해줘.")
-                self.assertIn("ambic", plan.requested_entities)
+                # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+                self.assertIn("AMBIC", plan.requested_entities)
 
     def test_curated_explanations_do_not_reach_another_protocol(self):
         _, envelope = _answer(OTHER_PROTOCOL_ID, "AMBIC가 무엇인지 설명해줘.")

@@ -20,7 +20,8 @@ sys.path.insert(0, str(ROOT/'src'))
 
 from scripts.sim.corpus import load_corpus, generate_cases, CORPUS
 from scripts.sim.audio import (
-    IMPACT_DISTANCES_CM, IMPACT_NOISES, append_impact, impact_pcm, oracle_audio,
+    IMPACT_DISTANCES_CM, IMPACT_NOISES, IMPACT_PATTERNS, append_continuous_impact,
+    append_impact, continuous_impact_pcm, impact_pcm, oracle_audio, overlay_impact,
 )
 from scripts.sim.runner import run_case
 from scripts.sim.metrics import score_case, aggregate
@@ -42,10 +43,10 @@ def save_report(path: Path, report: dict) -> None:
         json.dump(report, f, ensure_ascii=False, indent=2)
         f.write('\n')
     overall = report['overall']
-    lines = ['|구분|말 수|이해|정확도|잘못 바뀐 상태|영어 원문|단계 이름 겹침|응급 놓침|헛경보|', '|---|---:|---:|---:|---:|---:|---:|---:|---:|']
+    lines = ['|구분|말 수|이해|정확도|잘못 바뀐 상태|영어 원문|단계 이름 겹침|응급 놓침|헛경보|가정 질문 이상 오기록|', '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
     for dim, groups in report['tables'].items():
         for key,s in groups.items():
-            lines.append(f'|{dim}: {key}|{s["cases"]}|{s["understood"]}|{s["accuracy"]:.1%}|{s["wrong_state"]}|{s["english_copy"]}|{s["duplicate_label"]}|{s.get("emergency_miss", "미측정")}|{s.get("false_alarm", "미측정")}|')
+            lines.append(f'|{dim}: {key}|{s["cases"]}|{s["understood"]}|{s["accuracy"]:.1%}|{s["wrong_state"]}|{s["english_copy"]}|{s["duplicate_label"]}|{s.get("emergency_miss", "미측정")}|{s.get("false_alarm", "미측정")}|{s.get("supposed_misrecorded", "미측정")}|')
     path.with_suffix('.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
     print(json.dumps({'result':str(path), **overall}, ensure_ascii=False))
 
@@ -62,6 +63,20 @@ def prepare_cases(args: argparse.Namespace) -> tuple[list, dict, dict, dict]:
         from scripts.sim.translations import attach_translations
         protocols, translation_coverage = attach_translations(protocols, args.translations)
     cases, split = select_cases(protocols, args)
+    if getattr(args, 'development_fixture', False):
+        # Lane GEN1: the in-gel development fixture beside the public ten,
+        # the same generic cases, outside their partition (never holdout),
+        # to show its quality is the others' and not more.
+        if args.split == 'holdout':
+            raise ValueError('the development fixture is never holdout')
+        from scripts.sim.corpus import development_fixture_protocol, generate_development_cases, generate_supposed_cases
+        extra = development_fixture_protocol()
+        added = [(extra, case) for case in (
+            *generate_cases(extra), *generate_development_cases(extra),
+            *generate_supposed_cases(extra, 'development'))
+            if (not args.family or case.family in args.family)]
+        cases = [*cases, *added]
+        split = {**split, 'development_fixture_cases': len(added)}
     if not cases:
         raise ValueError('no matching cases')
     return cases, split, catalog_counts, translation_coverage
@@ -107,8 +122,13 @@ async def evaluate(args: argparse.Namespace) -> dict:
         tuple((kind, distance) for kind in IMPACT_NOISES for distance in IMPACT_DISTANCES_CM)
         if args.impact_matrix else ((None, None),)
     )
+    pattern = args.impact_pattern if args.impact_matrix else 'single'
     workload = [
+        # The LISTEN3 single-burst workload keeps its identity; LIVE3's
+        # patterns add theirs so results of different patterns never compare.
         (p.fixture.fixture_sha256, asdict(c), kind, distance)
+        if pattern == 'single' else
+        (p.fixture.fixture_sha256, asdict(c), kind, distance, pattern)
         for p, c in cases for kind, distance in conditions
     ]
     oracle_pcm = oracle_audio()
@@ -138,11 +158,18 @@ async def evaluate(args: argparse.Namespace) -> dict:
                 for impact_kind, distance_cm in conditions:
                     pcm = None
                     if impact_kind is not None and distance_cm is not None:
-                        pcm = (
-                            impact_pcm(impact_kind, distance_cm, frames=20)
-                            if c.family == 'noise'
-                            else append_impact(oracle_pcm, impact_kind, distance_cm)
-                        )
+                        if c.family == 'noise':
+                            pcm = (
+                                continuous_impact_pcm(impact_kind, distance_cm)
+                                if pattern == 'continuous'
+                                else impact_pcm(impact_kind, distance_cm, frames=20)
+                            )
+                        elif pattern == 'continuous':
+                            pcm = append_continuous_impact(oracle_pcm, impact_kind, distance_cm)
+                        elif pattern == 'mid_speech':
+                            pcm = overlay_impact(oracle_pcm, impact_kind, distance_cm)
+                        else:
+                            pcm = append_impact(oracle_pcm, impact_kind, distance_cm)
                     result = await run_case(
                         p, c, router_settings=router,
                         offline=not args.configured_router,
@@ -158,6 +185,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
                     )
                     row.update(
                         protocol=p.code,
+                        field=p.field,
                         noise=impact_kind or 'not_measured',
                         distance_cm=(distance_cm if distance_cm is not None
                                      else 'not_measured'),
@@ -165,16 +193,29 @@ async def evaluate(args: argparse.Namespace) -> dict:
                     )
                     if args.impact_matrix:
                         wearer_case = c.family != 'noise'
+                        wearer_end = oracle_frames if wearer_case else None
+                        if pattern == 'mid_speech' and wearer_case:
+                            wearer_end = result['source_frames']
+                        end_frames = result['endpoint_stream_frames']
                         row.update(
-                            impact_position=('after_speech' if wearer_case
-                                             else 'noise_only'),
+                            impact_pattern=pattern,
+                            impact_position=(
+                                ('mid_speech' if pattern == 'mid_speech' else 'after_speech')
+                                if wearer_case else 'noise_only'),
                             wearer_dropped=wearer_case and result['stt_calls'] == 0,
                             noise_sent_to_stt=(not wearer_case
                                                and result['stt_calls'] > 0),
                             impact_reopened=wearer_case and any(
-                                frames > oracle_frames
+                                frames > (result['source_frames'] if pattern == 'mid_speech' else oracle_frames)
                                 for frames in result['endpoint_audio_frames']
                             ),
+                            continuation_joins=result['continuation_joins'],
+                            # LIVE3: how long after the wearer's last frame
+                            # the (last) end was found; the configured
+                            # endpoint silence is 1000 ms.
+                            end_delay_ms=(
+                                (max(end_frames) + 1 - wearer_end) * 20
+                                if wearer_case and end_frames and wearer_end is not None else None),
                         )
                     rows.append(row)
                     if len(rows) % 25 == 0:
@@ -206,6 +247,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
         'budget_stopped':bool(budget and budget.stopped), 'planned_cases':len(workload),
         'impact_matrix':args.impact_matrix,
         'impact_filter':args.impact_filter if args.impact_matrix else None,
+        'impact_pattern':pattern if args.impact_matrix else None,
         'translations_sha256':hashlib.sha256(args.translations.read_bytes()).hexdigest() if args.translations else None,
         'translation_coverage':translation_coverage,
         'router_cost_estimate':router_cost_estimate(
@@ -220,6 +262,8 @@ def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--corpus', type=Path, default=CORPUS)
     parser.add_argument('--catalog-copy', type=Path)
+    parser.add_argument('--development-fixture', action='store_true',
+                        help='add the in-gel development fixture (licensed PDF, condition A) beside the public ten')
     parser.add_argument('--protocol', action='append')
     parser.add_argument('--family', action='append')
     parser.add_argument('--limit', type=int)
@@ -231,6 +275,9 @@ def _main(argv: list[str] | None = None) -> int:
                         help='procedural typing/glass/pipette impacts at 30 cm and 1 m')
     parser.add_argument('--impact-filter', choices=('legacy', 'current'), default='current',
                         help='endpoint treatment for --impact-matrix before/after comparisons')
+    parser.add_argument('--impact-pattern', choices=IMPACT_PATTERNS, default='single',
+                        help='where the impacts sit: one burst after the words (LISTEN3), '
+                             'bursts that keep going after the words, or over the words (LIVE3)')
     parser.add_argument('--configured-router', action='store_true', help='plan an oracle-STT model comparison using shell router settings')
     parser.add_argument('--execute', action='store_true', help='execute the configured-router plan with real model requests')
     parser.add_argument('--max-calls', type=int, default=20)
