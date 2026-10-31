@@ -169,10 +169,11 @@ class ReportStructureTests(_ReportCase):
     def test_methods_results_and_deviations_come_from_the_record(self) -> None:
         self.run_steps_one_to_four_then_stop()
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
-        # Lane RP3, decision ①: the source's values with what was used, not
-        # the source's sentences; the records as said; the differences.
+        # Lane NOTE2: keep the value comparison and also show the checked
+        # Korean method first, followed by the exact source wording.
         self.assertIn("| 3단계 · Gel band destaining | 시간 15 min → 10분에 끝냄 (타이머 일찍 끝냄) [미확인] · 그 밖 원문대로 (500 µL · 37°C) |", text)
-        self.assertNotIn("Solution A 500 µL로 37°C에서 15 min 동안 세척합니다.", text)
+        self.assertIn("Solution A 500 µL로 37°C에서 15 min 동안 세척합니다.", text)
+        self.assertIn("<small>원문: Wash with 500 µL solution A at 37°C for 15 min.</small>", text)
         self.assertIn("| 4단계 · Dehydration | — | 밴드가 투명해졌어 | 10:08 |", text)
         self.assertIn("- 3단계 타이머: 원문 15분 중 10분에 끝냄 [미확인]", text)
         # Never asked about, so not confirmed (lane RP2, decision 3, kept).
@@ -182,12 +183,12 @@ class ReportStructureTests(_ReportCase):
         self.assertIn("| 3 | 09:40 | 10:06 | 26분 (멈춤 5분 포함) | 원문 15분 / 10분에 끝냄 |", text)
         self.assertIn("> 출처: [1] Kim 2025. Test digestion protocol. protocols.io https://dx.doi.org/10.1/test.v1 — 실험에 쓴 프로토콜 원문", text)
 
-    def test_a_record_without_observations_leaves_the_section_blank(self) -> None:
+    def test_a_record_without_observations_marks_the_section_as_unrecorded(self) -> None:
         self.event("00:30", "session_started", "1")
         self.event("00:36", "step_completed", "1")
         text = self.store.export_markdown(self.report_id, fixture=self.fixture).decode()
         section = text.split("## 관찰·특이사항", 1)[1].split("## 결과", 1)[0]
-        self.assertEqual(section.strip(), "")
+        self.assertEqual(section.strip(), "> 기록 없음")
 
     def test_docx_has_the_same_sections_and_tables(self) -> None:
         from docx import Document

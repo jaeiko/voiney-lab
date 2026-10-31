@@ -111,7 +111,10 @@ from voiney_lab.experiment_reports import (
     pi_confirmations,
     record_amendments,
     report_review_items,
+    report_protocol_fixture,
     report_timezone,
+    render_notebook_binder_docx,
+    render_notebook_binder_pdf,
     sample_in_text,
     ReportNarrative,
     ReportPdfError,
@@ -6147,6 +6150,54 @@ def _start_run_changes(
     return (change_set_id,changes),None
 
 
+def _report_lab_revision(protocol_id:str,change_set_id:str|None)->dict[str,Any]|None:
+    """The lab-adapted revision named by this run, without account identity."""
+
+    if not change_set_id:
+        return None
+    catalog,store=_open_protocol_catalog()
+    try:
+        chosen=next((event.payload for event in catalog.store.list_events(protocol_id)
+                     if event.event_type=="protocol_run_changes_chosen"
+                     and str((event.payload or {}).get("change_set_id"))==change_set_id),None)
+        revision=(chosen or {}).get("lab_adapted_revision")
+        if not isinstance(revision,dict):
+            return None
+        kept={key:revision.get(key) for key in (
+            "revision_id","version","label_ko","source_revision_id","recorded_at","changes")}
+        if not isinstance(kept["changes"],list):
+            return None
+        return kept
+    finally:
+        store.close()
+
+
+def _report_checkpoint_continuation(
+    session_id:str,protocol_id:str,protocol_revision:str,
+)->dict[str,str]|None:
+    """The stopped report a workspace checkpoint session continues."""
+
+    workspace=None
+    try:
+        principal,workspace=_commercial_workspace()
+        state=workspace.get_experiment(principal,session_id)
+    except Exception:  # noqa: BLE001 - ordinary starts have no checkpoint
+        return None
+    finally:
+        if workspace is not None:
+            workspace.close()
+    event=next((item for item in state.get("events") or ()
+                if item.get("event_type")=="session_restarted_from_checkpoint"),None)
+    payload=event.get("payload") if isinstance((event or {}).get("payload"),dict) else {}
+    source_session_id=str(payload.get("source_session_id") or "")
+    if not source_session_id:
+        return None
+    source_report_id="ER-"+hashlib.sha256(
+        f"{source_session_id}\x1f{protocol_id}\x1f{protocol_revision}".encode()
+    ).hexdigest()[:20].upper()
+    return {"source_session_id":source_session_id,"source_report_id":source_report_id}
+
+
 def _mark_run_changes_applied(protocol_id:str,change_set_id:str,experiment_session_id:str|None)->None:
     catalog,store=_open_protocol_catalog()
     try:
@@ -6769,6 +6820,135 @@ def _report_prose_store(report_id:str,*,write:bool=False)->ExperimentReportStore
     if not settings.enabled or settings.database_path is None:
         raise HTTPException(status_code=404,detail="experiment report unavailable")
     return ExperimentReportStore(settings.database_path)
+
+
+def _notebook_binder_scope()->tuple[Any,ExperimentReportStore]:
+    principal,workspace=_commercial_workspace()
+    workspace.close()
+    settings=ExperimentReportSettings.from_environment()
+    if not settings.enabled or settings.database_path is None:
+        raise HTTPException(status_code=404,detail="notebook binder unavailable")
+    return principal,ExperimentReportStore(settings.database_path)
+
+
+def _notebook_binder_response(binder:Any,*,status_code:int=200)->JSONResponse:
+    return JSONResponse(
+        content=jsonable_encoder(binder.public_dict()),status_code=status_code,
+        headers={"Cache-Control":"private, no-store"},
+    )
+
+
+@app.get("/api/notebook-binders/candidates")
+def get_notebook_binder_candidates(
+    date_from:str="",date_to:str="",protocol_id:str="",
+)->Response:
+    principal,store=_notebook_binder_scope()
+    try:
+        reports=store.notebook_binder_candidates(
+            organization_id=principal.organization_id,
+            owner_principal_id=principal.principal_id,
+            date_from=date_from,date_to=date_to,protocol_id=protocol_id)
+        binders=store.list_notebook_binders(
+            organization_id=principal.organization_id,
+            owner_principal_id=principal.principal_id)
+        return JSONResponse(content=jsonable_encoder({
+            "reports":reports,"binders":binders,
+        }),headers={"Cache-Control":"private, no-store"})
+    except ValueError as exc:
+        raise HTTPException(status_code=422,detail="notebook binder filter is invalid") from exc
+
+
+@app.post("/api/notebook-binders",status_code=201)
+async def create_notebook_binder(request:Request)->Response:
+    body=await request.json()
+    if not isinstance(body,dict) or not isinstance(body.get("report_ids"),list):
+        raise HTTPException(status_code=422,detail="notebook binder is invalid")
+    principal,store=_notebook_binder_scope()
+    try:
+        binder=store.create_notebook_binder(
+            organization_id=principal.organization_id,
+            owner_principal_id=principal.principal_id,
+            topic_name=body.get("topic_name"),
+            date_from=body.get("date_from","") if isinstance(body.get("date_from",""),str) else "invalid",
+            date_to=body.get("date_to","") if isinstance(body.get("date_to",""),str) else "invalid",
+            protocol_id=body.get("protocol_id","") if isinstance(body.get("protocol_id",""),str) else "invalid",
+            report_ids=body["report_ids"],
+        )
+        return _notebook_binder_response(binder,status_code=201)
+    except KeyError as exc:
+        raise HTTPException(status_code=404,detail="notebook binder unavailable") from exc
+    except (ValueError,RuntimeError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=422,detail="notebook binder is invalid") from exc
+
+
+def _notebook_binder_for_request(binder_id:str)->tuple[Any,ExperimentReportStore]:
+    principal,store=_notebook_binder_scope()
+    try:
+        binder=store.notebook_binder(
+            binder_id,organization_id=principal.organization_id,
+            owner_principal_id=principal.principal_id)
+    except (KeyError,ValueError,RuntimeError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=404,detail="notebook binder unavailable") from exc
+    return binder,store
+
+
+@app.get("/api/notebook-binders/{binder_id}.{format_name}")
+def export_notebook_binder(binder_id:str,format_name:str)->Response:
+    binder,store=_notebook_binder_for_request(binder_id)
+
+    def resolve(image:Any)->tuple[bytes,str]|None:
+        if getattr(image,"kind","")=="photo" and getattr(image,"source_session_id",""):
+            response=download_workspace_experiment_evidence(
+                str(image.source_session_id),str(image.asset_id))
+            media_type=str(response.media_type or "")
+            return (bytes(response.body),media_type) if media_type.startswith("image/") else None
+        if getattr(image,"kind","")!="source_figure":
+            return None
+        checked_documents=set()
+        for entry in binder.entries:
+            source_document_id=getattr(image,"source_document_id","")
+            if (entry.protocol_sha256!=source_document_id
+                    or entry.protocol_sha256 in checked_documents):
+                continue
+            checked_documents.add(entry.protocol_sha256)
+            fixture,_problem=report_protocol_fixture(store.get_report(entry.report_id))
+            visual_for_step=getattr(fixture,"visual_for_step",None)
+            visual_content=getattr(fixture,"visual_content",None)
+            if not callable(visual_for_step) or not callable(visual_content):
+                continue
+            for index in range(len(getattr(fixture,"steps",()) or ())):
+                asset=visual_for_step(index)
+                if (asset is None or asset.asset_id!=image.asset_id
+                        or asset.source_document_id!=source_document_id):
+                    continue
+                resolved,content=visual_content(index)
+                if (resolved.asset_id==image.asset_id
+                        and resolved.source_document_id==source_document_id):
+                    return content,resolved.mime_type
+        return None
+
+    if format_name=="docx":
+        content=render_notebook_binder_docx(binder,image_resolver=resolve)
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif format_name=="pdf":
+        try:
+            content=render_notebook_binder_pdf(binder,image_resolver=resolve)
+        except ReportPdfError as exc:
+            raise HTTPException(status_code=503,detail=exc.code) from exc
+        media_type="application/pdf"
+    else:
+        raise HTTPException(status_code=404,detail="notebook binder unavailable")
+    return Response(
+        content=content,media_type=media_type,
+        headers={"Cache-Control":"private, no-store","Content-Disposition":(
+            f'attachment; filename="{binder.binder_id}.{format_name}"')},
+    )
+
+
+@app.get("/api/notebook-binders/{binder_id}")
+def get_notebook_binder(binder_id:str)->Response:
+    binder,_store=_notebook_binder_for_request(binder_id)
+    return _notebook_binder_response(binder)
 
 
 @app.get("/api/experiment-reports/{report_id}/prose")
@@ -10649,6 +10829,14 @@ def _open_experiment_report(
         session.experiment_report_id=report["report_id"]
         _scope_tenant_resource(
             "experiment_report",session.experiment_report_id,bind=True)
+        continuation=_report_checkpoint_continuation(
+            session.session_id,curated.fixture.protocol_id,curated.fixture.revision_id)
+        if continuation is not None:
+            store.append_event(
+                session.experiment_report_id,
+                event_key="checkpoint-continuation",
+                event_type="checkpoint_continuation",
+                source_tier="operator",payload=continuation)
         _pilot_mark("experiment_opened",session=session)
         experimenter=_experimenter_display_name()
         if experimenter:
@@ -10906,6 +11094,10 @@ def _record_experiment_report_plan(
         # Lane EASY, decision 2: the values the start applied for today.
         payload["run_changes"]=[change.public_dict() for change in curated.run_changes()]
         payload["run_change_set_id"]=curated.run_change_set_id
+        lab_revision=_report_lab_revision(
+            curated.fixture.protocol_id,curated.run_change_set_id)
+        if lab_revision is not None:
+            payload["lab_adapted_revision"]=lab_revision
     followed_by=(
         "repeat_rounds_declined" if move_kind=="repeat_declined" else
         "repeat_closed" if move_kind=="repeat_closed" else

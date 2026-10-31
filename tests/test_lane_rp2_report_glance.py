@@ -124,7 +124,7 @@ class StepTableTests(_GlanceCase):
         ])
         # The values, deviations and anomalies stand in the body's sections.
         self.assertIn("| 2단계 · Gel band destaining | 온도 37°C → 40°C (“40도에서 씻었어”) · 그 밖 원문대로 (500 µL · 10 min) |", text)
-        self.assertIn("| 1단계 · Gel band destaining | — | 조각 크기 1 mm (정정됨 — 처음 “조각 크기 2 mm”) | 09:34 |", text)
+        self.assertIn("| 1단계 · Gel band destaining | — | 조각 크기 1 mm [정정됨]<br>처음 기록: 조각 크기 2 mm | 09:34 |", text)
         self.assertIn("- 이상 · 4단계 (10:00): “튜브를 쏟았어”", text)
 
     def test_a_stopped_run_shows_the_step_it_stopped_at_and_leaves_out_the_steps_not_done(self) -> None:
@@ -231,12 +231,12 @@ class StartCheckTests(_GlanceCase):
 
 
 class SignatureTests(_GlanceCase):
-    def test_a_place_for_the_experimenter_and_the_pi(self) -> None:
+    def test_an_empty_confirmation_section_does_not_invent_signature_rows(self) -> None:
         text = self.markdown(deviation_run(self.temporary.name))
         block = text.split("### 확인 기록", 1)[1].split("### 단계 시각표", 1)[0]
-        self.assertIn("| 확인 | 이름 | 날짜·시각 | 서명·한 줄 의견 |", block)
-        self.assertIn("| 실험자 |", block)
-        self.assertIn("| PI |", block)
+        self.assertEqual(block.strip(), "> 기록 없음")
+        self.assertNotIn("| 실험자 |", block)
+        self.assertNotIn("| PI |", block)
 
 
 class WordLayoutTests(_GlanceCase):
@@ -270,7 +270,8 @@ class WordLayoutTests(_GlanceCase):
         headers = {tuple(cell.text for cell in table.rows[0].cells): table for table in document.tables}
         section = document.sections[0]
         text_width = section.page_width - section.left_margin - section.right_margin
-        for header in (er.CONDITION_HEADER, er.OBSERVATION_HEADER, er.CONFIRM_HEADER,
+        self.assertNotIn(er.CONFIRM_HEADER, headers)
+        for header in (er.CONDITION_HEADER, er.OBSERVATION_HEADER,
                        er.APPENDIX_STEP_HEADER, er.APPENDIX_RECORD_HEADER):
             table = headers[header]
             self.assertLessEqual(sum(column.width for column in table.columns), text_width + Cm(0.01), header)

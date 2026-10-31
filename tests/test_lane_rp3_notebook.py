@@ -130,7 +130,7 @@ class SampleTests(_Case):
 
     def test_nothing_said_is_said_so(self) -> None:
         text = self.markdown(deviation_run(self.temporary.name))
-        self.assertEqual(self.section(text, "## 목적").strip(), "")
+        self.assertEqual(self.section(text, "## 목적").strip(), "> 기록 없음")
         self.assertNotIn("| 시료 | 조건 | 대조군 |", self.section(text, "## 실험 정보"))
 
     def test_samples_are_read_from_the_words_when_the_event_holds_none(self) -> None:
@@ -230,7 +230,7 @@ class ObservationTests(_Case):
         self.assertEqual(self.table(text, "| 과정 | 시료 | 관찰·측정 (기록 그대로) | 시각 |"), [
             "| 1단계 · Seeding | — | well 당 5000 cells 심었어 | 09:40 |",
             "| 5단계 · Read-out | 3번 샘플 | 3번 샘플에서 세포 밀도가 예상보다 낮게 관찰됨 | 10:20 |",
-            "| 6단계 · Read-out | 1번 샘플 | 1번 샘플 생존율 82% (정정됨 — 처음 “1번 샘플 생존율 72%”) | 12:50 |",
+            "| 6단계 · Read-out | 1번 샘플 | 1번 샘플 생존율 82% [정정됨]<br>처음 기록: 1번 샘플 생존율 72% | 12:50 |",
             "| 6단계 · Read-out | 2번 샘플 | 2번 샘플 생존율 41% | 12:51 |",
             "| 6단계 · Read-out | — | 사진: 570 nm 판독 화면 | 12:53 |",
         ])
@@ -249,7 +249,7 @@ class ObservationTests(_Case):
         text = self.markdown(short_run(self.temporary.name), protocol_double(labels=("1", "2")), start_check=None)
         section = self.section(text, "## 관찰·특이사항")
         self.assertIn("| 1단계 · Gel band destaining | — | 조각 크기 1 mm | 09:33 |", section)
-        self.assertEqual(self.section(text, "## 결과").strip(), "")
+        self.assertEqual(self.section(text, "## 결과").strip(), "> 기록 없음")
         record = headspace_run(self.temporary.name)
         text = self.markdown(record, headspace_protocol(), start_check=None)
         self.assertIn("| 1단계 · Materials to autoclave before experiment | — | LB 배지가 맑고 덩어리 없이 다 녹았어 | 09:42 |", text)
@@ -348,24 +348,19 @@ class NextAndConfirmationTests(_Case):
         self.assertIn("| 다음 할 일 | 5 µM 농도를 2.5로 낮춰 볼게 |",
                       self.section(text, "## 해석·다음 할 일"))
         text = self.markdown(coating_run(self.temporary.name), coating_protocol(), start_check=None)
-        self.assertIn("| 다음 할 일 |   |", self.section(text, "## 해석·다음 할 일"))
+        self.assertEqual(self.section(text, "## 해석·다음 할 일").strip(), "> 기록 없음")
         self.assertNotIn("5단계부터 이어서 한다 (원문의 다음 단계)", text)
         text = self.markdown(deviation_run(self.temporary.name))
-        self.assertIn("| 다음 할 일 |   |", self.section(text, "## 해석·다음 할 일"))
+        self.assertEqual(self.section(text, "## 해석·다음 할 일").strip(), "> 기록 없음")
 
     def test_the_confirmation_box_has_a_row_for_the_experimenter_and_the_pi(self) -> None:
         record = deviation_run(self.temporary.name)
         text = self.markdown(record)
-        self.assertEqual(self.table(text, "| 확인 | 이름 | 날짜·시각 | 서명·한 줄 의견 |"), [
-            "| 실험자 |   |   |   |",
-            "| PI |   |   |   |",
-        ])
-        self.assertIn("> PI 확인: 아직 없음.", self.section(text, "### 확인 기록"))
+        self.assertIn("### 확인 기록\n\n> 기록 없음\n\n### 단계 시각표", text)
         # Decision ④'s event, read when it is there: name, time, one line.
         record.event("02:00", "pi_confirmed", None, payload={"name": "김교수", "comment": "온도 편차 확인함, 다음엔 항온조 먼저"})
         text = self.markdown(record)
         self.assertEqual(self.table(text, "| 확인 | 이름 | 날짜·시각 | 서명·한 줄 의견 |"), [
-            "| 실험자 |   |   |   |",
             "| PI | 김교수 | 2026년 10월 19일 11:00 | 온도 편차 확인함, 다음엔 항온조 먼저 |",
         ])
         self.assertNotIn("아직 없음", text)
@@ -420,7 +415,7 @@ class WordTests(_Case):
         self.assertEqual(headers, [
             ("항목", "내용"), er.SAMPLE_HEADER, er.METHOD_HEADER, er.CONDITION_HEADER,
             er.VALUE_BAR_HEADER, er.TIMELINE_HEADER, er.OBSERVATION_HEADER,
-            ("항목", "내용"), er.DOMAIN_HEADER, er.INVENTORY_HEADER, er.CONFIRM_HEADER,
+            ("항목", "내용"), er.DOMAIN_HEADER, er.INVENTORY_HEADER,
             er.APPENDIX_STEP_HEADER, er.APPENDIX_RECORD_HEADER,
         ])
         for table in document.tables:
@@ -430,10 +425,8 @@ class WordTests(_Case):
             for width, share in zip(grid, shares):
                 self.assertAlmostEqual(width / sum(grid), share, places=2, msg=header)
             self.assertEqual(table._tbl.tblPr.find(qn("w:tblLayout")).get(qn("w:type")), "fixed")
-        sign = document.tables[10]
-        self.assertGreater(sign.rows[1].height, 0)
         # The appendix is in smaller type than the body.
-        sizes = {run.font.size.pt for table in document.tables[11:] for row in table.rows[1:]
+        sizes = {run.font.size.pt for table in document.tables[10:] for row in table.rows[1:]
                  for cell in row.cells for paragraph in cell.paragraphs for run in paragraph.runs if run.font.size}
         self.assertEqual(sizes, {8.0})
         text = "\n".join(paragraph.text for paragraph in document.paragraphs)

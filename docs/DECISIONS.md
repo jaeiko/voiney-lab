@@ -110,6 +110,7 @@
 |---|---|---|---|---|---|
 | 2026-10-19 | 보고서 앞쪽을 한눈에, LibreOffice 로 PDF 내보내기, 확인 안 된 값은 "[미확인]" 표시와 제목 아래 개수(내보내기를 막지는 않음). 숫자는 모두 기록에서 결정적으로 | 실험 흐름이 보이지 않았다 | RP2 (PR #102) | `experiment_reports.py` `export_pdf`, `report_docx_to_pdf`. 앞쪽 구성은 아래 실험 노트가 대신했다 | — |
 | 2026-10-19 · 20 | 보고서를 연구자의 **실험 노트**로 바꾼다(제목 = 말한 목적, 1 시료와 조건 … 8 부록). 시작 때 목적·시료, 끝에 결과·다음에 바꿀 점, 관찰 대상이 있는 단계에서 관찰을 묻는다. AI 는 검사를 통과한 "AI 정리"만 쓴다. 랩미팅 요약(Word·PDF)과 결과 표(xlsx) | 10-19 평가: 보고서가 음성 시험 중심이라 연구자에게 쓸모가 없었다 | RP3 (PR #106) | `experiment_reports.py` `build_lab_notebook`, `check_ai_notes`, `export_meeting_pdf`, `export_xlsx`; 설정 `VOINEY_LAB_NOTEBOOK_OBSERVATION_QUESTION` | 화면에는 Word·Markdown·JSON·CSV 링크만 있다 |
+| 2026-10-30 | 노트 방법은 검사 통과 한국어를 먼저 두고 원문을 함께 보이며, 번역 거절·없음을 표시한다. 원문 그림은 분석이 쪽·위치·캡션 근거로 해당 단계에 고른 자산만 한 번 붙인다. 종료 사건, 되읽음·정정됨과 최초 글, `기록 없음` 축약을 화면·내보내기에 반영한다. 소유자는 주제 이름·기간·프로토콜로 끝난 Voiney Lab 기록 2–50개를 날짜순 묶음 노트로 만들며, 각 실험을 독립 투영해 출처 숫자 0·실험 간 섞임 0 감사를 통과한 뒤 생성 사건을 덧붙인다. 연구 관리 플랫폼·ELN으로 넓히지 않는다 | 실제 in-gel 노트에서 한 그림이 관계없는 다음 단계에도 반복되고, 방법은 영어만, 타임라인은 재개에서 끝나며, 빈 절과 정정 상태가 정돈되지 않았다. 여러 연구 인수인계에서 실험의 시작·끝 경계가 필요했다 | NOTE2 | `experiment_reports.py` `NotebookBinder`·`audit_notebook_binder_isolation`, `report_projection.py`, `server.py` `/api/notebook-binders`, 새 화면 기록·바인더 경로 | 실제 기록 ER-A5B0CECA42D9AF149DDA의 변경 뒤 화면·Word·PDF 사진은 사람이 기록을 제공해 확인; PDF 변환기는 LibreOffice 필요 |
 
 ## 9. 연결 · 앱 · 말 · 화면
 

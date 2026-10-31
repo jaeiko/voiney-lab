@@ -90,7 +90,6 @@ def project_step_for_report(
     instruction = (
         _extract_text(getattr(step, "instruction_source_text", None))
         or _extract_text(getattr(step, "instruction", None))
-        or f"Step {step_label} instruction."
     )
 
     sub_actions: list[str] = []

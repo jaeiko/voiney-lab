@@ -18,6 +18,8 @@ describe("lane RX2's routes", () => {
     expect(parseRoute("#/records").name).toBe("records");
     expect(parseRoute("#/records/s1/?from=bookmark")).toMatchObject({ name: "record", sessionId: "s1" });
     expect(parseRoute("#/records/s%201/notebook/r%202")).toMatchObject({ name: "notebook", sessionId: "s 1", reportId: "r 2" });
+    expect(parseRoute("#/records/binders/NB%20ONE")).toMatchObject({ name: "binder", binderId: "NB ONE" });
+    expect(routes.binder("NB ONE")).toBe("#/records/binders/NB%20ONE");
   });
 
   it("builds the start links", () => {

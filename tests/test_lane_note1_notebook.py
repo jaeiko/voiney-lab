@@ -304,7 +304,6 @@ class NotebookDraftTests(unittest.TestCase):
     def test_record_photos_source_figures_and_bars_stay_bound_to_their_step(self) -> None:
         from docx import Document
         import io
-        from voiney_lab.source_figures import SourceFigure
 
         record = cell_run(self.temporary.name, session="session-note1-images")
         record.event(
@@ -319,40 +318,39 @@ class NotebookDraftTests(unittest.TestCase):
         fixture.revision_id = "rev-rp3-1"
         fixture.source_pdf_sha256 = "a" * 64
         fixture.steps = tuple(step for section in fixture.draft.protocol.sections for step in section.steps)
-        figure = SourceFigure(
-            figure_id="source-figure-2-1", source_page=2,
-            bounding_box=(10.0, 20.0, 210.0, 160.0), caption="원문 plate 배치 그림",
-            mime_type="image/png", sha256="b" * 64, byte_size=68,
-            width_px=200, height_px=140,
+        figure = SimpleNamespace(
+            asset_id="source-crop-2-1", source_document_id="a" * 64,
+            source_page=2, normalized_bounding_box=(0.1, 0.2, 0.3, 0.4),
+            caption_primary="원문 plate 배치 그림", caption_source="Figure 1. Plate layout.",
+            mime_type="image/png", sha256="b" * 64,
         )
         png = base64.b64decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         )
 
-        def figures_for_step(_fixture, index):
-            return (figure,) if index == 0 else ()
+        fixture.visual_for_step = lambda index: figure if index == 0 else None
+        fixture.visual_content = lambda index: (figure, png)
 
-        with mock.patch("voiney_lab.source_figures.figures_for_step", side_effect=figures_for_step):
-            book = self.book(record, fixture)
-            self.assertEqual(
-                [(item.kind, item.step_label) for item in book.images if item.asset_id],
-                [("photo", "6"), ("source_figure", "1")],
-            )
-            recorded_photo = next(item for item in book.images if item.asset_id == "evidence-photo-1")
-            self.assertEqual(
-                recorded_photo.url,
-                "/api/workspace/experiments/session-note1-images/evidence/evidence-photo-1",
-            )
-            markdown = record.store.export_markdown(
-                record.report_id, fixture=fixture, start_check=None, previous=None,
-            ).decode()
-            self.assertIn("![6단계 · 6단계 판독 사진]", markdown)
-            self.assertIn("원문 plate 배치 그림", markdown)
-            self.assertIn("█", markdown)
-            docx = record.store.export_docx(
-                record.report_id, fixture=fixture, start_check=None, previous=None,
-                image_resolver=lambda image: (png, "image/png") if image.asset_id else None,
-            )
+        book = self.book(record, fixture)
+        self.assertEqual(
+            [(item.kind, item.step_label) for item in book.images if item.asset_id],
+            [("photo", "6"), ("source_figure", "1")],
+        )
+        recorded_photo = next(item for item in book.images if item.asset_id == "evidence-photo-1")
+        self.assertEqual(
+            recorded_photo.url,
+            "/api/workspace/experiments/session-note1-images/evidence/evidence-photo-1",
+        )
+        markdown = record.store.export_markdown(
+            record.report_id, fixture=fixture, start_check=None, previous=None,
+        ).decode()
+        self.assertIn("![6단계 · 6단계 판독 사진]", markdown)
+        self.assertIn("원문 plate 배치 그림", markdown)
+        self.assertIn("█", markdown)
+        docx = record.store.export_docx(
+            record.report_id, fixture=fixture, start_check=None, previous=None,
+            image_resolver=lambda image: (png, "image/png") if image.asset_id else None,
+        )
         document = Document(io.BytesIO(docx))
         self.assertEqual(len(document.inline_shapes), 2)
 
