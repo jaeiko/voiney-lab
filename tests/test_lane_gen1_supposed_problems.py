@@ -79,6 +79,15 @@ class SupposedReadingTests(unittest.TestCase):
                 self.assertIsNone(supposed_problem_reading(words))
                 self.assertFalse(supposes(words))
 
+    def test_a_report_before_the_condition_is_no_supposition(self) -> None:
+        # Said as having happened, then asked about: lane HELP's problem,
+        # not a supposition ("만약 침전이 생겼으면" stays one).
+        for words in ("침전이 생겼는데 이러면 어떡해?", "용액이 탁해졌는데 괜찮으면 다음 가도 돼?"):
+            with self.subTest(words=words):
+                self.assertIsNone(supposed_problem_reading(words))
+                self.assertFalse(supposes(words))
+        self.assertEqual(supposed_problem_reading("만약 침전이 생겼으면 어떡해?"), "supposed")
+
     def test_a_supposition_said_as_a_statement_is_unclear(self) -> None:
         self.assertEqual(supposed_problem_reading(UNCLEAR), "unclear")
         self.assertEqual(arbitrate_request(UNCLEAR).reason_code, "problem_supposed_or_happened")

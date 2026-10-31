@@ -326,6 +326,8 @@ def _supposition_split(normalized: str) -> tuple[str, str] | None:
 
     The supposed part runs to the last word that ends a supposition; the rest
     is what is said of it. With only a lead ("만약 …") the whole is supposed.
+    None too when the words before that word report something as having
+    happened ("침전이 생겼는데 이러면 어떡해?"): a problem said, then asked about.
     """
 
     words = normalized.split()
@@ -337,11 +339,15 @@ def _supposition_split(normalized: str) -> tuple[str, str] | None:
         if _SUPPOSITION_WORD.fullmatch(bare):
             last = index
     if last is not None:
+        if _HAPPENED.search(" ".join(words[:last])):
+            return None
         return " ".join(words[: last + 1]), " ".join(words[last + 1:])
     phrase = None
     for match in _SUPPOSITION_PHRASE.finditer(normalized):
         phrase = match
     if phrase is not None:
+        if _HAPPENED.search(normalized[:phrase.start()]):
+            return None
         return normalized[: phrase.end()], normalized[phrase.end():]
     lead = _SUPPOSITION_LEAD.search(normalized)
     if lead is not None:
