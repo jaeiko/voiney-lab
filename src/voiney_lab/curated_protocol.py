@@ -47,6 +47,8 @@ from voiney_lab.intent_arbitration import (
     RequestIntent,
     arbitrate_request,
     problem_reading,
+    supposed_problem_reading,
+    supposes,
     vague_check_reading,
 )
 from voiney_lab.answer_checks import (
@@ -1421,6 +1423,9 @@ class CuratedControlIntent:
     count_reply: int | str | None = None
     #: Lane CF, decision 1: a value note the experimenter confirmed ("네").
     note_confirmed: bool = False
+    #: Lane GEN1: the earlier words a reply to "지금 생긴 일인가요, 생기면
+    #: 어떻게 하는지 묻는 건가요?" is about -- recorded, or answered, as those words.
+    supposed_words: str | None = None
 
 
 class DiscourseFocusKind(str, Enum):
@@ -6135,10 +6140,21 @@ _PROBLEM_KNOWLEDGE: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDicti
 _PROBLEM_KNOWLEDGE_LOCK = threading.Lock()
 #: Lane HELP: the record's category of a problem no anomaly pattern names.
 PROBLEM_CATEGORY = "unexpected_result"
+#: Lane GEN1 (2026-10-31): a supposition said as what then happens ("섞으면
+#: 침전이 생겨") may be what just happened, so it is asked once, in these words.
+SUPPOSED_OR_HAPPENED = "problem_supposed_or_happened"
+SUPPOSED_OR_HAPPENED_QUESTION = "지금 생긴 일인가요, 생기면 어떻게 하는지 묻는 건가요?"
+#: A reply to it: it happened ("지금 생겼어", "응, 방금"), or it was asked
+#: ("생기면 어떻게 하는지 물어본 거야", "아니, 묻는 거야").
+_SUPPOSED_REPLY_HAPPENED = re.compile(
+    r"^(?:(?:응|어|네|예|맞아|그래|아니)\s*,?\s*)?(?:지금|방금|이미|벌써|실제로|진짜|아까)"
+    r"|(?:생겼|났|됐|일어났|벌어졌|그랬|생긴\s*(?:거|일|것)|일어난\s*(?:거|일))(?!.*(?:면|물어|묻|질문))"
+)
+_SUPPOSED_REPLY_ASKED = re.compile(r"물어|묻는|묻고|질문|궁금|생기면|만약|가정|아직\s*(?:안|아니)")
 #: The intents the problem reader makes (front rule "problem_help").
 _PROBLEM_HELP_KINDS = frozenset({
     "grounded_problem_question", "problem_question", "problem_report",
-    "problem_not_yet", "vague_check",
+    "problem_not_yet", "vague_check", SUPPOSED_OR_HAPPENED,
 })
 #: What the rules made of a move said with a claim before lane SAY (decision
 #: 6): the claim answered alone, or nothing; the move was dropped.
@@ -8491,7 +8507,9 @@ def classify_curated_control_intent(
         elif spill == "not_reported" and _SPILL_WORD.search(match.group(0)):
             # The spilling words asked, supposed or denied: "쏟으면 어떡해?".
             continue
-        elif _ANOMALY_NON_ASSERTION.search(key):
+        elif _ANOMALY_NON_ASSERTION.search(key) or supposes(transcript):
+            # Lane GEN1: "용액이 탁해지면", "타이머 끝나면 다음으로 가자":
+            # supposed, so nothing has happened to record.
             continue
         return CuratedControlIntent(
             intent_kind="record_anomaly",
@@ -8712,6 +8730,14 @@ def curated_intent_from_arbitration(
             intent_kind='grounded_problem_question',
             action=CuratedProtocolAction.PROBLEM_HELP,
             target_step='authoritative_current_step', question_kind='troubleshooting',
+            **common,
+        )
+    if decision.reason_code == "problem_supposed_or_happened":
+        # Lane GEN1: asked once whether it happened; nothing recorded yet.
+        return CuratedControlIntent(
+            intent_kind=SUPPOSED_OR_HAPPENED,
+            action=CuratedProtocolAction.PROBLEM_HELP,
+            target_step="authoritative_current_step", question_kind="troubleshooting",
             **common,
         )
     if decision.intent is RequestIntent.LEARNING:
@@ -13938,8 +13964,18 @@ class CuratedProtocolSession:
             compose_problem_help,
         )
 
+        if intent.intent_kind == SUPPOSED_OR_HAPPENED:
+            # Lane GEN1: asked once, nothing recorded; the words are kept on
+            # the plan for the reply to be about.
+            return replace(
+                self._words_plan(
+                    SUPPOSED_OR_HAPPENED_QUESTION, intent_kind=SUPPOSED_OR_HAPPENED,
+                    action=CuratedProtocolAction.CLARIFY_REFERENCE),
+                question_kind="troubleshooting",
+                normalized_transcript=" ".join(transcript.split())[:400],
+            )
         marker = self._problem_help_marker(
-            transcript,
+            intent.supposed_words or transcript,
             kind=(
                 "grounded_question"
                 if intent.intent_kind == "grounded_problem_question"
@@ -17607,6 +17643,9 @@ class CuratedProtocolSession:
             and self._discourse_context.workflow_revision == self._revision
             else None
         )
+        supposed = self._supposition_reply(transcript, language=language)
+        if supposed is not None:
+            return supposed
         time_key = _utterance_key(transcript)
         if self.active and _TIMER_ELAPSED_QUESTION.search(time_key):
             # "몇 분 지났어?" (lane PT, decision 3): the running timer's time
@@ -17694,6 +17733,61 @@ class CuratedProtocolSession:
             # step's timer, as these words did before (they were start words).
             intent = replace(intent, intent_kind="start_step_timer", action=CuratedProtocolAction.START_TIMER)
         return intent
+
+    def _supposition_asked(self) -> str | None:
+        """The words the last turn asked "지금 생긴 일인가요, …" about, if it
+        asked it (lane GEN1); read from the last plan, so nothing is kept."""
+
+        if not self.active or not self._replay:
+            return None
+        last = self._replay[max(self._replay)]
+        if last.intent_kind != SUPPOSED_OR_HAPPENED:
+            return None
+        return last.normalized_transcript or None
+
+    def _supposition_reply(self, transcript: str, *, language: str) -> CuratedControlIntent | None:
+        """The reply to "지금 생긴 일인가요, 생기면 어떻게 하는지 묻는 건가요?".
+
+        It happened ("지금 생겼어"): the earlier words are recorded as a
+        problem is. It was asked ("물어본 거야"), or the same supposition is
+        said again (it is asked once only): they are answered from the
+        source. Anything else is read as words of its own.
+        """
+
+        asked = self._supposition_asked()
+        if asked is None:
+            return None
+        said = " ".join(transcript.split())
+        if not said:
+            return None
+        key = _utterance_key(transcript)
+        if (
+            _SUPPOSED_REPLY_ASKED.search(said)
+            or said == asked
+            or supposed_problem_reading(said) is not None
+        ):
+            return CuratedControlIntent(
+                intent_kind="grounded_problem_question",
+                action=CuratedProtocolAction.PROBLEM_HELP,
+                target_step="authoritative_current_step",
+                question_kind="troubleshooting",
+                language=language,
+                normalized_transcript=key,
+                question_dimensions=("troubleshooting",),
+                supposed_words=asked,
+            )
+        if _SUPPOSED_REPLY_HAPPENED.search(said):
+            return CuratedControlIntent(
+                intent_kind="problem_report",
+                action=CuratedProtocolAction.REPORT_ANOMALY,
+                question_kind="anomaly",
+                language=language,
+                reported_anomaly=True,
+                anomaly_category=PROBLEM_CATEGORY,
+                normalized_transcript=key,
+                supposed_words=asked,
+            )
+        return None
 
     def _names_own_endpoint(self, transcript: str) -> bool:
         """Whether the words name the current step's endpoint ("탈색이 안 됐어"
@@ -20136,6 +20230,7 @@ class CuratedProtocolSession:
         arbitration = arbitration or arbitrate_request(transcript)
         if (
             language == "ko" and transcript_quality is None
+            and self._supposition_asked() is None
             and is_question_or_speculation(transcript, punctuation=False, literal_record=True)
             and arbitration.intent not in {
                 RequestIntent.LEARNING, RequestIntent.PROTOCOL_AUDIT,
@@ -22912,12 +23007,16 @@ class CuratedProtocolSession:
                     ),
                 }.get(language, "이상 사항 추가 내용을 확인했습니다.")
             else:
+                # Lane GEN1: a reply that it happened records the words it
+                # is about, with the reply beside them.
+                recorded = (intent.supposed_words or transcript).strip()[:800]
                 self._pending_anomaly = {
                     "category": category,
-                    "text": transcript.strip()[:800],
+                    "text": recorded,
                     "step_label": step.source_label,
                     "step_id": step.step_id,
-                    "notes": [transcript.strip()[:800]],
+                    "notes": list(dict.fromkeys(
+                        note for note in (recorded, transcript.strip()[:800]) if note)),
                 }
                 if intent.intent_kind == "observation_with_anomaly":
                     # Short, as it is spoken; nothing is said to be recorded
@@ -22970,14 +23069,14 @@ class CuratedProtocolSession:
                 intent_kind=intent.intent_kind,
                 reported_anomaly=True,
                 anomaly_category=category,
-                anomaly_text=transcript.strip()[:800],
+                anomaly_text=(intent.supposed_words or transcript).strip()[:800],
                 # Lane HELP, decision 1: a new problem recorded -- by the
                 # rules, the router's confirmed proposal or the spill rule --
                 # is helped after it is read back; more words for a pending
                 # one, or a problem said with an endpoint, are not.
                 problem_help=(
                     self._problem_help_marker(
-                        transcript, kind="statement", category=category,
+                        intent.supposed_words or transcript, kind="statement", category=category,
                         safety=intent.spill_reported)
                     if intent.intent_kind not in {"enrich_pending_anomaly", "observation_with_anomaly"}
                     else None
