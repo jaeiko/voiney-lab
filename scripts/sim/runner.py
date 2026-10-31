@@ -215,10 +215,18 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         # Endpoint silence is part of the microphone stream, not the STT payload.
         stream = source + bytes(640 * (detector.config.endpoint_silence_frames + 15))
         endpoints = []
+        endpoint_stream_frames = []
         for offset in range(0, len(stream), 640):
-            endpoints.extend(session.accept_chunk(stream[offset:offset+640]))
+            chunk_events = session.accept_chunk(stream[offset:offset+640])
+            endpoints.extend(chunk_events)
+            # LIVE3: the stream frame at which each end was found, so the
+            # delay from the wearer's last frame to the end can be measured.
+            endpoint_stream_frames.extend(offset // 640 for e in chunk_events if e.kind == 'speech.end')
         drops = [e.result.rejection_reason or e.kind for e in endpoints if e.kind in {'speech.rejected', 'speech.ignored'}]
         committed = [e for e in endpoints if e.kind == 'speech.end']
+        continuation_joins = sum(
+            1 for e in endpoints
+            if e.kind == 'assistant.interrupted' and e.reason == 'continued_speech')
         started = time.perf_counter()
         for e in committed:
             result = e.result
@@ -332,6 +340,9 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             'stt_calls': stt_calls, 'stt_responses':len(hypotheses),
             'terminal': bool(done or drops), 'endpoint_count': len(committed),
             'endpoint_audio_frames': [e.result.total_frames for e in committed],
+            'endpoint_stream_frames': endpoint_stream_frames,
+            'continuation_joins': continuation_joins,
+            'source_frames': len(source) // 640,
             'cut_off': cut_off_detected(committed, stt_calls=stt_calls),
             'interrupted': any(e['type'] in {'turn.cancelled', 'audio.cancelled'} for e in events),
             'grounding': grounding,
