@@ -194,11 +194,12 @@ body[data-run="on"] { background: var(--paper); }
 .run-figure { margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .run-figure-open { position: relative; display: block; width: 100%; padding: 0; border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper); cursor: zoom-in; }
 .run-figure-image { display: block; width: 100%; height: min(44dvh, 520px); object-fit: contain; }
-/* In the right half: one picture fills the two thirds; more share them, one under another, never under 240 px. */
-.run-side > .run-figures { grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(240px, 1fr); }
-.run-side .run-figure { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
-.run-side .run-figure-open { height: 100%; min-height: 0; }
-.run-side .run-figure-image { height: 100%; min-height: 200px; }
+/* In the right half: one picture fills the two thirds; more share them, one under another; each picture keeps 160 px
+   and its caption below it (the panel scrolls when they do not fit), the picture never spilling over its caption. */
+.run-side > .run-figures { grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(min-content, 1fr); }
+.run-side .run-figure { min-height: 0; display: grid; grid-template-rows: minmax(160px, 1fr) auto; }
+.run-side .run-figure-open { height: 100%; min-height: 0; overflow: hidden; }
+.run-side .run-figure-image { position: absolute; inset: 0; height: 100%; }
 .run-figure-credit { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); width: 100%; color: var(--ink-muted); }
 .run-figure-credit a { display: inline-flex; align-items: center; gap: var(--space-1); min-height: 48px; color: var(--ink); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .run-figure-credit svg { width: 20px; height: 20px; }

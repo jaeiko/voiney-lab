@@ -96,6 +96,18 @@ async function layoutChecks(page: Page, hasTimer: boolean) {
   expect(sizes.step).toBeCloseTo(sizes.stepToken, 0);
   if (hasTimer) expect(sizes.digits).toBeCloseTo(sizes.timerToken, 0);
   for (const height of sizes.buttons) expect(height).toBeGreaterThanOrEqual(sizes.target - 1);
+  // Every picture stays inside its frame, above its own caption.
+  const pictures = await page.evaluate(() => [...document.querySelectorAll('.run-figure')].map((figure) => {
+    const image = figure.querySelector('img')!.getBoundingClientRect();
+    const frame = figure.querySelector('.run-figure-open')!.getBoundingClientRect();
+    const caption = figure.querySelector('figcaption')!.getBoundingClientRect();
+    return { inside: image.top >= frame.top - 1 && image.bottom <= frame.bottom + 1 && image.left >= frame.left - 1 && image.right <= frame.right + 1, above: frame.bottom <= caption.top + 1, height: image.height };
+  }));
+  for (const picture of pictures) {
+    expect(picture.inside, JSON.stringify(picture)).toBe(true);
+    expect(picture.above, JSON.stringify(picture)).toBe(true);
+    expect(picture.height).toBeGreaterThanOrEqual(150);
+  }
   expect(await inView(page, '[data-testid="record-memo"]')).toBe(true);
   expect(await inView(page, '[data-testid="record-photo"]')).toBe(true);
   const wide = await overflow(page);
