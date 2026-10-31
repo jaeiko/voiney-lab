@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 
+from voiney_lab.answer_checks import supposition_violations
 from voiney_lab.public_knowledge import public_reference_label
 
 from voiney_lab.model_providers import ROLE_SETTINGS
@@ -339,6 +340,7 @@ class XaiSupplementalKnowledge:
             or "http://" in answer.casefold()
             or "https://" in answer.casefold()
             or _SUPPLEMENTAL_FORBIDDEN_CLAIM.search(answer)
+            or supposition_violations(answer, question=question)
         ):
             return {
                 "status": "response_rejected",
@@ -425,7 +427,9 @@ class XaiSupplementalKnowledge:
                 "exception_class": type(exc).__name__,
             }
         answer = " ".join(_response_text(response).split()).strip().strip("\"'“”")
-        if not answer:
+        if not answer or supposition_violations(answer, question=problem, problem=True):
+            # Lane GEN1: no cause said as certain, and nothing the researcher
+            # only supposed ("… 생기면") told as having happened.
             return {
                 "status": "response_rejected",
                 "elapsed_ms": max(0, round((time.monotonic() - started) * 1000)),
