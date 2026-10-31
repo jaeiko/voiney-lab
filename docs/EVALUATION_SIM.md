@@ -21,6 +21,17 @@ python scripts/sim/run.py --emergency-matrix --split development --output ~/repo
 python scripts/sim/run.py --emergency-matrix --split holdout --output ~/reports/sim/emergency-holdout.json
 ```
 
+분야별 **가정 질문** 갈래(`supposed_question`)는 바이오·화학·소재·토양마다
+개발용 3문장과 시험용 3문장을 따로 고정해 원래 분할 밖에 둔다(원래 분할의
+지문은 그대로다). 기대는 읽기 전용 근거 답이며, 가정을 이상 사항으로 기록하면
+`supposed_misrecorded`로 센다. 결과 표에는 `field`(분야) 차원이 있다.
+`--development-fixture`는 in-gel 개발 원문(조건 A)을 같은 일반 사례로 공개 10종
+옆에 더해 돌린다. 개발용으로만 쓰고 시험용 분할에는 넣지 않는다.
+
+```bash
+python scripts/sim/run.py --split development --development-fixture --output ~/reports/sim/development-with-in-gel.json
+```
+
 응급 별도 묶음은 눈·피부 노출, 흡입·호흡, 불·연기, 대량 쏟음, 베임·출혈,
 쓰러짐·의식, 가스·냄새, 화상, 감전, 삼킴의 합성 발화와 비응급 대조군이다.
 응급 놓침과 헛경보를 따로 센다. 실제 음성 인식이나 안전 대응의 검증은 아니다.

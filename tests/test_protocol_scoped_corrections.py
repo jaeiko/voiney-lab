@@ -32,18 +32,19 @@ from tests.protocol_vocabulary_support import (
 
 #: What in-gel hears: the words as a researcher says them, the entity key the
 #: term's spelling gives, and the term the heard words are repaired to.
+# Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
 HEARD = (
     ("아세토나이트릴이 뭐야?", "acetonitrile", "acetonitrile"),
-    ("엠빅이 뭐야?", "ambic", "AMBIC"),
-    ("에이 엠 빅이 뭐야?", "ambic", "AMBIC"),
+    ("엠빅이 뭐야?", "AMBIC", "AMBIC"),
+    ("에이 엠 빅이 뭐야?", "AMBIC", "AMBIC"),
     ("트립씬이 뭐야?", "trypsin", "trypsin"),
-    ("디티티가 뭐야?", "dtt", "DTT"),
+    ("디티티가 뭐야?", "DTT", "DTT"),
     # A lexicon lab word said in Korean names its entity; the key keeps the
     # Korean, so there is no correction to record.
     ("폼산이 뭐야?", "formic_acid", None),
     ("아이오도아세트아마이드가 뭐야?", "iodoacetamide", "iodoacetamide"),
     ("솔루션 A는 뭐야?", "solution_a", "Solution A"),
-    ("H PLC water가 뭐야?", "hplc_water", "HPLC water"),
+    ("H PLC water가 뭐야?", "HPLC water", "HPLC water"),
 )
 
 

@@ -161,9 +161,11 @@ class KnowledgeSource(Protocol):
 #: source writes. Each is (concept, English stems, Korean stems). General lab
 #: language, not one protocol's words: an entry only matches where both sides
 #: use it. A stem matches a word that starts with it ("destain" in
-#: "destained"); a Korean stem anywhere in a word ("파래" in "파래요").
+#: "destained"); a Korean stem anywhere in a word ("파래" in "파래요"). No
+#: reagent or product is a concept's word (lane GEN1): a protocol's own names
+#: are matched as its words, not through a concept.
 _CONCEPTS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
-    ("stain", ("stain", "destain", "coomassie", "blue", "dye"),
+    ("stain", ("stain", "destain", "blue", "dye"),
      ("파래", "파랗", "파란", "푸르", "탈색", "염색", "색이 안 빠", "색이 남", "색 안 빠", "염료", "진해", "진하", "짙")),
     ("color", ("colo", "hue"), ("색",)),
     ("yellow", ("yellow",), ("노랗", "노래", "노란", "황색")),
@@ -188,7 +190,7 @@ _CONCEPTS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ("mix", ("mix", "vortex", "homogen", "agitat", "shak", "invert"), ("섞", "혼합", "흔들", "볼텍스")),
     ("still", ("still", "until", "repeat", "again", "remain"),
      ("아직", "여전히", "계속", "그대로", "남아", "반복", "다시")),
-    ("contamination", ("contamin", "keratin", "dust", "clean"), ("오염", "먼지", "케라틴", "이물질")),
+    ("contamination", ("contamin", "dust", "clean"), ("오염", "먼지", "이물질")),
     ("temperature", ("temperat", "°c", "heat", "warm", "cool", "cold"), ("온도", "뜨거", "차가", "식", "데워")),
     ("time", ("time", "min", "hour", "overnight", "incubat"), ("시간", "분 동안", "오래", "밤새", "배양")),
     ("volume", ("volume", "amount", "cover", "level", "fill"),
@@ -203,7 +205,7 @@ _CONCEPTS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ("signal", ("signal", "background", "fluoresc", "intensity", "faint"),
      ("신호", "배경", "형광", "세기", "희미", "흐린 밴드")),
     ("cell", ("cell", "confluen", "monolayer"), ("세포", "컨플루언")),
-    ("detach", ("detach", "trypsin", "dissociat", "dislodg", "lift"), ("떨어", "안 떨어", "분리가 안")),
+    ("detach", ("detach", "dissociat", "dislodg", "lift"), ("떨어", "안 떨어", "분리가 안")),
     ("attach", ("attach", "adher"), ("붙", "부착")),
     ("efficiency", ("efficien", "yield", "transfect", "express"), ("효율", "수율", "발현")),
     ("amplification", ("amplif", "ct value", "cq", "curve", "melt"), ("증폭", "커브", "곡선")),

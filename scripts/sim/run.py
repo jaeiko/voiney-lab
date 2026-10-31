@@ -43,10 +43,10 @@ def save_report(path: Path, report: dict) -> None:
         json.dump(report, f, ensure_ascii=False, indent=2)
         f.write('\n')
     overall = report['overall']
-    lines = ['|구분|말 수|이해|정확도|잘못 바뀐 상태|영어 원문|단계 이름 겹침|응급 놓침|헛경보|', '|---|---:|---:|---:|---:|---:|---:|---:|---:|']
+    lines = ['|구분|말 수|이해|정확도|잘못 바뀐 상태|영어 원문|단계 이름 겹침|응급 놓침|헛경보|가정 질문 이상 오기록|', '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
     for dim, groups in report['tables'].items():
         for key,s in groups.items():
-            lines.append(f'|{dim}: {key}|{s["cases"]}|{s["understood"]}|{s["accuracy"]:.1%}|{s["wrong_state"]}|{s["english_copy"]}|{s["duplicate_label"]}|{s.get("emergency_miss", "미측정")}|{s.get("false_alarm", "미측정")}|')
+            lines.append(f'|{dim}: {key}|{s["cases"]}|{s["understood"]}|{s["accuracy"]:.1%}|{s["wrong_state"]}|{s["english_copy"]}|{s["duplicate_label"]}|{s.get("emergency_miss", "미측정")}|{s.get("false_alarm", "미측정")}|{s.get("supposed_misrecorded", "미측정")}|')
     path.with_suffix('.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
     print(json.dumps({'result':str(path), **overall}, ensure_ascii=False))
 
@@ -63,6 +63,20 @@ def prepare_cases(args: argparse.Namespace) -> tuple[list, dict, dict, dict]:
         from scripts.sim.translations import attach_translations
         protocols, translation_coverage = attach_translations(protocols, args.translations)
     cases, split = select_cases(protocols, args)
+    if getattr(args, 'development_fixture', False):
+        # Lane GEN1: the in-gel development fixture beside the public ten,
+        # the same generic cases, outside their partition (never holdout),
+        # to show its quality is the others' and not more.
+        if args.split == 'holdout':
+            raise ValueError('the development fixture is never holdout')
+        from scripts.sim.corpus import development_fixture_protocol, generate_development_cases, generate_supposed_cases
+        extra = development_fixture_protocol()
+        added = [(extra, case) for case in (
+            *generate_cases(extra), *generate_development_cases(extra),
+            *generate_supposed_cases(extra, 'development'))
+            if (not args.family or case.family in args.family)]
+        cases = [*cases, *added]
+        split = {**split, 'development_fixture_cases': len(added)}
     if not cases:
         raise ValueError('no matching cases')
     return cases, split, catalog_counts, translation_coverage
@@ -171,6 +185,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
                     )
                     row.update(
                         protocol=p.code,
+                        field=p.field,
                         noise=impact_kind or 'not_measured',
                         distance_cm=(distance_cm if distance_cm is not None
                                      else 'not_measured'),
@@ -247,6 +262,8 @@ def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--corpus', type=Path, default=CORPUS)
     parser.add_argument('--catalog-copy', type=Path)
+    parser.add_argument('--development-fixture', action='store_true',
+                        help='add the in-gel development fixture (licensed PDF, condition A) beside the public ten')
     parser.add_argument('--protocol', action='append')
     parser.add_argument('--family', action='append')
     parser.add_argument('--limit', type=int)
