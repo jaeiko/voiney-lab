@@ -4186,7 +4186,9 @@ _TIMER_ENDINGS = r"(?:\s*(?:해|해줘|해\s*줘|해요|해\s*주세요|주세�
 _TIMER_CONTROL_PATTERNS: tuple[tuple[CuratedProtocolAction, re.Pattern[str]], ...] = (
     (CuratedProtocolAction.TIMER_PAUSE, re.compile(
         rf"^{_TIMER_WORD}\s*(?:좀|잠깐|잠시|잠깐만|잠시만)?\s*"
-        rf"(?:일시\s*정지|일시\s*중지|멈춰|멈춤|멈추|정지|중지|스톱|stop|pause|포즈|홀드|hold){_TIMER_ENDINGS}$", re.I)),
+        # "멈" alone: the verb cut short by the recognizer (lane SAFE2); with
+        # the timer named, it is the timer's pause, never the run's.
+        rf"(?:일시\s*정지|일시\s*중지|멈(?:춰|춤|추|줘)?|정지|중지|스톱|stop|pause|포즈|홀드|hold){_TIMER_ENDINGS}$", re.I)),
     (CuratedProtocolAction.TIMER_RESUME, re.compile(
         rf"^{_TIMER_WORD}\s*(?:다시\s*시작|재개|계속(?:\s*돌려)?|이어서(?:\s*돌려)?|resume|continue){_TIMER_ENDINGS}$", re.I)),
     (CuratedProtocolAction.TIMER_CANCEL, re.compile(
@@ -4194,6 +4196,33 @@ _TIMER_CONTROL_PATTERNS: tuple[tuple[CuratedProtocolAction, re.Pattern[str]], ..
     (CuratedProtocolAction.TIMER_RESTART, re.compile(
         rf"^{_TIMER_WORD}\s*(?:처음부터(?:\s*다시)?|리셋|초기화|다시\s*처음부터|restart|reset){_TIMER_ENDINGS}$", re.I)),
 )
+
+
+#: Lane SAFE2 (2026-10-31): the timer word heard one letter off -- "다이머",
+#: "타이모", as the live rows and the error axis wrote it. Read as the timer
+#: word, so "다이머 일시정지" is the timer's pause and never the run's; and
+#: being one letter off, the command is asked about once before it acts.
+_TIMER_WORD_NEAR = "타이머"
+_TIMER_WORD_EXACT = frozenset({"타이머", "타임", "timer"})
+
+
+def _timer_word_normalized(key: str) -> tuple[str, bool]:
+    """The key with a word one letter (jamo) off "타이머" written as "타이머", and whether one was."""
+
+    changed = False
+    tokens: list[str] = []
+    for token in key.split():
+        match = re.match(r"^([가-힣]+)", token)
+        word = match.group(1) if match else ""
+        if (
+            len(word) >= 3 and word not in _TIMER_WORD_EXACT
+            and _edit_distance(_jamo(word), _jamo(_TIMER_WORD_NEAR)) == 1
+        ):
+            tokens.append(_TIMER_WORD_NEAR + token[len(word):])
+            changed = True
+        else:
+            tokens.append(token)
+    return " ".join(tokens), changed
 
 
 def _front_timer_intent(key: str, language: str) -> CuratedControlIntent | None:
@@ -4214,8 +4243,10 @@ def _front_control_intent(transcript: str, language: str) -> CuratedControlInten
     key = _utterance_key(transcript)
     if not key or _asked(transcript):
         return None
+    key, near_timer = _timer_word_normalized(key)
     if (timer := _front_timer_intent(key, language)) is not None:
-        return timer
+        # Lane SAFE2: a timer word one letter off is asked about once.
+        return replace(timer, confidence_source="near_timer_word") if near_timer else timer
     if _FRONT_PAUSE_COMMAND.fullmatch(key):
         return CuratedControlIntent(
             intent_kind="pause_workflow", action=CuratedProtocolAction.PAUSE,
@@ -6218,6 +6249,13 @@ def _asserted_spill_clause(transcript: str) -> bool:
     return False
 
 
+def _asserted_problem_clause(transcript: str) -> bool:
+    """A problem reported as having happened before a question ("침전이 생겼는데 어떡해?"; lane SAFE2)."""
+
+    reading = problem_reading(transcript)
+    return reading is not None and reading.kind == "statement_question"
+
+
 def _spill_reading(key: str, transcript: str) -> str | None:
     """"reported" or "not_reported" as above; None leaves the words as they were."""
 
@@ -6250,7 +6288,7 @@ _SUPPOSED_REPLY_ASKED = re.compile(r"물어|묻는|묻고|질문|궁금|생기�
 #: The intents the problem reader makes (front rule "problem_help").
 _PROBLEM_HELP_KINDS = frozenset({
     "grounded_problem_question", "problem_question", "problem_report",
-    "problem_not_yet", "vague_check", SUPPOSED_OR_HAPPENED,
+    "problem_report_question", "problem_not_yet", "vague_check", SUPPOSED_OR_HAPPENED,
 })
 #: What the rules made of a move said with a claim before lane SAY (decision
 #: 6): the claim answered alone, or nothing; the move was dropped.
@@ -6502,6 +6540,12 @@ _ANOMALY_NON_ASSERTION = re.compile(
     r"(?:무슨\s*의미|왜\s*생|어떻게\s*해야|어떻게\s*해|면\s*(?:어떻게|무슨)|"
     r"아닌|아니야|않았|라고\s*(?:말|하면)|what\s+(?:does|if)|why\s+does|"
     r"if\s+the|not\s+(?:remain|changed)|say\s+that)"
+)
+#: Lane SAFE2: the denials and quotations of the above, without its question
+#: words -- a problem said as having happened and then asked about keeps
+#: its question, but "아닌", "않았" and "라고 말하면" still mean nothing happened.
+_ANOMALY_NON_ASSERTION_PAST = re.compile(
+    r"(?:아닌|아니야|않았|라고\s*(?:말|하면)|not\s+(?:remain|changed)|say\s+that)"
 )
 
 
@@ -8639,8 +8683,25 @@ def classify_curated_control_intent(
         )
     spill = _spill_reading(key, transcript)
     problem = problem_reading(transcript) if spill != "reported" else None
+    if (
+        problem is not None and problem.kind == "statement_question"
+        and read_problem_statements and not _ANOMALY_NON_ASSERTION_PAST.search(key)
+    ):
+        # Lane SAFE2, item 3: a problem said as having happened, then asked
+        # about ("침전이 생겼는데 이러면 어떡해?", "거품이 났어 어떻게 해?") is
+        # recorded as the statement alone is, and the same reply carries the
+        # grounded answer (the server appends it, kind "grounded_question").
+        return CuratedControlIntent(
+            intent_kind="problem_report_question",
+            action=CuratedProtocolAction.REPORT_ANOMALY,
+            question_kind="anomaly",
+            language=language,
+            reported_anomaly=True,
+            anomaly_category=PROBLEM_CATEGORY,
+            normalized_transcript=key,
+        )
     if problem is not None and (
-        problem.kind == "question" or is_question_or_speculation(transcript)
+        problem.kind in {"question", "statement_question"} or is_question_or_speculation(transcript)
     ):
         # Lane HELP, decision 1: a problem asked about ("왜 아직 파래?",
         # "침전이 생겼는데 어떡해") is helped and not recorded, as the anomaly
@@ -19822,7 +19883,10 @@ class CuratedProtocolSession:
                 # An indirect question in "왜 하는지 알려주고 ... 넘어가"
                 # does not erase the explicitly requested completion gate.
                 and arbitrate_request(transcript).reason_code != "learning_and_next_command"
-                and not _asserted_spill_clause(transcript)):
+                and not _asserted_spill_clause(transcript)
+                # Lane SAFE2: a problem said as having happened, then asked
+                # about, is recorded as the spill before its question is.
+                and not _asserted_problem_clause(transcript)):
             return self._checkpoint()
         return None
 
@@ -22231,9 +22295,13 @@ class CuratedProtocolSession:
                 speech_policy="speak" if spoken else "silent",
             )
 
-        if self.ambient_mode == "noisy" and self._ambient_confirmation_needed(intent):
+        if (
+            self.ambient_mode == "noisy" or intent.confidence_source == "near_timer_word"
+        ) and self._ambient_confirmation_needed(intent):
             # Lane SP1, decision 3: in 시끄러운 곳 mode a command that would
             # change the workflow now is asked about once; nothing moves.
+            # Lane SAFE2: so is a timer command whose timer word was heard
+            # one letter off ("다이머 일시정지"), in every mode.
             return self._ask_ambient_confirmation(
                 intent, transcript=transcript, command_key=command_key, turn_id=turn_id,
                 language=language, configuration_id=configuration_id, generation=generation,
@@ -23300,8 +23368,13 @@ class CuratedProtocolSession:
                 # one, or a problem said with an endpoint, are not.
                 problem_help=(
                     self._problem_help_marker(
-                        intent.supposed_words or transcript, kind="statement", category=category,
-                        safety=intent.spill_reported)
+                        intent.supposed_words or transcript,
+                        # Lane SAFE2, item 3: a problem said and asked about
+                        # gets lane QA1's grounded answer after its read-back.
+                        kind=(
+                            "grounded_question"
+                            if intent.intent_kind == "problem_report_question" else "statement"),
+                        category=category, safety=intent.spill_reported)
                     if intent.intent_kind not in {"enrich_pending_anomaly", "observation_with_anomaly"}
                     else None
                 ),

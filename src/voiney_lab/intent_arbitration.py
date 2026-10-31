@@ -234,12 +234,18 @@ _NOT_A_PROBLEM = (
     r"끝났|끝내|끝나|완료|마쳤|마치|다\s*했|\bdone\b|\bfinish"
     r"|들려|들리|소리|목소리|화면|그림|사진|이미지|영상|글자|타이머|앱|마이크|이어폰|연결"
     r"|(?:으|하)?면\s*안\s*(?:돼|되)|지\s*마|말아|안\s*해도|도\s*(?:돼|되|괜찮)"
-    r"|(?:분|초|시간)\s*(?:이|가)?\s*남|(?:으|하)?면\s*(?:어떡|어떻게|어쩌|뭐|왜)|\bif\b|\bwould\b|\bcould\b"
+    r"|(?:분|초|시간)\s*(?:이|가)?\s*남"
     r"|(?:시간|차례|순서|때|점심|밥)\S*\s*(?:이|가)?\s*(?:아직\s*)?안\s*(?:돼|됐|되|맞)"
     r"|아니야|아니에요|아닌|않았|라고\s*(?:말|하면)"
     # A move or a step command with it ("덜 됐는데 그냥 다음 단계 가자") is
     # the command's: the completion gates rule on it (D7).
     r"|다음\s*(?:단계|으로)|넘어가|건너뛰|가자|진행하자|진행해|\bnext\s+step\b|\bmove\s+on\b|\bskip\b"
+)
+#: A hypothetical ("생기면 어떡해?", "if ..."): no problem at the bench -- unless
+#: something is reported as having happened before it ("침전이 생겼는데
+#: 이러면 어떡해?": the thing happened, then "what now"; lane SAFE2).
+_NOT_A_PROBLEM_HYPOTHETICAL = re.compile(
+    r"(?:으|하)?면\s*(?:어떡|어떻게|어쩌|뭐|왜)|\bif\b|\bwould\b|\bcould\b"
 )
 _PROBLEM_REQUEST_ENDING = r"(?:줘|주세요|줄래|주라|줄\s*수)$"
 
@@ -415,7 +421,10 @@ def _troubled(words: str) -> bool:
 class ProblemReading:
     """A problem said or asked about, and which shape read it."""
 
-    kind: str  # "statement" (said as having happened) | "question" (asked about)
+    #: "statement" (said as having happened) | "question" (asked about) |
+    #: "statement_question" (said as having happened, then asked about --
+    #: lane SAFE2: "침전이 생겼는데 이러면 어떡해?", "거품이 났어 어떻게 해?")
+    kind: str
     shape: str
 
 
@@ -433,6 +442,9 @@ def problem_reading(text: str) -> ProblemReading | None:
         # Lane GEN1: a problem supposed ("여기서 침전이 생기면") has not
         # happened; ``supposed_problem_reading`` reads it.
         return None
+    hypothetical = _NOT_A_PROBLEM_HYPOTHETICAL.search(normalized)
+    if hypothetical is not None and not _HAPPENED.search(normalized[:hypothetical.start()]):
+        return None
     asked = _matches(normalized, (_PROBLEM_QUESTION,))
     shape = next((name for name, pattern in _PROBLEM_SHAPES if _matches(normalized, (pattern,))), None)
     if shape is None and asked and _matches(normalized, (_PROBLEM_GENERIC_QUESTION,)):
@@ -441,6 +453,16 @@ def problem_reading(text: str) -> ProblemReading | None:
         return None
     if not asked and re.search(_PROBLEM_REQUEST_ENDING, normalized):
         return None
+    if asked:
+        # Lane SAFE2: the thing reported as having happened before the
+        # question ("생겼는데 어떡해", "났어 어떻게 해") is an anomaly to record;
+        # "왜 아직 파래?" and "왜 안 되지?" report nothing past and stay questions.
+        cue = re.search(_PROBLEM_QUESTION, normalized, re.IGNORECASE)
+        before = normalized[:cue.start()] if cue is not None else ""
+        if shape != "generic" and _HAPPENED.search(before) and any(
+            _matches(before, (pattern,)) for name, pattern in _PROBLEM_SHAPES if name == shape
+        ):
+            return ProblemReading("statement_question", shape)
     return ProblemReading("question" if asked else "statement", shape)
 
 

@@ -241,6 +241,47 @@ SUPPOSED_QUESTIONS: dict[str, dict[str, tuple[str, ...]]] = {
 }
 
 
+#: Lane SAFE2 (2026-10-31): a problem said as having happened and then asked
+#: about, in each field's bench words -- a past predicate before the question.
+#: Development wording is what the rules are tuned on; the holdout is scored
+#: only. Nothing names one document.
+HAPPENED_QUESTIONS: dict[str, dict[str, tuple[str, ...]]] = {
+    'biology': {
+        'development': ('배지 색이 노랗게 변했는데 어떡해?', '웰에 거품이 생겼어 어떻게 해?', '세포가 다 떨어져 나갔는데 이러면 어떡하지?'),
+        'holdout': ('젤이 녹았는데 어떻게 하지?', '기포가 생겼어 어떡해?', '밴드가 번졌는데 어떡해?'),
+    },
+    'chemistry': {
+        'development': ('침전이 생겼는데 이러면 어떡해?', '용액이 탁해졌어 어떻게 해?', '용액 색이 갈색으로 변했는데 어떡하지?'),
+        'holdout': ('결정이 생겼는데 어떻게 하지?', '용액이 굳었는데 어떡해?', '덩어리가 생겼어 어떡하지?'),
+    },
+    'materials': {
+        'development': ('막이 뿌옇게 됐는데 어떡해?', '표면에 균열이 생겼어 어떻게 해?', '얼룩이 생겼는데 이러면 어떡하지?'),
+        'holdout': ('막이 갈색으로 변했는데 어떻게 하지?', '기판에 이물질이 들어갔어 어떡해?', '덩어리가 생겼는데 어떡해?'),
+    },
+    'soil': {
+        'development': ('상층액이 탁해졌는데 어떡해?', '거품이 생겼어 어떻게 해?', '덩어리가 생겼는데 이러면 어떡하지?'),
+        'holdout': ('시료가 굳었는데 어떡하지?', '침전이 생겼어 어떻게 해?', '용액에 이물질이 들어갔는데 어떻게 하지?'),
+    },
+}
+
+
+def generate_happened_cases(protocol: Protocol, split: str) -> tuple[Case, ...]:
+    """The field's problems said as having happened and asked about, at the second step (lane SAFE2).
+
+    The anomaly is recorded (as "침전이 생겼어" is) and the same reply carries
+    the grounded answer; a step, a completion or a timer that changes is the
+    error, and so is an event left unrecorded or an answer not grounded.
+    """
+
+    texts = HAPPENED_QUESTIONS.get(protocol.field, HAPPENED_QUESTIONS['chemistry'])[split]
+    index = min(1, len(protocol.fixture.steps) - 1)
+    return tuple(
+        Case(f'{protocol.code}.happened_{split}.{n}', 'happened_question', text, index,
+             'active', ('report_anomaly',), (), ('anomaly', 'confirmation', 'record', 'revision'))
+        for n, text in enumerate(texts)
+    )
+
+
 def development_fixture_protocol() -> Protocol:
     """The in-gel development fixture as one more SIM protocol (lane GEN1).
 

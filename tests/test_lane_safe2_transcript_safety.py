@@ -52,6 +52,8 @@ def heard(protocol, text: str, *, setup: str = "active", index: int = 1) -> dict
 class LiveRowOneTests(unittest.TestCase):
     """'타이머 재개' heard with its first word garbled, the step timer paused."""
 
+    #: Two letters off the timer word (as the live row's error count has it),
+    #: and one letter off ("다이머": read as the timer word, asked about once).
     GARBLED = ("다이모 재개", "타이밍 재개", "다이머 재개")
 
     def test_a_garbled_resume_on_an_unpaused_run_changes_nothing_but_asks_about_the_paused_timer(self) -> None:
@@ -66,7 +68,25 @@ class LiveRowOneTests(unittest.TestCase):
                     self.assertEqual(result["step_after"], result["step_before"])
                     self.assertEqual(result["action"], "clarify_completion", result["action"])
                     self.assertIn("타이머를 다시 시작할까요", result["spoken"])
-                    self.assertIn("일시정지 상태가 아니에요", result["spoken"])
+                    if text != "다이머 재개":
+                        self.assertIn("일시정지 상태가 아니에요", result["spoken"])
+
+    def test_a_timer_command_with_its_timer_word_one_letter_off_asks_once_and_never_pauses_the_run(self) -> None:
+        for protocol in PROTOCOLS:
+            index = timed_index(protocol)
+            if index is None:
+                continue
+            for text in ("다이머 일시정지", "다이머 잠깐 멈춰", "타이모 취소"):
+                with self.subTest(protocol=protocol.code, field=FIELD_OF[protocol.code], text=text):
+                    result = heard(protocol, text, setup="timer_running", index=index)
+                    self.assertEqual(result["changed_fields"], ["confirmation"], result)
+                    self.assertEqual(result["action"], "clarify_completion", result)
+                    self.assertIn("타이머를", result["spoken"])
+            for text in ("타이머 잠깐 멈", "타이머 잠깐 멈줘"):
+                with self.subTest(protocol=protocol.code, field=FIELD_OF[protocol.code], text=text):
+                    result = heard(protocol, text, setup="timer_running", index=index)
+                    self.assertEqual(result["action"], "timer_pause", result)
+                    self.assertEqual(set(result["changed_fields"]) - {"timer"}, set(), result)
 
     def test_a_resume_word_on_an_unpaused_run_with_no_timer_changes_nothing(self) -> None:
         for protocol in PROTOCOLS[:4]:
@@ -99,6 +119,21 @@ class ResumeQuestionTests(TimerTurns, unittest.TestCase):
                 self.assertTrue(plan.state_changed)
                 self.assertEqual(self.timer()["state"], "running")
                 self.assertEqual(self.timer()["remaining_seconds"], seconds - 120)
+
+    def test_yes_to_the_near_miss_timer_word_pauses_the_timer_only(self) -> None:
+        for field, fixture, index, seconds in FIELDS:
+            with self.subTest(field=field):
+                session = self.start(fixture, index)
+                self.clock.now = T0 + 30
+                plan = self.say("다이머 일시정지")
+                self.assertIs(plan.action, CuratedProtocolAction.CLARIFY_COMPLETION, plan.speech_text)
+                self.assertEqual(self.timer()["state"], "running")
+                self.assertEqual(session.workflow_status, "active")
+                plan = self.say("네")
+                self.assertIs(plan.action, CuratedProtocolAction.TIMER_PAUSE, plan.speech_text)
+                self.assertEqual(self.timer()["state"], "paused")
+                self.assertEqual(self.timer()["remaining_seconds"], seconds - 30)
+                self.assertEqual(session.workflow_status, "active")
 
     def test_no_leaves_the_timer_paused(self) -> None:
         field, fixture, index, seconds = FIELDS[1]

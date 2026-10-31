@@ -108,7 +108,7 @@ class ProblemReaderTests(unittest.TestCase):
 
     def test_problems_asked_about(self) -> None:
         for said in (
-            "왜 안 되지?", "왜 안 되지", "젤이 왜 아직 파래?", "침전이 생겼는데 어떡해",
+            "왜 안 되지?", "왜 안 되지", "젤이 왜 아직 파래?",
             "색이 안 빠지는데 어떻게 해야 돼?", "뭐가 문제야", "why is it not working",
             "what went wrong",
         ):
@@ -116,6 +116,15 @@ class ProblemReaderTests(unittest.TestCase):
                 reading = problem_reading(said)
                 self.assertIsNotNone(reading)
                 self.assertEqual(reading.kind, "question")
+
+    def test_problems_said_as_having_happened_then_asked_about(self) -> None:
+        # Lane SAFE2 (2026-10-31): the thing happened, then "what now" -- recorded
+        # as the statement is, and answered. It used to be a question alone.
+        for said in ("침전이 생겼는데 어떡해", "거품이 났어 어떻게 해?", "침전이 생겼는데 이러면 어떡해?"):
+            with self.subTest(said=said):
+                reading = problem_reading(said)
+                self.assertIsNotNone(reading)
+                self.assertEqual(reading.kind, "statement_question")
 
     def test_words_that_are_no_problem(self) -> None:
         for said in (
@@ -153,8 +162,23 @@ class StateMachineTests(unittest.TestCase):
         self.assertEqual(plan.problem_help["step_label"], "2")
         self.assertEqual(session._checkpoint()[:4], before[:4])
 
+    def test_a_problem_said_then_asked_is_recorded_and_marked_for_the_grounded_answer(self) -> None:
+        # Lane SAFE2 (2026-10-31): "침전이 생겼는데 어떡해" was helped only; now the
+        # event is recorded as "침전이 생겼어" is, and the server appends lane
+        # QA1's grounded answer (marker kind "grounded_question").
+        session = session_at("2", self.fixture)
+        before = session._checkpoint()
+        plan = _route(session, "침전이 생겼는데 어떡해")
+        self.assertEqual(session.last_front_rule, "problem_help")
+        self.assertIs(plan.action, CuratedProtocolAction.REPORT_ANOMALY)
+        self.assertTrue(plan.reported_anomaly)
+        self.assertEqual(plan.intent_kind, "problem_report_question")
+        self.assertFalse(plan.state_changed)
+        self.assertEqual(plan.problem_help["kind"], "grounded_question")
+        self.assertEqual(session._checkpoint()[:4], before[:4])
+
     def test_a_problem_asked_records_nothing_and_changes_no_checkpoint(self) -> None:
-        for said in ("왜 안 되지?", "침전이 생겼는데 어떡해", "젤이 왜 아직 파래?"):
+        for said in ("왜 안 되지?", "젤이 왜 아직 파래?"):
             with self.subTest(said=said):
                 session = session_at("3", self.fixture)
                 before = session._checkpoint()
