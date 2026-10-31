@@ -130,6 +130,18 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
                   'units_total':sum(bool(u) for n,u in ref),
                   'pairs_right':sum((Counter(ref) & Counter(hyp)).values()), 'pairs_total':len(ref),
                   'terms_right':stt.terms_right,'terms_total':stt.terms_total}
+    # STT1: the same rates on the corrected words, so one live run gives the
+    # term accuracy before and after the correction stage with no extra call.
+    corrected_summary=None
+    if stt_attempted:
+        corrected=Score()
+        corrected_text=result.get('corrected_transcript')
+        corrected.add('', case.text, None if failed else (corrected_text if isinstance(corrected_text,str) else result['transcript']), list(case.terms))
+        corrected_summary=corrected.summary()
+        hyp_corrected=number_units(corrected_text if isinstance(corrected_text,str) else result['transcript'])
+        counts.update({'corrected_word_errors':corrected.word_errors,'corrected_char_errors':corrected.char_errors,
+                       'corrected_terms_right':corrected.terms_right,
+                       'corrected_pairs_right':sum((Counter(ref) & Counter(hyp_corrected)).values())})
     stt_summary=stt.summary() if stt_attempted else None
     if stt_summary is not None and counts is not None:
         stt_summary['number_units']=counts['pairs_total']
@@ -147,7 +159,8 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
         'stt_failures':result.get('stt_failures',[]),
         'cut_off': result.get('cut_off',False), 'incomplete': not result['terminal'], 'endpoints': result.get('endpoint_count', 0),
         'timings_ms': result['timings_ms'], 'stt_calls':result.get('stt_calls',0), 'stt_responses':result.get('stt_responses',0),
-        'stt': stt_summary, 'stt_counts': counts,
+        'stt': stt_summary, 'stt_counts': counts, 'stt_corrected': corrected_summary,
+        'correction_codes': sorted(str(code) for code in result.get('correction_codes', ())),
     }
     grounding = result.get('grounding')
     if isinstance(grounding, dict):
@@ -185,7 +198,13 @@ def aggregate(rows: list[dict]) -> dict:
         stt = {'cases': measured, 'wer':rate('word_errors','reference_words'),
                'cer':rate('char_errors','reference_chars'), 'number_accuracy':rate('numbers_right','numbers_total'),
                'unit_accuracy':rate('units_right','units_total'), 'number_unit_accuracy':rate('pairs_right','pairs_total'),
-               'term_accuracy':rate('terms_right','terms_total'), 'counts':dict(counts)} if measured else None
+               'term_accuracy':rate('terms_right','terms_total'),
+               # STT1: the same words after the correction stage.
+               'corrected_wer':rate('corrected_word_errors','reference_words'),
+               'corrected_cer':rate('corrected_char_errors','reference_chars'),
+               'corrected_term_accuracy':rate('corrected_terms_right','terms_total'),
+               'corrected_number_unit_accuracy':rate('corrected_pairs_right','pairs_total'),
+               'counts':dict(counts)} if measured else None
         routed = [r['router'] for r in group if isinstance(r.get('router'), dict)]
         router = None
         if routed:
@@ -250,13 +269,16 @@ def aggregate(rows: list[dict]) -> dict:
             'invented_values':sum(r.get('invented_values',False) for r in group),
             'generated_safety':sum(r.get('generated_safety',False) for r in group),
             'non_korean': sum(r['korean'] is False for r in group),
+            # STT1: how many turns the correction stage changed, by code.
+            'corrections': dict(Counter(code for r in group for code in r.get('correction_codes', ()))),
+            'corrected_turns': sum(1 for r in group if r.get('correction_codes')),
             'drops': dict(Counter(d for r in group for d in r['drops'])),
             'stt_failures':stt_failures,
             'latency_ms': {k:percentiles(v) for k,v in timings.items()},
             'router': router,
         }
     tables = {}
-    for dimension in ('protocol', 'field', 'family', 'protocol_family', 'noise', 'snr', 'effective_snr_db', 'distance_cm', 'denoise', 'voice', 'speed'):
+    for dimension in ('protocol', 'field', 'family', 'protocol_family', 'noise', 'snr', 'effective_snr_db', 'distance_cm', 'denoise', 'voice', 'speed', 'correction', 'condition', 'microphone'):
         groups = defaultdict(list)
         for row in rows:
             key = f'{row.get("protocol")}/{row.get("family")}' if dimension == 'protocol_family' else str(row.get(dimension, 'not_measured'))

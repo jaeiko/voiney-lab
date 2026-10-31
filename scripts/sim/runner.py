@@ -107,7 +107,8 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                    transcriber: Callable[..., Any] | None = None, synthesizer: Callable[..., bytes] | None = None,
                    router_settings: Any = None, offline: bool = True, classifier: Callable | None = None, stt_provider: str = 'google_cloud', role_client: Callable | None = None,
                    oracle_environment: bool = False,
-                   transient_noise_gate: bool = False) -> dict:
+                   transient_noise_gate: bool = False,
+                   transcript_correction: bool = True) -> dict:
     """Only provider boundaries are replaced; emergency/front rules/gates are production code."""
     from voiney_lab.curated_protocol import CuratedProtocolSession
     from voiney_lab.vad import EndpointDetector, VadConfig
@@ -195,6 +196,12 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             finally:
                 provider_ms['tts'] += (time.perf_counter()-start)*1000
 
+        if not transcript_correction:
+            # STT1 'off' treatment: the recognizer's words reach understanding as they are.
+            from voiney_lab.transcript_correction import TranscriptCorrection
+            stack.enter_context(patch.object(
+                server, '_correct_transcript_for_session',
+                side_effect=lambda _session, text: TranscriptCorrection(spoken=text, text=text)))
         stack.enter_context(patch.object(server, 'transcribe', side_effect=stt))
         stack.enter_context(patch.object(server, 'synthesize', side_effect=tts))
         # Provider text is never printed or persisted, including exception tracebacks.
@@ -273,6 +280,11 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                 invalid_state.append('pause_state')
         events = capture.events
         done = next((e for e in reversed(events) if e['type'] == 'turn.done'), {})
+        # STT1: what the correction stage made of the recognizer's words
+        # (content-free codes; the text leaves only through score_case's rates).
+        interpretations = [e for e in events if e['type'] == 'turn.interpretation']
+        corrected = ' '.join(str(e.get('corrected_transcript') or e.get('raw_transcript') or '') for e in interpretations)
+        correction_codes = sorted({str(code) for e in interpretations for code in (e.get('correction_codes') or ())})
         decision = next((e for e in reversed(events) if e['type'] == 'turn.route_decision'), {})
         reply = next((e for e in reversed(events) if e['type'] == 'reply.delta'), {})
         router_stopped = next((e for e in reversed(events) if e['type'] == 'router.stopped'), {})
@@ -336,6 +348,8 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             'router': router_measurement,
             'step_before': before['step'][0], 'step_after': after['step'][0],
             'transcript': ' '.join(hypotheses), 'spoken': ' '.join(capture.spoken),
+            'corrected_transcript': corrected if interpretations else ' '.join(hypotheses),
+            'correction_codes': correction_codes,
             'drop_reasons': sorted(set(drops)), 'stt_failures':stt_failures,
             'stt_calls': stt_calls, 'stt_responses':len(hypotheses),
             'terminal': bool(done or drops), 'endpoint_count': len(committed),

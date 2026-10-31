@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voiney Lab 읽기 녹음</title>
+<style>
+  :root { --ink:#1b1f23; --muted:#5f6b7a; --line:#d9dee5; --accent:#0b5fff; --warn:#b4540a; --ok:#1d7a3a; --bg:#fff; }
+  @media (prefers-color-scheme: dark) { :root { --ink:#e8ecf1; --muted:#9aa6b4; --line:#3a4350; --accent:#6ea0ff; --warn:#f0a35c; --ok:#5fc47f; --bg:#14181d; } }
+  body { margin:0; padding:16px; font-family:Pretendard, "Noto Sans KR", system-ui, sans-serif; color:var(--ink); background:var(--bg); line-height:1.5; }
+  main { max-width:720px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 8px; }
+  p { margin:4px 0; }
+  .muted { color:var(--muted); font-size:14px; }
+  fieldset { border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:12px 0; }
+  legend { font-size:13px; color:var(--muted); padding:0 4px; }
+  label { display:inline-block; margin:4px 12px 4px 0; }
+  select, input[type=text] { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
+  .sentence { font-size:28px; font-weight:700; min-height:3em; padding:16px; border:2px solid var(--line); border-radius:12px; margin:12px 0; word-break:keep-all; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:8px 0; }
+  button { font:inherit; font-weight:600; padding:12px 18px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink); cursor:pointer; min-width:120px; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  .status { min-height:1.5em; }
+  .warn { color:var(--warn); }
+  .ok { color:var(--ok); }
+  .level { height:8px; background:var(--line); border-radius:4px; overflow:hidden; }
+  .level > div { height:100%; width:0; background:var(--accent); transition:width .1s linear; }
+  table { border-collapse:collapse; width:100%; font-size:13px; margin-top:12px; }
+  td, th { border-bottom:1px solid var(--line); padding:4px 6px; text-align:left; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voiney Lab 읽기 녹음 (STT1)</h1>
+  <p class="muted">문장을 하나씩 보여 줍니다. 평소 실험할 때 말하듯 읽고 <b>멈춤</b>을 누르세요. 이 페이지는 아무것도 밖으로 보내지 않습니다. 녹음은 이 창에만 있다가 <b>내려받기</b>로 WAV 묶음(zip)이 됩니다.</p>
+
+  <fieldset>
+    <legend>조건 (파일 이름에 들어갑니다)</legend>
+    <label>환경
+      <select id="condition">
+        <option value="quiet">조용함</option>
+        <option value="typing_after">말 뒤 타이핑</option>
+        <option value="fan">팬 소음</option>
+      </select>
+    </label>
+    <label>마이크
+      <select id="microphone">
+        <option value="device">기기 마이크</option>
+        <option value="lavalier">핀·목걸이형 마이크</option>
+      </select>
+    </label>
+    <label>읽는 사람 표시
+      <input id="speaker" type="text" maxlength="12" placeholder="예: s1" value="s1" pattern="[A-Za-z0-9_-]{1,12}">
+    </label>
+    <label>입력 장치
+      <select id="device"><option value="">기본</option></select>
+    </label>
+  </fieldset>
+
+  <p class="muted" id="progress">문장 1 / 60</p>
+  <div class="sentence" id="sentence">…</div>
+  <p class="muted" id="meta"></p>
+  <div class="level"><div id="level"></div></div>
+
+  <div class="row">
+    <button id="record" class="primary">녹음</button>
+    <button id="stop" disabled>멈춤</button>
+    <button id="redo" disabled>다시 녹음</button>
+    <button id="prev">이전</button>
+    <button id="next">다음</button>
+  </div>
+  <p class="status" id="status"></p>
+
+  <div class="row">
+    <button id="download" disabled>내려받기 (zip)</button>
+    <span class="muted" id="count">녹음 0 / 60</span>
+  </div>
+
+  <table id="list"><thead><tr><th>#</th><th>문장</th><th>길이</th></tr></thead><tbody></tbody></table>
+</main>
+
+<script src="sentences.js"></script>
+<script>
+(function () {
+  "use strict";
+  const KIT = window.STT1_RECORD_KIT;
+  const SENTENCES = KIT.sentences;
+  const TARGET_RATE = 16000;
+  const MAX_SECONDS = 20;
+  const $ = (id) => document.getElementById(id);
+  const state = { index: 0, takes: new Map(), stream: null, context: null, source: null, node: null, chunks: [], sampleRate: 48000, recording: false, started: 0 };
+
+  function sentence() { return SENTENCES[state.index]; }
+  function setStatus(text, cls) { const el = $("status"); el.textContent = text; el.className = "status" + (cls ? " " + cls : ""); }
+  function render() {
+    const s = sentence();
+    $("progress").textContent = "문장 " + (state.index + 1) + " / " + SENTENCES.length;
+    $("sentence").textContent = s.text;
+    $("meta").textContent = s.field + " · " + s.kind + " · " + s.length + (state.takes.has(s.id) ? " · 녹음됨 (" + (state.takes.get(s.id).durationMs / 1000).toFixed(1) + "초)" : "");
+    $("redo").disabled = !state.takes.has(s.id);
+    $("count").textContent = "녹음 " + state.takes.size + " / " + SENTENCES.length;
+    $("download").disabled = state.takes.size === 0;
+    const body = $("list").querySelector("tbody");
+    body.textContent = "";
+    SENTENCES.forEach((row, i) => {
+      const tr = document.createElement("tr");
+      const mark = state.takes.has(row.id) ? "✓ " : "";
+      [String(row.number), mark + row.text, state.takes.has(row.id) ? (state.takes.get(row.id).durationMs / 1000).toFixed(1) + "초" : ""].forEach((v) => { const td = document.createElement("td"); td.textContent = v; tr.appendChild(td); });
+      if (i === state.index) tr.style.fontWeight = "700";
+      tr.addEventListener("click", () => { if (!state.recording) { state.index = i; render(); } });
+      body.appendChild(tr);
+    });
+  }
+
+  async function listDevices() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const select = $("device");
+    const chosen = select.value;
+    select.textContent = "";
+    const base = document.createElement("option"); base.value = ""; base.textContent = "기본"; select.appendChild(base);
+    devices.filter((d) => d.kind === "audioinput").forEach((d, i) => {
+      const option = document.createElement("option");
+      option.value = d.deviceId; option.textContent = d.label || ("마이크 " + (i + 1));
+      select.appendChild(option);
+    });
+    select.value = chosen;
+  }
+
+  async function openStream() {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+      throw new Error("이 주소에서는 마이크를 쓸 수 없어요. 파일을 직접 열거나 localhost 로 여세요.");
+    }
+    // The product asks the browser for the same processing (voice-core.js).
+    const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
+    const device = $("device").value;
+    if (device) audio.deviceId = { exact: device };
+    const stream = await navigator.mediaDevices.getUserMedia({ audio });
+    await listDevices();
+    return stream;
+  }
+
+  async function startRecording() {
+    if (state.recording) return;
+    try {
+      state.stream = await openStream();
+    } catch (error) {
+      setStatus(String(error && error.message || error), "warn");
+      return;
+    }
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    state.context = new AudioContextClass();
+    state.sampleRate = state.context.sampleRate;
+    state.source = state.context.createMediaStreamSource(state.stream);
+    state.node = state.context.createScriptProcessor(4096, 1, 1);
+    state.chunks = [];
+    state.node.onaudioprocess = (event) => {
+      if (!state.recording) return;
+      const input = event.inputBuffer.getChannelData(0);
+      state.chunks.push(new Float32Array(input));
+      let peak = 0;
+      for (let i = 0; i < input.length; i += 1) { const v = Math.abs(input[i]); if (v > peak) peak = v; }
+      $("level").style.width = Math.min(100, Math.round(peak * 140)) + "%";
+      if ((performance.now() - state.started) / 1000 > MAX_SECONDS) stopRecording();
+    };
+    state.source.connect(state.node);
+    state.node.connect(state.context.destination);
+    state.recording = true;
+    state.started = performance.now();
+    $("record").disabled = true; $("stop").disabled = false; $("next").disabled = true; $("prev").disabled = true;
+    setStatus("녹음 중… 읽고 나서 멈춤을 누르세요.", "");
+  }
+
+  function stopRecording() {
+    if (!state.recording) return;
+    state.recording = false;
+    try { state.node.disconnect(); state.source.disconnect(); } catch (_) { /* already closed */ }
+    state.stream.getTracks().forEach((track) => track.stop());
+    const context = state.context;
+    const total = state.chunks.reduce((n, c) => n + c.length, 0);
+    const joined = new Float32Array(total);
+    let offset = 0;
+    state.chunks.forEach((c) => { joined.set(c, offset); offset += c.length; });
+    const pcm = resample(joined, state.sampleRate, TARGET_RATE);
+    const wav = encodeWav(pcm, TARGET_RATE);
+    const s = sentence();
+    state.takes.set(s.id, { wav, durationMs: Math.round(pcm.length / TARGET_RATE * 1000), condition: $("condition").value, microphone: $("microphone").value, speaker: speakerId(), recordedAt: new Date().toISOString() });
+    context.close().catch(() => {});
+    $("level").style.width = "0";
+    $("record").disabled = false; $("stop").disabled = true; $("next").disabled = false; $("prev").disabled = false;
+    setStatus("저장했어요 (" + (pcm.length / TARGET_RATE).toFixed(1) + "초). 다음 문장으로 가세요.", "ok");
+    render();
+  }
+
+  function speakerId() {
+    const raw = $("speaker").value.trim();
+    return /^[A-Za-z0-9_-]{1,12}$/.test(raw) ? raw : "s1";
+  }
+
+  function resample(samples, fromRate, toRate) {
+    if (fromRate === toRate) return samples;
+    const ratio = fromRate / toRate;
+    const length = Math.floor(samples.length / ratio);
+    const out = new Float32Array(length);
+    for (let i = 0; i < length; i += 1) {
+      const position = i * ratio;
+      const left = Math.floor(position);
+      const right = Math.min(left + 1, samples.length - 1);
+      const t = position - left;
+      out[i] = samples[left] * (1 - t) + samples[right] * t;
+    }
+    return out;
+  }
+
+  function encodeWav(samples, rate) {
+    const bytes = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(bytes);
+    const write = (o, s) => { for (let i = 0; i < s.length; i += 1) view.setUint8(o + i, s.charCodeAt(i)); };
+    write(0, "RIFF"); view.setUint32(4, 36 + samples.length * 2, true); write(8, "WAVE");
+    write(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    write(36, "data"); view.setUint32(40, samples.length * 2, true);
+    let offset = 44;
+    for (let i = 0; i < samples.length; i += 1, offset += 2) {
+      const v = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    }
+    return new Uint8Array(bytes);
+  }
+
+  // A stored (uncompressed) zip: local headers, central directory, end record.
+  const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n += 1) { let c = n; for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  function crc32(data) { let c = 0xffffffff; for (let i = 0; i < data.length; i += 1) c = CRC_TABLE[(c ^ data[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+  function zip(entries) {
+    const encoder = new TextEncoder();
+    const parts = []; const central = []; let offset = 0;
+    entries.forEach(({ name, data }) => {
+      const nameBytes = encoder.encode(name);
+      const crc = crc32(data);
+      const header = new DataView(new ArrayBuffer(30));
+      header.setUint32(0, 0x04034b50, true); header.setUint16(4, 20, true); header.setUint16(6, 0x0800, true); header.setUint16(8, 0, true);
+      header.setUint16(10, 0, true); header.setUint16(12, 0x21, true); header.setUint32(14, crc, true); header.setUint32(18, data.length, true); header.setUint32(22, data.length, true);
+      header.setUint16(26, nameBytes.length, true); header.setUint16(28, 0, true);
+      parts.push(new Uint8Array(header.buffer), nameBytes, data);
+      const entry = new DataView(new ArrayBuffer(46));
+      entry.setUint32(0, 0x02014b50, true); entry.setUint16(4, 20, true); entry.setUint16(6, 20, true); entry.setUint16(8, 0x0800, true); entry.setUint16(10, 0, true);
+      entry.setUint16(12, 0, true); entry.setUint16(14, 0x21, true); entry.setUint32(16, crc, true); entry.setUint32(20, data.length, true); entry.setUint32(24, data.length, true);
+      entry.setUint16(28, nameBytes.length, true); entry.setUint16(30, 0, true); entry.setUint16(32, 0, true); entry.setUint16(34, 0, true); entry.setUint16(36, 0, true);
+      entry.setUint32(38, 0, true); entry.setUint32(42, offset, true);
+      central.push(new Uint8Array(entry.buffer), nameBytes);
+      offset += 30 + nameBytes.length + data.length;
+    });
+    const centralSize = central.reduce((n, p) => n + p.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, entries.length, true); end.setUint16(10, entries.length, true);
+    end.setUint32(12, centralSize, true); end.setUint32(16, offset, true); end.setUint16(20, 0, true);
+    return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: "application/zip" });
+  }
+
+  function download() {
+    const encoder = new TextEncoder();
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const items = []; const entries = [];
+    state.takes.forEach((take, id) => {
+      const file = "wav/" + id + "__" + take.condition + "__" + take.microphone + "__" + take.speaker + ".wav";
+      const row = SENTENCES.find((s) => s.id === id);
+      items.push({ id, file, text: row.text, protocol: row.protocol, field: row.field, family: row.family, condition: take.condition, microphone: take.microphone, speaker: take.speaker, duration_ms: take.durationMs, sample_rate: TARGET_RATE, recorded_at: take.recordedAt });
+      entries.push({ name: file, data: take.wav });
+    });
+    const manifest = { schema: 1, kit: KIT.kit, created_at: new Date().toISOString(), browser_audio_constraints: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, items };
+    entries.unshift({ name: "manifest.json", data: encoder.encode(JSON.stringify(manifest, null, 1)) });
+    const blob = zip(entries);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "stt1_" + speakerId() + "_" + $("condition").value + "_" + $("microphone").value + "_" + stamp + ".zip";
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+    state.downloaded = true;
+    setStatus("zip 을 내려받았어요. data/runtime/voice-eval/ 아래 폴더에 풀어 두세요.", "ok");
+  }
+
+  $("record").addEventListener("click", startRecording);
+  $("stop").addEventListener("click", stopRecording);
+  $("redo").addEventListener("click", () => { state.takes.delete(sentence().id); render(); startRecording(); });
+  $("next").addEventListener("click", () => { if (state.index < SENTENCES.length - 1) { state.index += 1; render(); } });
+  $("prev").addEventListener("click", () => { if (state.index > 0) { state.index -= 1; render(); } });
+  $("download").addEventListener("click", download);
+  window.addEventListener("beforeunload", (event) => { if (state.takes.size && !state.downloaded) { event.preventDefault(); event.returnValue = ""; } });
+  listDevices().catch(() => {});
+  render();
+})();
+</script>
+</body>
+</html>

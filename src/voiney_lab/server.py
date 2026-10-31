@@ -253,6 +253,9 @@ from voiney_lab.drawn_diagrams import (
     DrawnDiagramSettings,
     draw_step_diagram,
 )
+from voiney_lab.transcript_correction import (
+    TranscriptCorrection,correct_transcript,records_as_heard,
+)
 from voiney_lab.runtime_routing import (
     CuratedRuntimeRoute,
     route_curated_runtime_turn,
@@ -9282,6 +9285,32 @@ def _cascade_stt_keyterms(curated:Any)->tuple[str,...]:
     ))[:STT_KEYTERM_LIMIT]
 
 
+def _correct_transcript_for_session(
+    session:"ListenerSession",transcript:str,
+)->TranscriptCorrection:
+    """Lane STT1: the stage's vocabulary is the active protocol's own, read as
+    the session prepared it; a session without a protocol fixture collapses
+    repeats only. Never raises: a vocabulary that cannot be read hears nothing."""
+
+    curated=session.curated_protocol_session
+    vocabulary=None
+    if curated is not None and isinstance(getattr(curated,"fixture",None),CuratedProtocolFixture):
+        try:
+            if curated.words_are_the_record():
+                # The words are a note's content or a readback's answer:
+                # stored and read back as said (lane SAFE1), never rewritten.
+                return TranscriptCorrection(spoken=transcript,text=transcript)
+            vocabulary=curated._protocol_vocabulary()
+        except Exception:  # noqa: BLE001 - the stage must not break a turn
+            log.warning("stt.correction vocabulary unavailable")
+            vocabulary=None
+    try:
+        return correct_transcript(transcript,vocabulary)
+    except Exception:  # noqa: BLE001 - the stage must not break a turn
+        log.warning("stt.correction failed")
+        return TranscriptCorrection(spoken=transcript,text=transcript)
+
+
 def cascade_transcription_context(
     session:ListenerSession,
     *,
@@ -14172,6 +14201,25 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
     )
     if admission.correction_class is not None:
         transcript = admission.admitted_text
+    # Lane STT1: the one correction stage between the recognizer and
+    # understanding -- a word written twice read once, the active protocol's
+    # own terms heard. ``spoken_transcript`` stays the recognizer's words for
+    # the record, the diagnostics and the ``transcript`` event; the corrected
+    # words are for understanding and the screen's aid only.
+    spoken_transcript=transcript
+    transcript_correction:TranscriptCorrection|None=None
+    if admission.mismatch_status!="unclear" and transcript.strip():
+        transcript_correction=_correct_transcript_for_session(session,transcript)
+        if transcript_correction.changed:
+            transcript=transcript_correction.text
+            log.info(
+                "stt.corrected codes=%s turn_id=%s",
+                ",".join(transcript_correction.codes),turn_id)
+            for code in transcript_correction.codes:
+                _record_workspace_metric(
+                    category="voice",metric_name="transcript_correction",
+                    dimensions={"reason_code":code,"status":"applied"},
+                )
     if admission.mismatch_status=="unclear":
         # Lane HEAR, decision 8: Latin letters for Korean speech -- a turn
         # misheard, not another language: dropped and shown, not asked about.
@@ -14286,7 +14334,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
         return
     # Lane HEAR, decision 3: words were heard; the drops before them no longer count.
     session.note_heard()
-    if not await current_text("transcript",turn_id=turn_id,text=transcript):
+    if not await current_text("transcript",turn_id=turn_id,text=spoken_transcript):
         return
     if session.curated_protocol_session is not None:
         turn_language="ko"
@@ -14452,7 +14500,7 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
                     timings[f"router_{name}"]=value
             else:
                 routed_turn=await rules_route()
-            plan=routed_turn.plan
+            plan=records_as_heard(routed_turn.plan,transcript_correction)
             await current_text(
                 "turn.route_decision",turn_id=turn_id,
                 normalized_text=routed_turn.arbitration.normalized_text,
@@ -14524,10 +14572,18 @@ async def run_turn(websocket:WebSocket,session:ListenerSession,source_pcm:bytes,
             })
             await current_text(
                 "turn.interpretation",turn_id=turn_id,
-                raw_transcript=transcript,
+                raw_transcript=spoken_transcript,
+                corrected_transcript=transcript,
+                correction_codes=list(
+                    transcript_correction.codes if transcript_correction is not None else ()),
                 normalized_transcript=stt_diagnostic_metadata[
                     "normalized_transcript"],
-                transcript_corrections=[list(item) for item in plan.transcript_corrections],
+                transcript_corrections=[
+                    list(item) for item in (
+                        *(transcript_correction.pairs if transcript_correction is not None else ()),
+                        *plan.transcript_corrections,
+                    )
+                ],
                 intent_kind=plan.intent_kind,action=plan.action.value,
                 mutation_authorized=bool(plan.state_changed),
                 coreference_status=plan.coreference_status,

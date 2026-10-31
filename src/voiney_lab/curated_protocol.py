@@ -19810,6 +19810,23 @@ class CuratedProtocolSession:
             return None
         return str(self._notebook_question["kind"])
 
+    def words_are_the_record(self) -> bool:
+        """Whether the next words are themselves a record (lane STT1).
+
+        While a notebook question (purpose, observation, result) or its
+        readback is open, a note's content is awaited, an anomaly or a
+        record fix waits to be confirmed, the words said next are stored
+        and read back as said (lane SAFE1); the transcript correction stage
+        leaves them as the recognizer gave them.
+        """
+
+        return bool(
+            (self._notebook_question is not None and self._notebook_question_valid())
+            or self._pending_note_capture
+            or self._pending_anomaly
+            or self._pending_record_fix
+        )
+
     def open_notebook_question(self, kind: str, *, completed_index: int | None = None) -> str:
         """Open one of the notebook's questions and return its words.
 

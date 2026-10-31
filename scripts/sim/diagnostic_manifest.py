@@ -75,8 +75,18 @@ def development_pairs() -> list[tuple[Protocol, Case]]:
     return list(partition.development) + regressions
 
 
-def select(pairs: list[tuple[Protocol, Case]], *, seed: int = SELECTION_SEED) -> list[str]:
-    """Round-robin over (field, family group, length) cells in a seeded order; one text once."""
+def select(
+    pairs: list[tuple[Protocol, Case]], *, seed: int = SELECTION_SEED,
+    quotas: dict[str, int] | None = None, biology_per_protocol: int = 2,
+) -> list[str]:
+    """Round-robin over (field, family group, length) cells in a seeded order; one text once.
+
+    ``quotas`` is how many cases each field contributes (``FIELD_QUOTAS`` by
+    default; lane STT1's reading list doubles them), ``biology_per_protocol``
+    how many of them one of the seven biology protocols may give.
+    """
+
+    quotas = dict(FIELD_QUOTAS if quotas is None else quotas)
 
     def rank(code: str) -> str:
         return hashlib.sha256(f'{seed}:{code}'.encode()).hexdigest()
@@ -92,7 +102,7 @@ def select(pairs: list[tuple[Protocol, Case]], *, seed: int = SELECTION_SEED) ->
     seen_text: set[str] = set()
     protocol_counts: Counter[str] = Counter()
     lengths = [name for name, _, _ in LENGTH_BUCKETS]
-    for field, quota in FIELD_QUOTAS.items():
+    for field, quota in quotas.items():
         if not any(key[0] == field for key in cells):
             raise ValueError(f'no development cases for field {field}')
         cursors: dict[tuple[str, str, str], int] = defaultdict(int)
@@ -117,7 +127,7 @@ def select(pairs: list[tuple[Protocol, Case]], *, seed: int = SELECTION_SEED) ->
                         cursors[key] += 1
                         text = ' '.join(unicodedata.normalize('NFKC', c.text).casefold().split())
                         # Biology has seven protocols: spread its twelve over them.
-                        if text in seen_text or (field == 'biology' and protocol_counts[p.code] >= 2):
+                        if text in seen_text or (field == 'biology' and protocol_counts[p.code] >= biology_per_protocol):
                             continue
                         seen_text.add(text)
                         protocol_counts[p.code] += 1

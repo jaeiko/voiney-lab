@@ -180,19 +180,26 @@ async def evaluate(args: argparse.Namespace, cases: list, budget: Budget, speech
                             signal_gain = distance_gain(distance_cm)
                             pcm = mix(clean,kind,snr,tail_samples=16000,signal_gain=signal_gain)[0] if kind != 'quiet' else attenuate(clean,signal_gain)
                             for denoise in args.denoise:
-                                if budget.stopped:
-                                    return rows
                                 settings = stt_settings[denoise]
-                                def transcribe(pcm, *a, _settings=settings, **kw):
-                                    return vp.transcribe(pcm,_settings,language=kw.get('language','ko'),keyterms=kw.get('keyterms',()))
-                                result = await run_case(p,c,pcm=pcm,transcriber=transcribe,synthesizer=reply,router_settings=router,offline=False,stt_provider=args.stt_provider)
-                                row = score_case(c,result,source=' '.join(page.text for page in p.fixture.draft.extraction.pages),mode='live')
-                                row.update(
-                                    protocol=p.code, noise=kind, snr=snr if kind!='quiet' else 'quiet',
-                                    effective_snr_db=round(effective_snr_db(snr,distance_cm),4) if kind!='quiet' else 'quiet',
-                                    distance_cm=distance_cm, denoise=denoise, voice=voice, speed=speed,
-                                )
-                                rows.append(row)
+                                # STT1: the correction treatments share one recognizer
+                                # response per utterance -- 'off' costs no extra call.
+                                memo: dict[str, object] = {}
+                                def transcribe(pcm, *a, _settings=settings, _memo=memo, **kw):
+                                    key = hashlib.sha256(pcm).hexdigest()
+                                    if key not in _memo:
+                                        _memo[key] = vp.transcribe(pcm,_settings,language=kw.get('language','ko'),keyterms=kw.get('keyterms',()))
+                                    return _memo[key]
+                                for correction in args.correction:
+                                    if budget.stopped:
+                                        return rows
+                                    result = await run_case(p,c,pcm=pcm,transcriber=transcribe,synthesizer=reply,router_settings=router,offline=False,stt_provider=args.stt_provider,transcript_correction=correction=='on')
+                                    row = score_case(c,result,source=' '.join(page.text for page in p.fixture.draft.extraction.pages),mode='live')
+                                    row.update(
+                                        protocol=p.code, field=p.field, noise=kind, snr=snr if kind!='quiet' else 'quiet',
+                                        effective_snr_db=round(effective_snr_db(snr,distance_cm),4) if kind!='quiet' else 'quiet',
+                                        distance_cm=distance_cm, denoise=denoise, voice=voice, speed=speed, correction=correction,
+                                    )
+                                    rows.append(row)
     return rows
 
 
@@ -213,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--conditions',default='quiet,fan:20,centrifuge:10,ultrasonic:10,babble:10,keyboard:5,cleanbench_bsc_fan:10,fume_hood_exhaust:10,glovebox_circulation_pump:10,fan_centrifuge:10,fan_adjacent_speech:10')
     parser.add_argument('--distances',default='30',help='comma-separated microphone distances in cm (30 and 100 for the hood comparison)')
     parser.add_argument('--denoise',default='on',help='comma-separated Chirp 3 denoiser treatments: on,off')
+    parser.add_argument('--correction',default='on',help='STT1 correction stage treatments: on,off (off reuses the same STT responses, no extra call)')
     parser.add_argument('--stt-provider',choices=('google_cloud_v2','google_cloud','elevenlabs'),default='google_cloud_v2')
     parser.add_argument('--stt-model',default='',help='chirp_3 default on V2; latest_long on google_cloud')
     parser.add_argument('--configured-models',action='store_true',help='use shell router/translation roles, within request caps')
@@ -251,6 +259,9 @@ def main(argv: list[str] | None = None) -> int:
         args.denoise = args.denoise.split(',')
         if not args.denoise or len(set(args.denoise)) != len(args.denoise) or any(value not in {'on','off'} for value in args.denoise):
             raise ValueError('invalid denoise treatments')
+        args.correction = args.correction.split(',')
+        if not args.correction or len(set(args.correction)) != len(args.correction) or any(value not in {'on','off'} for value in args.correction):
+            raise ValueError('invalid correction treatments')
         if args.stt_provider != 'google_cloud_v2' and args.denoise != ['on']:
             raise ValueError('denoise comparison requires google_cloud_v2')
         if not all(math.isfinite(v) and v>0 for v in (args.max_usd,args.reserve_usd_per_request,args.tts_usd_per_million,args.stt_usd_per_minute)):
@@ -259,19 +270,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.reserve_usd_per_request < max(2000*args.tts_usd_per_million/1e6,15/60*args.stt_usd_per_minute):
             raise ValueError('per-request reserve is below assumed speech cost')
         cases, split, catalog_counts, translation_coverage = prepare_cases(args)
-        n = len(cases)*len(args.voices)*len(args.speeds)*len(args.conditions)*len(args.distances)*len(args.denoise)
+        n = len(cases)*len(args.voices)*len(args.speeds)*len(args.conditions)*len(args.distances)*len(args.denoise)*len(args.correction)
         chars = sum(len(c.text) for _,c in cases)*len(args.voices)
         matrix = {
             'conditions': [{'noise': kind, 'snr': snr if kind != 'quiet' else 'quiet'} for kind, snr in args.conditions],
             'distance_cm': args.distances,
             'denoise': args.denoise,
+            'correction': args.correction,
             'voices': args.voices,
             'speeds': args.speeds,
         }
         estimate = {'cases':n,'catalog':catalog_counts,'split':split,'translation_coverage':translation_coverage,
                     'matrix':matrix,
                     'input_tts_cache_misses_at_most':len(cases)*len(args.voices),
-                    'input_characters':chars,'stt_requests_at_most':n,
+                    'input_characters':chars,'stt_requests_at_most':n//len(args.correction),
                     'input_tts_usd_assumed':round(chars*args.tts_usd_per_million/1e6,4),
                     'stt_usd_assumed_at_15_seconds':round(n*.25*args.stt_usd_per_minute,4),
                     'reply_tts_and_optional_models':'additional, reserved per HTTP attempt',
