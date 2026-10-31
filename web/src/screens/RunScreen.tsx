@@ -16,14 +16,20 @@ import type { AuthSession } from "../api/types";
 import { RunTools } from "./run/RunTools";
 import { RecordsPanel } from "./run/RecordsPanel";
 
-// The experiment screen (lane RX2, person's decision 2 of 2026-10-25): the
-// step large in the middle (Korean first, the source folded), the pictures
-// large, the timer only when there is one (a small chip, large from its last
-// minute), the caption in two whole lines that opens the conversation, the
-// records beside it with [메모] and [사진] always on the screen, the one
-// listening word large, and [일시정지] / [종료]. While paused a band across
-// the whole screen says how to go on. With no experiment there is no run bar.
-// Everything drawn is the server's last state (runModel.ts).
+// The experiment screen (lane RX2, person's decision 2 of 2026-10-25; laid out
+// again by lane UI1, person's request of 2026-10-31): on a wide screen (a
+// landscape tablet, a desktop) two halves -- on the left the step (Korean
+// first, its conditions, the next step, a card, the source folded) with the
+// records folded under it ([메모] and [사진] always on the screen); on the
+// right the timer in the top third (a list when there are several) and the
+// pictures below it (the source's figures, a web photo, a drawn diagram, each
+// named by where it comes from; one line when there is none). On a narrow
+// screen (a portrait tablet, a phone) one column: the step, the timer right
+// under it, then the pictures. The caption in two whole lines opens the
+// conversation, the one listening word is large, and [일시정지] / [종료]. While
+// paused a band across the whole screen says how to go on. With no experiment
+// there is no run bar. Everything drawn is the server's last state
+// (runModel.ts).
 
 const NARROW = "(max-width: 899px)";
 const MIC_NOTICE_SHOWN_MS = 10_000;
@@ -88,6 +94,34 @@ function ListeningBadge({ word, misheard }: { word: ListeningWord; misheard?: { 
       <span>{label}</span>
       {hint ? <span className="run-listening-hint">{hint}</span> : null}
     </div>
+  );
+}
+
+/**
+ * The timers, at the top of the right half (wide) or right under the step (narrow), each large: its name, its digits,
+ * its bar. The server sends one step timer today; several are listed one under another. With none, a wide screen says
+ * so in one line and a narrow one leaves the space to the pictures.
+ */
+function TimerZone({ timers, narrow }: { timers: TimerView[]; narrow: boolean }) {
+  const shown = timers.filter((timer) => timer.kind !== "none");
+  if (!shown.length && narrow) return null;
+  return (
+    <section className="run-timers" aria-label={copy.timer.title} data-count={shown.length} data-testid="run-timers">
+      {shown.length ? (
+        <ul className="run-timers-list">
+          {shown.map((timer, at) => (
+            <li key={`${timer.name ?? "step"}:${at}`}>
+              <TimerChip timer={timer} />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="run-timers-empty" data-testid="run-timers-empty">
+          <Timer aria-hidden="true" />
+          <span>{copy.timer.none}</span>
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -268,7 +302,7 @@ export function RunScreen({ session }: { session?: AuthSession } = {}) {
   const paused = isPaused(protocol);
   const word = listeningWord(snapshot.voice, paused, model.misheardAt, now);
   const timer = timerView(protocol, remainingOf);
-  const figures = [...sourceFigures(protocol, model.screen), ...(model.figures.drawn ? [model.figures.drawn] : [])];
+  const figures = [...sourceFigures(protocol, model.screen), ...(model.figures.drawn ? [model.figures.drawn] : []), ...(model.figures.web ? [model.figures.web] : [])];
   const running = snapshot.active || snapshot.phase === "starting" || snapshot.voice === "RECONNECTING";
 
   if (snapshot.startRefusal && !running) {
@@ -347,7 +381,6 @@ export function RunScreen({ session }: { session?: AuthSession } = {}) {
       <header className="run-bar">
         <p className="run-protocol">{protocol?.display_name ?? ""}</p>
         <ListeningBadge word={word} misheard={model.misheard} />
-        {timer.kind !== "none" && timer.kind !== "soon" && timer.kind !== "done" ? <TimerChip timer={timer} /> : null}
         <div className="run-controls">
           <span className="run-mic" data-on={snapshot.micOn}>
             {snapshot.micOn ? <Mic aria-hidden="true" /> : <MicOff aria-hidden="true" />}
@@ -389,7 +422,6 @@ export function RunScreen({ session }: { session?: AuthSession } = {}) {
         ) : null}
       </div>
       <main className="run-main" id="main">
-        {timer.kind === "soon" || timer.kind === "done" ? <TimerChip timer={timer} /> : null}
         <StepPanel protocol={protocol} screen={model.screen}>
           {model.card && model.card.stepId === protocol?.current_step_id ? <RunCard card={model.card} /> : null}
           {model.timerNotice && (!model.timerNotice.stepId || model.timerNotice.stepId === protocol?.current_step_id) ? (
@@ -399,11 +431,19 @@ export function RunScreen({ session }: { session?: AuthSession } = {}) {
             </p>
           ) : null}
         </StepPanel>
+        {narrow ? <TimerZone timers={[timer]} narrow /> : null}
+        {narrow ? <FigurePanel figures={figures} /> : null}
         <p className="run-voice-hint">{copy.voiceHint}</p>
-        <FigurePanel figures={figures} />
         <RunTools session={session ?? { mode: "accounts", signed_in: true, account: null }} />
       </main>
-      <RecordsPanel experimentId={snapshot.experimentId} refreshKey={recordsKey(model)} narrow={narrow} />
+      {narrow ? null : (
+        <div className="run-side" data-testid="run-side">
+          <TimerZone timers={[timer]} narrow={false} />
+          <FigurePanel figures={figures} />
+        </div>
+      )}
+      {/* The records fold under the step on every screen: their head and [메모] / [사진] stay in sight. */}
+      <RecordsPanel experimentId={snapshot.experimentId} refreshKey={recordsKey(model)} narrow />
       <CaptionBar caption={model.caption} log={model.log} />
       {paused ? (
         // Person's decision 1 (2026-10-26): while paused, [다시 시작] and [종료] both work; a refusal the server sends is

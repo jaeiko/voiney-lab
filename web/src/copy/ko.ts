@@ -283,6 +283,8 @@ export const run = {
   stopConfirm: "끝내기",
   stopCancel: "계속하기",
   timer: {
+    title: "타이머",
+    none: "이 단계에는 타이머가 없어요.",
     name: (name: string | null) => (name ? `${name} 타이머` : "단계 타이머"),
     left: (clock: string) => `${clock} 남음`,
     over: (clock: string) => `끝남 · ${clock} 지남`,
@@ -298,6 +300,10 @@ export const run = {
     drawn: "원문을 바탕으로 AI가 그린 그림",
     web: "웹 사진",
     failed: "그림을 불러오지 못했어요. 원문 글은 그대로예요.",
+    panelTitle: "그림 · 사진 · 도식",
+    none: "이 단계에는 보여 줄 그림이 없어요.",
+    notSource: "실험 PDF 원문 사진이 아니에요.",
+    webPage: "원본 페이지 · 라이선스 보기",
   },
   caption: {
     open: "대화 기록 펼치기",
