@@ -77,7 +77,7 @@ function figurePng(): Buffer {
   const header = Buffer.alloc(13); header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 2;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(Buffer.concat(rows))), chunk('IEND', Buffer.alloc(0))]);
 }
-const FIGURE = figurePng();
+export const FIGURE = figurePng();
 // A tenth of a second of silence as a WAV, the voice preview's answer.
 function silenceWav(): Buffer {
   const samples = 1600, data = Buffer.alloc(samples * 2), head = Buffer.alloc(44);
@@ -317,6 +317,16 @@ export class StandIn {
   misheard() {
     // Lane HEAR2, decision 4: the drop's notice and its reason in plain words (shown, not said).
     this.send({ type: 'speech.dropped', configuration_id: this.configurationId, turn_id: 41, generation: 1, reason: 'empty_transcript', reason_ko: '받아 적은 말이 없어요', duration_ms: 640, level_db: -31.2, paused: false, during_playback: false, notice: '잘 안 들렸어요' });
+  }
+
+  /** Lane UI1: any server event on this socket, stamped with the current configuration and generation. */
+  emit(message: Message) {
+    this.send({ configuration_id: this.configurationId, generation: this.generation, ...message });
+  }
+
+  /** The step the server is at now. */
+  currentStep(): StepPlan {
+    return this.protocol.steps[this.step];
   }
 
   /** The last control of a type the screen sent, with the generation it carried. */

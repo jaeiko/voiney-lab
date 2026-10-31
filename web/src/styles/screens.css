@@ -125,18 +125,11 @@
 .end-question { display: flex; flex-direction: column; gap: var(--space-4); }
 .end-question h2 { font-size: var(--text-heading); line-height: var(--line-heading); font-weight: 700; }
 .end-question h2 + .muted { margin-top: calc(-1 * var(--space-2)); }
-.end-ratings { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-2); }
-.end-rating {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); min-height: 108px; padding: var(--space-2);
-  border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper); color: var(--ink); font-weight: 600; text-align: center; cursor: pointer;
-}
-.end-rating svg { width: 28px; height: 28px; }
-.end-rating:hover { background: var(--bench); }
-.end-rating[aria-checked="true"], .end-rating[aria-checked="true"]:hover { border-color: var(--ink); background: var(--ink); color: var(--on-ink); }
+/* The five tiles are the shared RatingScale (controls.css, lane UI1). */
 .end-chips-lead { font-weight: 600; }
 .end-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .end-chip {
-  display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-3);
+  display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--target); padding: 0 var(--space-3);
   border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper); color: var(--ink); font-weight: 600; cursor: pointer;
 }
 .end-chip:hover { background: var(--bench); }
@@ -150,10 +143,8 @@
 .btn-text:not(:disabled):hover { background: var(--bench); color: var(--ink); }
 .end-send { min-width: 220px; min-height: 56px; font-size: var(--text-subtitle); line-height: var(--line-subtitle); }
 .end-after { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-4); }
-/* A phone: the five tiles as rows a thumb can hit, the numbers still three across. */
+/* A phone: the numbers still three across. */
 @media (max-width: 599px) {
-  .end-ratings { grid-template-columns: 1fr; }
-  .end-rating { flex-direction: row; justify-content: flex-start; min-height: 56px; padding: 0 var(--space-4); text-align: left; }
   /* [보내기] full width above [건너뛰기]: side by side they overflowed a 390 px screen inside the panel. */
   .end-actions { flex-direction: column-reverse; align-items: stretch; }
   .end-send { min-width: 0; }

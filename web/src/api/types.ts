@@ -108,6 +108,12 @@ export interface Experiment {
   started_at?: string | null;
   updated_at?: string | null;
   owner_principal_id?: string | null;
+  /** When the run's protocol started: its latest record's start, else the experiment's own (lane UI1). */
+  run_started_at?: string | null;
+  /** Values in its records not yet confirmed by the researcher; null when it has no record (lane UI1). */
+  unconfirmed_count?: number | null;
+  /** Its latest record's status (completed, stopped, in_progress), when it has one. */
+  report_status?: string | null;
 }
 
 export interface WorkspaceSession {

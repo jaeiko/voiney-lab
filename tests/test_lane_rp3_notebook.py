@@ -278,7 +278,7 @@ class DifferenceTests(_Case):
         self.assertEqual([line for line in section.splitlines() if line.startswith("- ")], [
             "- 2단계 양: 원문 500 µL → 450 µL — “세척액 450 µL” [미확인]",
             "- 4단계 양: 원문 200 µL → 180 µL — “acetonitrile 180 µL 넣음” [미확인]",
-            "- 4단계에서 끝냄 — 4–5단계는 하지 않음",
+            "- 4단계 진행 중 종료 — 5단계는 하지 않음",
         ])
         later = short_run(self.temporary.name)
         later.event("00:48", "steps_skipped", "2", payload={"step_record": {
@@ -292,7 +292,7 @@ class DifferenceTests(_Case):
         self.assertEqual([line for line in section.splitlines() if line.startswith("- ")], [
             "- 3단계 속도: 원문 2 mm/s → 4 mm/s — “S2는 4 mm/s로 꺼냈어” [미확인]",
             "- 이상 · 5단계 (11:30): “로 온도가 380도에서 안 올라가” [미확인]",
-            "- 5단계에서 끝냄 — 5–6단계는 하지 않음",
+            "- 5단계 진행 중 종료 — 6단계는 하지 않음",
         ])
 
 

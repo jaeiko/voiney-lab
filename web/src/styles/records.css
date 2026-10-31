@@ -5,12 +5,14 @@
 .records-screen h3 { font-size: var(--text-subtitle); line-height: var(--line-subtitle); }
 .records-screen > .btn { align-self: flex-start; }
 .records-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
-.records-filters input, .records-filters select { min-width: 0; width: 100%; min-height: var(--target); }
-.records-filters select { font-family: inherit; font-size: var(--text-body); line-height: var(--line-body); font-weight: 400; color: var(--ink); padding: 0 var(--space-3); border: var(--border) solid var(--line-strong); border-radius: var(--radius-small); background: var(--paper); }
+/* Each filter is the shared Field (controls.css). */
 .record-list, .record-events { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-4); }
 .record-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2) var(--space-4); padding: var(--space-6); border: var(--border) solid var(--line-strong); border-radius: var(--radius); text-decoration: none; color: var(--ink); background: var(--paper); }
 .record-card h2 { grid-column: 1 / -1; font-size: var(--text-subtitle); line-height: var(--line-subtitle); }
 .record-card:hover { border-color: var(--ink); }
+/* Lane UI1: when the run started, and a badge for values still to confirm (the pending family: a person's confirmation). */
+.record-card-time { font-variant-numeric: tabular-nums; }
+.record-card-badge { grid-column: 1 / -1; }
 .record-section { display: flex; flex-direction: column; gap: var(--space-4); padding-top: var(--space-6); border-top: var(--border) solid var(--line); }
 .record-report, .record-timeline { display: flex; flex-direction: column; gap: var(--space-4); }
 .record-report .btn, .record-section > .btn { align-self: flex-start; }
@@ -30,10 +32,9 @@
 .notebook-section { gap: var(--space-5); }
 .notebook-blank { padding: var(--space-3) var(--space-4); border: var(--border) dashed var(--line-strong); border-radius: var(--radius-small); color: var(--ink-muted); background: var(--bench); }
 .method-source { display: block; margin-top: var(--space-2); color: var(--ink-muted); font-size: var(--text-small); }
-.record-state { display: inline-block; padding: 1px var(--space-2); border: var(--border) solid var(--line-strong); border-radius: 999px; font-size: var(--text-small); }
+.record-state { display: inline-block; padding: 1px var(--space-2); border: var(--border) solid var(--line-strong); border-radius: var(--radius-small); font-size: var(--text-label); }
 .binder-candidates { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); border: var(--border) solid var(--line); border-radius: var(--radius-small); }
-.binder-candidates label { display: flex; align-items: flex-start; gap: var(--space-3); min-height: var(--target); padding: var(--space-2); }
-.binder-candidates input { width: 22px; height: 22px; flex: 0 0 auto; }
+/* Each candidate is the shared Checkbox (controls.css). */
 .binder-entry { display: flex; flex-direction: column; gap: var(--space-5); margin-top: var(--space-7); padding-top: var(--space-6); border-top: var(--border-state) solid var(--line-strong); }
 .notebook-two-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5); }
 .notebook-two-columns article { display: flex; flex-direction: column; gap: var(--space-3); }
@@ -81,8 +82,8 @@
 .protocol-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .detail-safety { border-left: var(--border-state) solid var(--warning-ink); padding: var(--space-3); }
 .record-actions .field { width: 100%; }
-.record-actions textarea, .settings select, .record-section select { font-family: var(--font-sans); font-size: var(--text-body); line-height: var(--line-body); min-height: var(--target); max-width: 100%; width: 100%; padding: var(--space-3); color: var(--ink); background: var(--paper); border: var(--border) solid var(--line-strong); border-radius: var(--radius-small); }
-.record-actions textarea { min-height: 112px; }
+.settings select:where(:not(.field-control)), .record-section select:where(:not(.field-control)) { font-family: var(--font-sans); font-size: var(--text-body); line-height: var(--line-body); min-height: var(--target); max-width: 100%; width: 100%; padding: var(--space-3); color: var(--ink); background: var(--paper); border: var(--border) solid var(--line-strong); border-radius: var(--radius-small); }
+
 .detail-section { display: flex; flex-direction: column; gap: var(--space-3); }
 .detail-step { border: var(--border) solid var(--line); padding: 0 var(--space-4) var(--space-3); }
 .detail-step > summary { font-size: var(--text-subtitle); line-height: var(--line-subtitle); font-weight: 600; }

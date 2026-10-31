@@ -83,6 +83,10 @@ export interface Figure {
   caption: string;
   /** Where the picture comes from, said beside it: the source, or drawn by the AI from the source's words, or the web. */
   origin: "source" | "drawn" | "web";
+  /** A web photo's credit, said under it: where from, who made it, its licence (lane UI1, as the old screen says it). */
+  credit?: string;
+  /** A web photo's own page (its licence), opened in a new tab. */
+  link?: string;
 }
 
 export interface LogLine {
@@ -437,6 +441,20 @@ export function applyServerEvent(model: RunModel, m: Record<string, unknown>, co
       if (!ours || m.status !== "success" || !diagram || typeof diagram.asset_id !== "string" || !/^[0-9a-f]{64}$/.test(diagram.asset_id)) return model;
       if (diagram.url !== `/api/drawn-visuals/${diagram.asset_id}` || diagram.mime_type !== "image/svg+xml" || diagram.step_id !== model.protocol?.current_step_id || !text(diagram.label)) return model;
       return { ...model, figures: { ...model.figures, drawn: { key: `drawn:${diagram.asset_id}`, url: diagram.url as string, label: plain(diagram.label), caption: "", origin: "drawn" } } };
+    }
+    case "protocol.web.result": {
+      // Lane UI1: a free-licence photo the web lookup found (lane WV), in the pictures beside the step with its credit; the
+      // old screen's safeWebPhoto checks. The explanation itself is said and captioned; values never come from here.
+      const photo = m.photo as Record<string, unknown> | undefined | null;
+      if (!ours || m.status !== "success" || !photo || typeof photo.asset_id !== "string" || !/^[0-9a-f]{64}$/.test(photo.asset_id)) return model;
+      if (photo.url !== `/api/web-visuals/${photo.asset_id}` || !["image/png", "image/jpeg"].includes(String(photo.mime_type)) || !text(photo.title)) return model;
+      if (!text(photo.licence) || typeof photo.page_url !== "string" || !photo.page_url.startsWith("https://")) return model;
+      const credit = [`출처 Wikimedia Commons`, text(photo.author) ? `작성자 ${plain(photo.author)}` : null, plain(photo.licence)].filter(Boolean).join(" · ");
+      const subject = text(m.subject) ? plain(m.subject) : "";
+      return {
+        ...model,
+        figures: { ...model.figures, web: { key: `web:${photo.asset_id}`, url: photo.url as string, label: plain(photo.title), caption: subject, origin: "web", credit, link: photo.page_url } },
+      };
     }
     case "experiment.ended":
       if (!ours) return model;

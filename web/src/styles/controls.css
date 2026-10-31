@@ -1,0 +1,61 @@
+/* The shared controls (lane UI1, person's request of 2026-10-31): one button,
+   one rating scale, one field for the end of a run, the records, a value's
+   확인/고치기, the exports and the binder (components/Controls.tsx). The
+   design system (docs/UI_SPEC.md 6): ink on paper, colour only for a state,
+   no shadow, corners 4 px (inputs 2 px), Pretendard 400/600/700, every
+   target 48 px or more. One primary button (ink filled) per part of a
+   screen; the rest outlined in ink (secondary), in grey (quiet) or bare
+   (text). */
+
+/* --- Buttons: .btn is the secondary look and its 48 px (base.css), .btn-big
+       56 px (screens.css); this sheet loads after run.css, so it never sets a
+       .btn size (the run's buttons keep their 64/80 px). -------------------- */
+.btn-primary { border-color: var(--ink); }
+.btn-quiet { color: var(--ink); }
+.btn-quiet:not(:disabled):hover { border-color: var(--ink); }
+.btn[aria-disabled="true"] { opacity: 0.55; pointer-events: none; }
+.btn[aria-expanded="true"] { background: var(--bench); border-color: var(--ink); }
+
+/* --- Fields: a label above its control ----------------------------------- */
+.field-label { color: var(--ink); }
+.field-control {
+  display: block; width: 100%; min-width: 0; min-height: var(--target); padding: 0 var(--space-3);
+  border: var(--border) solid var(--line-strong); border-radius: var(--radius-small); background: var(--paper); color: var(--ink);
+  font-family: var(--font-sans); font-size: var(--text-body); line-height: var(--line-body); font-weight: 400;
+}
+.field-control:hover:not(:disabled) { border-color: var(--ink); }
+.field-control:focus-visible { border-color: var(--ink); }
+.field .field-control:disabled, .field-control:disabled { background: var(--bench); color: var(--ink-muted); }
+/* A select draws its own ink chevron (the browser's arrow differs on every device). */
+.field-select {
+  appearance: none; -webkit-appearance: none; padding-right: calc(var(--space-3) * 2 + 16px); cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%231c1c1a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right var(--space-3) center; background-size: 16px 16px;
+}
+.field-textarea { min-height: 112px; padding: var(--space-3); resize: vertical; }
+
+/* --- A checkbox: a 24 px ink box, the whole line a 48 px target ---------- */
+.check { display: flex; align-items: flex-start; gap: var(--space-3); min-height: var(--target); padding: var(--space-3) var(--space-2); border-radius: var(--radius); cursor: pointer; }
+.check:hover { background: var(--bench); }
+.check-box { width: 24px; height: 24px; flex: 0 0 auto; margin: 0; accent-color: var(--ink); cursor: pointer; }
+.check-words { min-width: 0; overflow-wrap: anywhere; }
+
+/* --- The 1–5 scale: equal tiles in a row, the chosen one ink ------------- */
+.rating-scale { display: grid; grid-template-columns: repeat(var(--points, 5), minmax(0, 1fr)); gap: var(--space-2); }
+.rating-tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-1); min-height: 112px; padding: var(--space-3) var(--space-2);
+  border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper); color: var(--ink);
+  font-family: var(--font-sans); font-size: var(--text-body); line-height: var(--line-body); font-weight: 600; text-align: center; cursor: pointer;
+}
+.rating-tile svg { width: 28px; height: 28px; }
+.rating-point { font-size: var(--text-label); line-height: var(--line-label); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink-muted); }
+.rating-tile:hover:not(:disabled) { border-color: var(--ink); background: var(--bench); }
+.rating-tile[aria-checked="true"], .rating-tile[aria-checked="true"]:hover { border-color: var(--ink); background: var(--ink); color: var(--on-ink); }
+.rating-tile[aria-checked="true"] .rating-point { color: var(--on-ink); }
+.rating-tile:disabled { opacity: 0.55; cursor: default; }
+
+/* A phone: the tiles as rows a thumb can hit, icon, number and words in one line. */
+@media (max-width: 599px) {
+  .rating-scale { grid-template-columns: minmax(0, 1fr); }
+  .rating-tile { flex-direction: row; justify-content: flex-start; gap: var(--space-3); min-height: 56px; padding: 0 var(--space-4); text-align: left; }
+}

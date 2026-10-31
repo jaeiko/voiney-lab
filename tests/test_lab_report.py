@@ -178,7 +178,7 @@ class ReportStructureTests(_ReportCase):
         self.assertIn("- 3단계 타이머: 원문 15분 중 10분에 끝냄 [미확인]", text)
         # Never asked about, so not confirmed (lane RP2, decision 3, kept).
         self.assertIn("- 이상 · 4단계 (10:09): “튜브를 쏟았어” [미확인]", text)
-        self.assertIn("- 5단계에서 끝냄 — 5단계는 하지 않음", text)
+        self.assertIn("- 5단계 진행 중 종료", text)
         # The pause is in the appendix's step times, not in the body.
         self.assertIn("| 3 | 09:40 | 10:06 | 26분 (멈춤 5분 포함) | 원문 15분 / 10분에 끝냄 |", text)
         self.assertIn("> 출처: [1] Kim 2025. Test digestion protocol. protocols.io https://dx.doi.org/10.1/test.v1 — 실험에 쓴 프로토콜 원문", text)

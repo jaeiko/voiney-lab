@@ -1,23 +1,33 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check, Pencil } from 'lucide-react';
 import { useState, type MouseEvent, type ReactNode } from 'react';
 import { postJson } from '../api/client';
 import { experimentPath, recordsApi, reportPath, type Notebook, type NotebookBinder, type NotebookSection, type RecordEvent, type ReviewValue } from '../api/recordsApi';
-import { isSessionExpired, signedOut, useExperiments, useSignOutOnExpiry, useWorkspaceSession } from '../api/queries';
+import { isSessionExpired, signedOut, useExperiments, useSignOutOnExpiry, useTimeZone, useWorkspaceSession } from '../api/queries';
 import type { AuthSession, Experiment } from '../api/types';
-import { EmptyBox, ErrorBox, LoadingBox, Note } from '../components/Pieces';
+import { Button, ButtonLink, Checkbox, Field, Select, TextInput } from '../components/Controls';
+import { Chip, EmptyBox, ErrorBox, LoadingBox, Note } from '../components/Pieces';
 import { records as c } from '../copy/ko';
 import { RecordCapture, CheckpointRestart, ReportPreparation } from './RecordActions';
 import { useRun } from '../voice/runStore';
 import { oldRoutes, routes } from '../lib/navigation';
+import { clockWords, dayOf, momentWords } from '../lib/clock';
 
 const recordKey = (id: string, part: string) => ['records', id, part];
 const notebookKey = (id: string) => ['notebook', id];
-const time = (value?: string | null) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('ko-KR', { timeZone: 'UTC' }) + ' UTC' : c.unknown;
+// Lane UI1: every time in the lab's zone, in the notebook's form ("2026년 10월 31일 (토) 13:40"), never UTC.
+function useTime() {
+  const zone = useTimeZone();
+  return { zone, time: (value?: string | null) => momentWords(value, zone) ?? c.unknown };
+}
+/** When a run's protocol started (the server's run_started_at), else when the experiment was made. */
+const runStart = (item: Experiment) => item.run_started_at || item.started_at || null;
 const title = (item: Experiment) => item.protocol_title || c.experiment;
 const state = (status: string) => c.states[status] || c.unknown;
 
 export function RecordsScreen({ session }: { session: AuthSession }) {
   const list = useExperiments();
+  const { zone, time } = useTime();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [protocol, setProtocol] = useState('');
@@ -28,7 +38,7 @@ export function RecordsScreen({ session }: { session: AuthSession }) {
   const all = list.data ?? [];
   const protocols = [...new Map(all.map(item => [item.protocol_id || '', title(item)])).entries()];
   const shown = all.filter(item => {
-    const day = item.started_at?.slice(0, 10) || '';
+    const day = dayOf(runStart(item), zone);
     return title(item).toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()) && (!status || item.status === status) &&
       (!protocol || item.protocol_id === protocol) && (!from || day >= from) && (!to || Boolean(day) && day <= to) &&
       (!rating || (rating === 'rated' ? Number.isInteger(item.rating) : item.rating_state === 'unrated'));
@@ -37,16 +47,17 @@ export function RecordsScreen({ session }: { session: AuthSession }) {
     <h1>{c.title}</h1><p className='page-why'>{c.why}</p>
     {session.account?.admin ? <p className='muted'>{c.lab}</p> : null}
     <div className='records-filters'>
-      <label className='field'><span>{c.search}</span><input type='search' value={search} onChange={e => setSearch(e.target.value)} /></label>
-      <label className='field'><span>{c.protocol}</span><select value={protocol} onChange={e => setProtocol(e.target.value)}><option value=''>{c.all}</option>{protocols.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
-      <label className='field'><span>{c.status}</span><select value={status} onChange={e => setStatus(e.target.value)}><option value=''>{c.all}</option>{Object.entries(c.states).map(([code, word]) => <option key={code} value={code}>{word}</option>)}</select></label>
-      <label className='field'><span>{c.from}</span><input type='date' value={from} onChange={e => setFrom(e.target.value)} /></label>
-      <label className='field'><span>{c.to}</span><input type='date' value={to} onChange={e => setTo(e.target.value)} /></label>
-      <label className='field'><span>{c.ratingFilter}</span><select value={rating} onChange={e => setRating(e.target.value)}><option value=''>{c.all}</option><option value='rated'>{c.rated}</option><option value='unrated'>{c.unrated}</option></select></label>
+      <Field label={c.search}><TextInput type='search' value={search} onChange={e => setSearch(e.target.value)} /></Field>
+      <Field label={c.protocol}><Select value={protocol} onChange={e => setProtocol(e.target.value)}><option value=''>{c.all}</option>{protocols.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</Select></Field>
+      <Field label={c.status}><Select value={status} onChange={e => setStatus(e.target.value)}><option value=''>{c.all}</option>{Object.entries(c.states).map(([code, word]) => <option key={code} value={code}>{word}</option>)}</Select></Field>
+      <Field label={c.from}><TextInput type='date' value={from} onChange={e => setFrom(e.target.value)} /></Field>
+      <Field label={c.to}><TextInput type='date' value={to} onChange={e => setTo(e.target.value)} /></Field>
+      <Field label={c.ratingFilter}><Select value={rating} onChange={e => setRating(e.target.value)}><option value=''>{c.all}</option><option value='rated'>{c.rated}</option><option value='unrated'>{c.unrated}</option></Select></Field>
     </div>
     {list.isPending ? <LoadingBox label={c.loading} /> : list.isError ? <ErrorBox message={c.failed} onRetry={() => void list.refetch()} /> : !all.length ? <EmptyBox message={c.empty} /> : !shown.length ? <EmptyBox message={c.noMatch} /> :
-      <ul className='record-list'>{shown.map(item => <li key={item.session_id}><a className='record-card' href={routes.record(item.session_id)}>
-        <h2>{title(item)}</h2><span>{time(item.started_at)}</span><span>{state(item.status)}</span>
+      <ul className='record-list' data-testid='record-list'>{shown.map(item => <li key={item.session_id}><a className='record-card' href={routes.record(item.session_id)} data-testid='record-card'>
+        <h2>{title(item)}</h2><span className='record-card-time'>{time(runStart(item))}</span><span>{state(item.status)}</span>
+        {typeof item.unconfirmed_count === 'number' && item.unconfirmed_count > 0 ? <span className='record-card-badge' data-testid='record-unconfirmed'><Chip chip={{ kind: 'review', text: c.unconfirmedCount(item.unconfirmed_count) }} /></span> : null}
         <span>{Number.isInteger(item.completed_step_count) ? c.count(item.completed_step_count!) : c.unknown}</span>
         <span>{Number.isInteger(item.rating) ? c.rating(item.rating!) : item.rating_state === 'unavailable' ? c.ratingUnavailable : c.noRating}</span>
       </a></li>)}</ul>}
@@ -55,6 +66,7 @@ export function RecordsScreen({ session }: { session: AuthSession }) {
 }
 
 function NotebookBinderBuilder({ dateFrom, dateTo, protocolId }: { dateFrom: string; dateTo: string; protocolId: string }) {
+  const { time } = useTime();
   const candidates = useQuery({
     queryKey: ['notebook-binder-candidates', dateFrom, dateTo, protocolId],
     queryFn: () => recordsApi.binderCandidates(dateFrom, dateTo, protocolId),
@@ -82,16 +94,19 @@ function NotebookBinderBuilder({ dateFrom, dateTo, protocolId }: { dateFrom: str
   }
   return <section className='record-section notebook-binder-builder'>
     <h2>{c.binder}</h2><p>{c.binderWhy}</p>
-    <label className='field'><span>{c.binderTopic}</span><input maxLength={120} value={topic} onChange={event => setTopic(event.target.value)} /></label>
-    {candidates.isPending ? <LoadingBox label={c.loading} /> : candidates.isError ? <ErrorBox message={c.binderFailed} onRetry={() => void candidates.refetch()} /> : !candidates.data.reports.length ? <EmptyBox message={c.binderNoCandidates} /> : <fieldset className='binder-candidates'><legend>{c.binderChoose}</legend>{candidates.data.reports.map(report => <label key={report.report_id}><input type='checkbox' checked={chosen.includes(report.report_id)} onChange={() => toggle(report.report_id)} /><span><strong>{report.protocol_title}</strong> · {time(report.started_at)} · {state(report.status)}</span></label>)}</fieldset>}
-    <button className='btn btn-primary' disabled={busy || !topic.trim() || chosen.length < 2} onClick={() => void create()}>{c.binderCreate}</button>
+    <Field label={c.binderTopic}><TextInput maxLength={120} value={topic} onChange={event => setTopic(event.target.value)} /></Field>
+    {candidates.isPending ? <LoadingBox label={c.loading} /> : candidates.isError ? <ErrorBox message={c.binderFailed} onRetry={() => void candidates.refetch()} /> : !candidates.data.reports.length ? <EmptyBox message={c.binderNoCandidates} /> : <fieldset className='binder-candidates'><legend>{c.binderChoose}</legend>{candidates.data.reports.map(report => <Checkbox key={report.report_id} checked={chosen.includes(report.report_id)} onChange={() => toggle(report.report_id)} label={<><strong>{report.protocol_title}</strong> · {time(report.started_at)} · {state(report.status)}</>} />)}</fieldset>}
+    <Button variant='primary' disabled={busy || !topic.trim() || chosen.length < 2} onClick={() => void create()}>{c.binderCreate}</Button>
     {failed ? <Note>{c.binderFailed}</Note> : null}
-    {created ? <p><a className='btn' href={routes.binder(created.binder_id)}>{c.binderOpen(created.topic_name)}</a></p> : null}
+    {created ? <p><ButtonLink href={routes.binder(created.binder_id)}>{c.binderOpen(created.topic_name)}</ButtonLink></p> : null}
     {candidates.data?.binders.length ? <><h3>{c.binderSaved}</h3><ul>{candidates.data.binders.map(binder => <li key={binder.binder_id}><a href={routes.binder(binder.binder_id)}>{binder.topic_name}</a> · {time(binder.created_at)}</li>)}</ul></> : null}
   </section>;
 }
 
-function EventLine({ item, sessionId }: { item: RecordEvent; sessionId: string }) {
+function EventLine({ item, sessionId, day }: { item: RecordEvent; sessionId: string; day: string }) {
+  const { zone, time } = useTime();
+  // A moment on the run's own day says its clock time ("13:46"); another day says the whole date.
+  const when = (value: string) => (day && dayOf(value, zone) === day ? clockWords(value, zone) : null) ?? time(value);
   const o = item.observation, e = item.evidence, p = item.payload;
   let label = c.kinds[item.event_type] || c.event;
   if (o && item.event_type === 'observation_recorded') label = o.capture_source === 'voice' ? c.voice : c.memo;
@@ -100,10 +115,10 @@ function EventLine({ item, sessionId }: { item: RecordEvent; sessionId: string }
   if (item.event_type === 'problem_help') label = c.help;
   const timer = p?.timer;
   return <li className='record-event'>
-    <div className='record-event-head'><strong>{label}</strong>{item.created_at ? <time dateTime={item.created_at}>{time(item.created_at)}</time> : null}</div>
+    <div className='record-event-head'><strong>{label}</strong>{item.created_at ? <time dateTime={item.created_at}>{when(item.created_at)}</time> : null}</div>
     {o ? <><p>{o.current_content ?? o.content}</p>{o.corrected ? <p>{c.corrected} · {c.original(o.content)}</p> : null}{o.retracted ? <p>{c.retracted}</p> : null}</> : null}
     {item.user_wording ? <p>{item.user_wording}</p> : null}
-    {e?.evidence_id ? <><p>{e.caption || e.original_filename}</p>{photo ? <img className='record-photo' loading='lazy' alt={e.caption || e.original_filename || c.photo} src={experimentPath(sessionId, `/evidence/${encodeURIComponent(e.evidence_id)}`)} /> : null}<a className='btn' download href={experimentPath(sessionId, `/evidence/${encodeURIComponent(e.evidence_id)}`)}>{photo ? c.photoGet : c.attachmentGet}</a></> : null}
+    {e?.evidence_id ? <><p>{e.caption || e.original_filename}</p>{photo ? <img className='record-photo' loading='lazy' alt={e.caption || e.original_filename || c.photo} src={experimentPath(sessionId, `/evidence/${encodeURIComponent(e.evidence_id)}`)} /> : null}<ButtonLink download href={experimentPath(sessionId, `/evidence/${encodeURIComponent(e.evidence_id)}`)}>{photo ? c.photoGet : c.attachmentGet}</ButtonLink></> : null}
     {timer ? <dl className='record-values'>{Object.entries(c.timerWords).filter(([key]) => typeof timer[key] === 'number').map(([key, word]) => <div key={key}><dt>{word}</dt><dd>{String(timer[key])}</dd></div>)}</dl> : null}
     {p?.run_changes?.length ? <><h3>{c.changes}</h3><ul>{p.run_changes.map((change, i) => <li key={i}>{change.source_written || change.source_shown_ko || [change.source_number, change.source_unit].filter(Boolean).join(' ')} → {change.shown_ko || [change.number, change.unit].filter(Boolean).join(' ')}</li>)}</ul></> : null}
     {p?.sources?.length ? <details><summary>{c.helpSources}</summary><ul>{p.sources.map((source, i) => <li key={i}>{[source.title, source.source_name, typeof source.tier === 'string' ? c.sourceTiers[source.tier] || c.source : '', source.locator, source.citation].filter(v => typeof v === 'string').join(' · ')}</li>)}</ul></details> : null}
@@ -111,7 +126,7 @@ function EventLine({ item, sessionId }: { item: RecordEvent; sessionId: string }
   </li>;
 }
 
-function Timeline({ items, sessionId }: { items: RecordEvent[]; sessionId: string }) {
+function Timeline({ items, sessionId, day }: { items: RecordEvent[]; sessionId: string; day: string }) {
   const groups = new Map<string, RecordEvent[]>();
   for (const item of items) {
     // A start event can name changes in several steps; display each under its own source label.
@@ -122,7 +137,7 @@ function Timeline({ items, sessionId }: { items: RecordEvent[]; sessionId: strin
       groups.set(label, [...(groups.get(label) ?? []), shown]);
     }
   }
-  return <div className='record-timeline'>{[...groups].map(([label, events]) => <section key={label}><h3>{label ? c.step(label) : c.outside}</h3><ol className='record-events'>{events.map((item, i) => <EventLine key={item.event_id || item.event_key || i} item={item} sessionId={sessionId} />)}</ol></section>)}</div>;
+  return <div className='record-timeline'>{[...groups].map(([label, events]) => <section key={label}><h3>{label ? c.step(label) : c.outside}</h3><ol className='record-events'>{events.map((item, i) => <EventLine key={item.event_id || item.event_key || i} item={item} sessionId={sessionId} day={day} />)}</ol></section>)}</div>;
 }
 
 export function RecordDetailScreen({ sessionId }: { sessionId: string }) {
@@ -132,6 +147,7 @@ export function RecordDetailScreen({ sessionId }: { sessionId: string }) {
   const timeline = useQuery({ queryKey: recordKey(sessionId, 'timeline'), queryFn: () => recordsApi.timeline(sessionId), enabled: experiment.isSuccess });
   const reports = useQuery({ queryKey: recordKey(sessionId, 'reports'), queryFn: () => recordsApi.reports(sessionId), enabled: experiment.isSuccess });
   const workspace = useWorkspaceSession();
+  const { zone, time } = useTime();
   const notebooks = useQueries({ queries: (reports.data?.reports ?? []).map(report => ({ queryKey: notebookKey(report.report_id), queryFn: () => recordsApi.notebook(report.report_id) })) });
   useSignOutOnExpiry([experiment.error, timeline.error, reports.error, workspace.error, ...notebooks.map(q => q.error)].find(isSessionExpired));
   const extras = notebooks.flatMap(q => q.data?.events.filter(event => event.event_type.startsWith('timer_') || event.event_type === 'problem_help' || event.payload?.run_changes?.length) ?? []);
@@ -146,24 +162,24 @@ export function RecordDetailScreen({ sessionId }: { sessionId: string }) {
   const items = [...(timeline.data?.timeline ?? []).filter(event => !event.event_key || !reportKeys.has(event.event_key)), ...extras].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
   function refresh() { void client.invalidateQueries({ queryKey: ['records', sessionId] }); for (const report of reports.data?.reports ?? []) void client.invalidateQueries({ queryKey: notebookKey(report.report_id) }); }
   return <section className='records-screen' data-testid='record-detail'>
-    <a className='btn btn-quiet' href={routes.records}>{c.back}</a><h1>{experiment.data ? title(experiment.data) : c.title}</h1><p className='page-why'>{c.detailWhy}</p>
+    <ButtonLink variant='quiet' href={routes.records}>{c.back}</ButtonLink><h1>{experiment.data ? title(experiment.data) : c.title}</h1><p className='page-why'>{c.detailWhy}</p>
     {experiment.isPending ? <LoadingBox label={c.loading} /> : experiment.isError ? <ErrorBox message={c.failed} onRetry={() => void experiment.refetch()} /> : <>
-      <p>{time(experiment.data.started_at)} · {state(experiment.data.status)}</p>
+      <p data-testid='record-detail-when'>{time(reports.data?.reports.at(-1)?.started_at ?? experiment.data.started_at)} · {state(experiment.data.status)}</p>
       {workspace.data && experiment.data.owner_principal_id !== workspace.data.principal_id ? <p>{experiment.data.owner_principal_id ? c.readOnly : c.readOnlyGeneral}</p> : null}
       <section className='record-section'><h2>{c.notebooks}</h2>
-        {reports.isPending ? <LoadingBox label={c.loading} /> : reports.isError ? <ErrorBox message={c.failed} onRetry={refresh} /> : !reports.data.reports.length ? <EmptyBox message={c.noReports} /> : reports.data.reports.map(report => <div className='record-report' key={report.report_id}><p>{time(report.started_at)} · {state(report.status)}</p><a className='btn btn-primary btn-big' href={routes.notebook(sessionId, report.report_id)}>{c.notebook}</a></div>)}
+        {reports.isPending ? <LoadingBox label={c.loading} /> : reports.isError ? <ErrorBox message={c.failed} onRetry={refresh} /> : !reports.data.reports.length ? <EmptyBox message={c.noReports} /> : reports.data.reports.map((report, at, all) => <div className='record-report' key={report.report_id}><p>{time(report.started_at)} · {state(report.status)}</p><ButtonLink variant={at === all.length - 1 ? 'primary' : 'secondary'} size='big' href={routes.notebook(sessionId, report.report_id)}>{c.notebook}</ButtonLink></div>)}
       </section>
       {notebooks.map((query, i) => query.data?.notebook?.condition_rows.length ? <section className='record-section' key={reports.data?.reports[i].report_id}><h2>{c.conditions}</h2><Rows rows={query.data.notebook.condition_rows} heads={c.tableHeads} /></section> : null)}
-      <section className='record-section'><h2>{c.timeline}</h2><button className='btn' onClick={refresh}>{c.refresh}</button>
+      <section className='record-section'><h2>{c.timeline}</h2><Button variant='quiet' onClick={refresh}>{c.refresh}</Button>
         {timelineLoading && !timelineFailed ? <LoadingBox label={c.loading} /> : null}
         {timelineFailed ? <ErrorBox message={c.failed} onRetry={refresh} /> : null}
-        {items.length ? <Timeline items={items} sessionId={sessionId} /> : !timelineLoading && !timelineFailed ? <EmptyBox message={c.noEvents} /> : null}
+        {items.length ? <Timeline items={items} sessionId={sessionId} day={dayOf(reports.data?.reports.at(-1)?.started_at ?? experiment.data.started_at, zone)} /> : !timelineLoading && !timelineFailed ? <EmptyBox message={c.noEvents} /> : null}
       </section>
       {workspace.data?.principal_id && experiment.data.owner_principal_id === workspace.data.principal_id ? <>
         <RecordCapture key={sessionId} sessionId={sessionId} refresh={refresh} />
         {experiment.data.status === 'stopped' && timeline.isSuccess ? <CheckpointRestart sessionId={sessionId} version={timeline.data.session?.version ?? experiment.data.version ?? 0} recovery={timeline.data.recovery} refresh={refresh} disabled={run.active || run.phase === 'starting' || run.phase === 'stopping'} /> : null}
       </> : null}
-      <details><summary>{c.legacy}</summary><p>{c.legacyWhy}</p><a className='btn' href={oldRoutes.record(sessionId)}>{c.legacy}</a></details>
+      <details><summary>{c.legacy}</summary><p>{c.legacyWhy}</p><ButtonLink href={oldRoutes.record(sessionId)}>{c.legacy}</ButtonLink></details>
     </>}
   </section>;
 }
@@ -186,15 +202,15 @@ function Downloads({ reportId }: { reportId: string }) {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch { setError(c.downloadFailed); } finally { setBusy(false); }
   }
-  return <div className='record-downloads' aria-busy={busy}>{([['docx', c.word], ['pdf', c.pdf], ['md', c.md], ['json', c.json], ['csv', c.csv], ['meeting-docx', c.meeting], ['meeting-pdf', c.meetingPdf], ['xlsx', c.xlsx]] as const).map(([format, word]) => <a key={format} className={`btn ${format === 'docx' ? 'btn-primary btn-big' : ''}`} href={reportPath(reportId, `.${format}`)} aria-disabled={busy} onClick={e => void download(e, format)}>{word}</a>)}{busy ? <p role='status'>{c.downloading}</p> : null}{error ? <Note>{error}</Note> : null}</div>;
+  return <div className='record-downloads' aria-busy={busy}>{([['docx', c.word], ['pdf', c.pdf], ['md', c.md], ['json', c.json], ['csv', c.csv], ['meeting-docx', c.meeting], ['meeting-pdf', c.meetingPdf], ['xlsx', c.xlsx]] as const).map(([format, word]) => <ButtonLink key={format} variant={format === 'docx' ? 'primary' : 'secondary'} size={format === 'docx' ? 'big' : 'normal'} href={reportPath(reportId, `.${format}`)} aria-disabled={busy} onClick={e => void download(e, format)}>{word}</ButtonLink>)}{busy ? <p role='status'>{c.downloading}</p> : null}{error ? <Note>{error}</Note> : null}</div>;
 }
 
 function ValueReview({ item, reportId, editable, refresh }: { item: ReviewValue; reportId: string; editable: boolean; refresh: () => void }) {
   const [text, setText] = useState(item.text), [editing, setEditing] = useState(false), [busy, setBusy] = useState(false), [failed, setFailed] = useState(false);
   async function save(action: string) { setBusy(true); setFailed(false); try { await postJson(reportPath(reportId, `/review/${encodeURIComponent(item.item_id)}`), { action, ...(action === 'correct' ? { text } : {}) }); setEditing(false); refresh(); } catch { setFailed(true); } finally { setBusy(false); } }
-  return <li className='record-review'><p>{item.step_label ? c.step(item.step_label) + ' · ' : ''}{item.kind} · {item.text} <strong>{item.confirmed ? c.confirmed : c.unconfirmed}</strong></p>
+  return <li className='record-review' data-confirmed={item.confirmed}><p>{item.step_label ? c.step(item.step_label) + ' · ' : ''}{item.kind} · {item.text} <Chip chip={{ kind: item.confirmed ? 'ready' : 'review', text: item.confirmed ? c.confirmed : c.unconfirmed }} /></p>
     {item.corrected ? <p>{c.original(item.original || '')}</p> : null}
-    {editable ? <div className='record-actions'>{!item.confirmed ? <button className='btn' disabled={busy} onClick={() => void save('confirm')}>{c.confirm}</button> : null}<button className='btn' disabled={busy} onClick={() => setEditing(!editing)}>{c.edit}</button>{editing ? <><label className='field'><span>{c.value}</span><input maxLength={800} value={text} onChange={e => setText(e.target.value)} /></label><button className='btn' disabled={busy || !text.trim()} onClick={() => void save('correct')}>{c.correct}</button></> : null}</div> : null}
+    {editable ? <div className='record-actions'>{!item.confirmed ? <Button icon={Check} disabled={busy} onClick={() => void save('confirm')}>{c.confirm}</Button> : null}<Button variant='quiet' icon={Pencil} aria-expanded={editing} disabled={busy} onClick={() => setEditing(!editing)}>{c.edit}</Button>{editing ? <><Field label={c.value}><TextInput maxLength={800} value={text} onChange={e => setText(e.target.value)} /></Field><Button variant='primary' disabled={busy || !text.trim()} onClick={() => void save('correct')}>{c.correct}</Button></> : null}</div> : null}
     {failed ? <Note>{c.saveFailed}</Note> : null}
   </li>;
 }
@@ -202,7 +218,7 @@ function ValueReview({ item, reportId, editable, refresh }: { item: ReviewValue;
 function PiConfirmation({ reportId, refresh }: { reportId: string; refresh: () => void }) {
   const [comment, setComment] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   async function save() { setBusy(true); try { await postJson(reportPath(reportId, '/pi-confirmations'), { comment }); setMessage(c.saved); refresh(); } catch { setMessage(c.saveFailed); } finally { setBusy(false); } }
-  return <section className='record-section'><h2>{c.pi}</h2><p>{c.piWhy}</p><label className='field'><span>{c.piComment}</span><input maxLength={300} value={comment} onChange={e => setComment(e.target.value)} /></label><button className='btn' disabled={busy} onClick={() => void save()}>{c.piSave}</button>{message ? <p role='status'>{message}</p> : null}</section>;
+  return <section className='record-section'><h2>{c.pi}</h2><p>{c.piWhy}</p><Field label={c.piComment}><TextInput maxLength={300} value={comment} onChange={e => setComment(e.target.value)} /></Field><Button disabled={busy} onClick={() => void save()}>{c.piSave}</Button>{message ? <p role='status'>{message}</p> : null}</section>;
 }
 
 const DEFAULT_NOTEBOOK_SECTIONS: NotebookSection[] = [
@@ -256,7 +272,7 @@ function DomainNotebook({ notebook, reportId, editable, refresh }: { notebook: N
   const [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   async function save() { setBusy(true); setMessage(''); try { await recordsApi.selectDomain(reportId, selected); setMessage(c.saved); refresh(); } catch { setMessage(c.saveFailed); } finally { setBusy(false); } }
   return <>
-    {editable ? <div className='record-actions'><label className='field'><span>{c.domainProfile}</span><select value={selected} onChange={event => setSelected(event.target.value)}>{Object.entries(c.domainOptions).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></label><button className='btn' disabled={busy || selected === domain?.code} onClick={() => void save()}>{c.domainSave}</button>{message ? <p role='status'>{message}</p> : null}</div> : null}
+    {editable ? <div className='record-actions'><Field label={c.domainProfile}><Select value={selected} onChange={event => setSelected(event.target.value)}>{Object.entries(c.domainOptions).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></Field><Button disabled={busy || selected === domain?.code} onClick={() => void save()}>{c.domainSave}</Button>{message ? <p role='status'>{message}</p> : null}</div> : null}
     {hasDomainContent ? <><h3>{domain?.label || c.domainOptions.general}</h3><Rows heads={c.domainHeads} rows={(domain?.fields ?? []).filter(field => field.value).map(field => [field.label, field.value, [c.fieldOrigins[field.origin] || '', field.formula ? c.formula(field.formula) : ''].filter(Boolean).join('\n')])} /></> : <div className='notebook-blank'>{c.blank}</div>}
     {(notebook.plate_positions ?? []).length ? <><h3>{c.plateLayout}</h3><div className='notebook-plate'>{notebook.plate_positions!.map((position, i) => <article key={`${position.label}-${i}`}><strong>{position.label}</strong><span>{position.step_label ? c.step(position.step_label) : c.outside}</span><p>{position.words}</p></article>)}</div></> : null}
     {(notebook.sample_rows ?? []).length ? <><h3>{c.sampleRecords}</h3><Rows heads={c.sampleRecordHeads} rows={notebook.sample_rows!.map(row => [row.identifier, row.records.join('\n')])} /></> : null}
@@ -295,7 +311,7 @@ function InventoryNotebook({ notebook, reportId, editable, refresh }: { notebook
   return <>
     <h3>{c.methodsInventory}</h3>
     <Rows heads={c.inventoryHeads} rows={inventory.map(item => [item.name, item.kind, item.vendor, item.catalog_number, item.lot_number, c.inventoryStages[item.stage] || ''])} />
-    {editable && inventory.length ? <div className='notebook-inventory-form'><label className='field'><span>{c.inventoryItem}</span><select value={selected} onChange={event => choose(event.target.value)}>{inventory.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label><label className='field'><span>{c.vendor}</span><input maxLength={200} value={vendor} onChange={event => setVendor(event.target.value)} /></label><label className='field'><span>{c.catalog}</span><input maxLength={200} value={catalog} onChange={event => setCatalog(event.target.value)} /></label><label className='field'><span>{c.lot}</span><input maxLength={200} value={lot} onChange={event => setLot(event.target.value)} /></label><label className='field'><span>{c.inputStage}</span><select value={stage} onChange={event => setStage(event.target.value)}><option value='before'>{c.inventoryStages.before}</option><option value='after'>{c.inventoryStages.after}</option></select></label><button className='btn' disabled={busy || !selected || ![vendor, catalog, lot].some(value => value.trim())} onClick={() => void save()}>{c.inventorySave}</button>{message ? <p role='status'>{message}</p> : null}</div> : null}
+    {editable && inventory.length ? <div className='notebook-inventory-form'><Field label={c.inventoryItem}><Select value={selected} onChange={event => choose(event.target.value)}>{inventory.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</Select></Field><Field label={c.vendor}><TextInput maxLength={200} value={vendor} onChange={event => setVendor(event.target.value)} /></Field><Field label={c.catalog}><TextInput maxLength={200} value={catalog} onChange={event => setCatalog(event.target.value)} /></Field><Field label={c.lot}><TextInput maxLength={200} value={lot} onChange={event => setLot(event.target.value)} /></Field><Field label={c.inputStage}><Select value={stage} onChange={event => setStage(event.target.value)}><option value='before'>{c.inventoryStages.before}</option><option value='after'>{c.inventoryStages.after}</option></Select></Field><Button disabled={busy || !selected || ![vendor, catalog, lot].some(value => value.trim())} onClick={() => void save()}>{c.inventorySave}</Button>{message ? <p role='status'>{message}</p> : null}</div> : null}
   </>;
 }
 
@@ -307,7 +323,7 @@ function SharingComparison({ reportId, editable }: { reportId: string; editable:
   async function toggle() { if (!sharing.data) return; setBusy(true); setFailed(false); try { await recordsApi.changeSharing(reportId, !sharing.data.shared); await sharing.refetch(); await comparison.refetch(); } catch { setFailed(true); } finally { setBusy(false); } }
   return <section className='record-section notebook-comparison'><h2>{c.comparison}</h2><p>{c.comparisonWhy}</p>
     <p>{c.comparisonShareWarning}</p>
-    {sharing.isPending ? <LoadingBox label={c.loading} /> : sharing.isError ? <Note>{c.comparisonFailed}</Note> : <button className='btn' disabled={busy} onClick={() => void toggle()}>{sharing.data.shared ? c.shareOff : c.shareOn}</button>}
+    {sharing.isPending ? <LoadingBox label={c.loading} /> : sharing.isError ? <Note>{c.comparisonFailed}</Note> : <Button disabled={busy} onClick={() => void toggle()}>{sharing.data.shared ? c.shareOff : c.shareOn}</Button>}
     {failed ? <Note>{c.saveFailed}</Note> : null}
     {comparison.isPending ? <LoadingBox label={c.loading} /> : comparison.isError ? <Note>{c.comparisonFailed}</Note> : <div className='comparison-grid'>{comparison.data.records.map((record, i) => <article key={`${record.label}-${i}`} className={record.record_scope === 'shared' ? 'shared' : ''}><h3>{record.label}</h3>{record.value_rows.length ? <Rows heads={c.compareValueHeads} rows={record.value_rows.map(row => [row.step_label, row.source, row.actual])} /> : null}{record.method_rows.length ? <Rows heads={c.compareMethodHeads} rows={record.method_rows.map(row => [row.step_label, row.actual_values, [row.started_at, row.ended_at, row.timer].filter(Boolean).join(' · ')])} /> : null}{record.notes.map((note, j) => <p key={`${note.at}-${j}`}><strong>{note.step_label ? c.step(note.step_label) : c.outside}</strong> · {note.at} · {note.text}</p>)}</article>)}</div>}
     <p className='muted'>{c.comparisonRule}</p>
@@ -319,7 +335,7 @@ function NotebookTemplateEditor({ template, refresh }: { template: NotebookSecti
   function rename(index: number, name: string) { setSections(rows => rows.map((row, i) => i === index ? { ...row, name } : row)); }
   function move(index: number, by: number) { setSections(rows => { const target = index + by; if (target < 0 || target >= rows.length) return rows; const next = [...rows]; [next[index], next[target]] = [next[target], next[index]]; return next; }); }
   async function save() { setBusy(true); setMessage(''); try { await recordsApi.saveNotebookTemplate(sections); setMessage(c.saved); refresh(); } catch { setMessage(c.saveFailed); } finally { setBusy(false); } }
-  return <details className='record-section notebook-template'><summary>{c.template}</summary><p>{c.templateWhy}</p><ol>{sections.map((section, i) => <li key={section.id}><input aria-label={c.templateName} maxLength={60} value={section.name} onChange={event => rename(i, event.target.value)} /><button className='btn' aria-label={c.moveUp(section.name)} disabled={i === 0} onClick={() => move(i, -1)}>↑</button><button className='btn' aria-label={c.moveDown(section.name)} disabled={i === sections.length - 1} onClick={() => move(i, 1)}>↓</button></li>)}</ol><button className='btn' disabled={busy || sections.some(section => !section.name.trim())} onClick={() => void save()}>{c.templateSave}</button>{message ? <p role='status'>{message}</p> : null}</details>;
+  return <details className='record-section notebook-template'><summary>{c.template}</summary><p>{c.templateWhy}</p><ol>{sections.map((section, i) => <li key={section.id}><TextInput aria-label={c.templateName} maxLength={60} value={section.name} onChange={event => rename(i, event.target.value)} /><Button variant='quiet' aria-label={c.moveUp(section.name)} disabled={i === 0} onClick={() => move(i, -1)}>↑</Button><Button variant='quiet' aria-label={c.moveDown(section.name)} disabled={i === sections.length - 1} onClick={() => move(i, 1)}>↓</Button></li>)}</ol><Button disabled={busy || sections.some(section => !section.name.trim())} onClick={() => void save()}>{c.templateSave}</Button>{message ? <p role='status'>{message}</p> : null}</details>;
 }
 
 function GroundedNotebookSections({ notebook: n, review, reportStatus, reportId, editable, refresh }: { notebook: Notebook; review: ReviewValue[]; reportStatus: string; reportId: string; editable: boolean; refresh: () => void }) {
@@ -350,7 +366,7 @@ export function NotebookScreen({ sessionId, reportId, session }: { sessionId: st
   const refresh = () => { void query.refetch(); void client.invalidateQueries({ queryKey: ['report-prose', reportId] }); };
   const refreshTemplate = () => { void labTemplate.refetch(); refresh(); };
   return <section className='records-screen notebook-screen' data-testid='notebook-screen'>
-    <a className='btn btn-quiet' href={routes.record(sessionId)}>{c.timeline}</a><h1>{c.notebooks}</h1><p className='page-why'>{c.notebookWhy}</p>
+    <ButtonLink variant='quiet' href={routes.record(sessionId)}>{c.timeline}</ButtonLink><h1>{c.notebooks}</h1><p className='page-why'>{c.notebookWhy}</p>
     {query.isSuccess && !mismatched ? <ReportPreparation key={reportId} reportId={reportId} editable={editable && data!.report.status !== 'in_progress'} refresh={refresh} /> : null}
     {query.isPending ? <LoadingBox label={c.loading} /> : query.isError || mismatched ? <ErrorBox message={c.failed} onRetry={refresh} /> : !n ? <EmptyBox message={c.noNotebook} /> : <>
       <h2>{n.title}</h2><Downloads key={reportId} reportId={reportId} />
@@ -365,13 +381,14 @@ export function NotebookScreen({ sessionId, reportId, session }: { sessionId: st
 
 export function BinderScreen({ binderId }: { binderId: string }) {
   const query = useQuery({ queryKey: ['notebook-binder', binderId], queryFn: () => recordsApi.binder(binderId) });
+  const { time } = useTime();
   useSignOutOnExpiry(query.error);
   const binder = query.data;
   return <section className='records-screen notebook-screen binder-screen' data-testid='binder-screen'>
-    <a className='btn btn-quiet' href={routes.records}>{c.back}</a>
+    <ButtonLink variant='quiet' href={routes.records}>{c.back}</ButtonLink>
     {query.isPending ? <LoadingBox label={c.loading} /> : query.isError ? <ErrorBox message={c.binderFailed} onRetry={() => void query.refetch()} /> : binder ? <>
       <h1>{binder.topic_name}</h1><p className='page-why'>{c.binderDocumentWhy}</p>
-      <div className='record-downloads'><a className='btn btn-primary btn-big' href={`/api/notebook-binders/${encodeURIComponent(binder.binder_id)}.docx`}>{c.binderWord}</a><a className='btn' href={`/api/notebook-binders/${encodeURIComponent(binder.binder_id)}.pdf`}>{c.binderPdf}</a></div>
+      <div className='record-downloads'><ButtonLink variant='primary' size='big' href={`/api/notebook-binders/${encodeURIComponent(binder.binder_id)}.docx`}>{c.binderWord}</ButtonLink><ButtonLink href={`/api/notebook-binders/${encodeURIComponent(binder.binder_id)}.pdf`}>{c.binderPdf}</ButtonLink></div>
       <section className='record-section'><h2>{c.binderToc}</h2><Rows heads={c.binderTocHeads} rows={binder.entries.map(entry => [entry.protocol_title, time(entry.started_at), time(entry.ended_at), state(entry.status)])} /></section>
       {binder.entries.map(entry => <article className='binder-entry' key={entry.report_id}>
         <h2>{entry.protocol_title}</h2><Rows rows={[[c.binderStart, time(entry.started_at)], [c.binderEnd, time(entry.ended_at)], [c.status, state(entry.status)], [c.binderRecord, entry.report_id]]} />

@@ -1,8 +1,11 @@
-/* The experiment screen (lane RX2, person's decisions 2 and 3 of 2026-10-25).
+/* The experiment screen (lane RX2, person's decisions 2 and 3 of 2026-10-25;
+   laid out again by lane UI1, person's request of 2026-10-31).
    The whole screen while a run goes: the listening word and the controls on
-   top, the step large in the middle with its pictures, the records beside it
-   (a column on a wide screen, a folding panel at the bottom on a narrow one,
-   its head and buttons always shown), the caption in two whole lines at the
+   top; on a wide screen two equal halves -- the step on the left with the
+   records folded under it (their head and buttons always shown), the timer
+   in the top third of the right half and the pictures in the two thirds
+   below; on a narrow screen one column -- the step, the timer, the pictures,
+   the records folded at the bottom; the caption in two whole lines at the
    bottom. Sizes are the Run tokens (tokens.css): lane TAB's 1.5 m values on a
    tablet, the design system's Run scale elsewhere. Colour only for a state:
    danger for [종료] alone, the warning family for "잘 안 들렸어요" and an ended
@@ -50,15 +53,39 @@ body[data-run="on"] { background: var(--paper); }
 
 .run {
   position: relative; height: 100dvh; overflow: hidden; background: var(--paper);
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 32%);
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  grid-template-areas: "bar bar" "alerts alerts" "main side" "caption caption";
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "bar bar" "alerts alerts" "main side" "records side" "caption caption";
 }
 .run[data-layout="narrow"] {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
-  grid-template-areas: "bar" "alerts" "main" "side" "caption";
+  grid-template-areas: "bar" "alerts" "main" "records" "caption";
 }
+
+/* --- The right half: the timer in the top third, the pictures below ------- */
+/* The timer's row is a third of the half and never less than the timer itself (its digits keep the Run size). */
+.run-side {
+  grid-area: side; min-height: 0; display: grid; grid-template-rows: minmax(min-content, 1fr) minmax(0, 2fr);
+  border-left: var(--border) solid var(--line); background: var(--paper);
+}
+.run-side > .run-timers { border-bottom: var(--border) solid var(--line); padding: var(--space-4) var(--space-6); display: flex; flex-direction: column; justify-content: center; }
+.run-side > .run-visuals { min-height: 0; overflow-y: auto; padding: var(--space-4) var(--space-6); }
+.run-timers-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.run-timers .run-timer {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--space-1) var(--space-4); width: 100%;
+  padding: var(--space-3) var(--space-4); border-width: var(--border-state);
+}
+.run-timers .run-timer-name { grid-column: 1; font-size: var(--run-status); line-height: var(--run-status-line); }
+.run-timers .run-timer-name svg { width: 24px; height: 24px; }
+.run-timers .run-timer-digits { grid-column: 1 / -1; font-size: var(--run-timer); line-height: 1; }
+.run-timers .run-timer-words { grid-column: 2; grid-row: 1; position: static; width: auto; height: auto; overflow: visible; clip: auto; font-size: var(--run-status); line-height: var(--run-status-line); }
+.run-timers .run-timer-bar { width: 100%; height: 8px; }
+/* Several at once: each a little smaller, still far above the next-step size. */
+.run-timers[data-count="2"] .run-timer-digits, .run-timers[data-count="3"] .run-timer-digits { font-size: calc(var(--run-timer) * 0.6); }
+.run-timers-empty, .run-visuals-empty { display: flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 600; }
+.run-timers-empty svg, .run-visuals-empty svg { width: 24px; height: 24px; flex: none; }
+.run-side > .run-visuals:has(.run-visuals-empty) { display: flex; align-items: center; }
 
 /* --- The bar: the listening word, the timer chip, the controls ------------ */
 .run-bar {
@@ -167,6 +194,15 @@ body[data-run="on"] { background: var(--paper); }
 .run-figure { margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .run-figure-open { position: relative; display: block; width: 100%; padding: 0; border: var(--border) solid var(--line-strong); border-radius: var(--radius); background: var(--paper); cursor: zoom-in; }
 .run-figure-image { display: block; width: 100%; height: min(44dvh, 520px); object-fit: contain; }
+/* In the right half: one picture fills the two thirds; more share them, one under another; each picture keeps 160 px
+   and its caption below it (the panel scrolls when they do not fit), the picture never spilling over its caption. */
+.run-side > .run-figures { grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(min-content, 1fr); }
+.run-side .run-figure { min-height: 0; display: grid; grid-template-rows: minmax(160px, 1fr) auto; }
+.run-side .run-figure-open { height: 100%; min-height: 0; overflow: hidden; }
+.run-side .run-figure-image { position: absolute; inset: 0; height: 100%; }
+.run-figure-credit { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); width: 100%; color: var(--ink-muted); }
+.run-figure-credit a { display: inline-flex; align-items: center; gap: var(--space-1); min-height: 48px; color: var(--ink); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.run-figure-credit svg { width: 20px; height: 20px; }
 .run-figure-zoom { position: absolute; right: var(--space-2); bottom: var(--space-2); display: inline-flex; padding: var(--space-2); border: var(--border) solid var(--ink); border-radius: var(--radius); background: var(--paper); }
 .run-figure-zoom svg { width: 24px; height: 24px; }
 .run-figure figcaption { display: flex; flex-wrap: wrap; gap: var(--space-2); font-size: var(--run-status); line-height: var(--run-status-line); }
@@ -179,7 +215,7 @@ body[data-run="on"] { background: var(--paper); }
 .figure-full-caption { font-size: var(--run-next); line-height: var(--run-next-line); }
 
 /* --- The records, beside the step ------------------------------------------ */
-.run-records { grid-area: side; display: flex; flex-direction: column; min-height: 0; border-left: var(--border) solid var(--line); background: var(--paper); }
+.run-records { grid-area: records; display: flex; flex-direction: column; min-height: 0; border-top: var(--border-state) solid var(--ink); background: var(--paper); }
 .run-records-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); padding: var(--space-3) var(--space-4); border-bottom: var(--border) solid var(--line); }
 .run-records-head h2 { font-size: var(--run-status); line-height: var(--run-status-line); font-weight: 700; }
 .run-records-count { color: var(--ink-muted); font-weight: 600; }
@@ -195,8 +231,7 @@ body[data-run="on"] { background: var(--paper); }
 .run-records-list li[data-state="retracted"] .run-record-text { text-decoration: line-through; color: var(--ink-muted); }
 .run-record-kind { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-label); line-height: var(--line-label); font-weight: 600; }
 .run-record-kind svg { width: 16px; height: 16px; }
-.run[data-layout="narrow"] .run-records { border-left: 0; border-top: var(--border-state) solid var(--ink); }
-.run[data-layout="narrow"] .run-records-body { max-height: 36dvh; }
+.run-records-body { max-height: 36dvh; }
 .run[data-layout="narrow"] .run-records-head { padding: var(--space-2) var(--space-4); }
 
 /* --- The caption: two whole lines; a press opens the conversation ---------- */
