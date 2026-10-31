@@ -4405,7 +4405,68 @@ def get_workspace_experiments(active_only:bool=False)->dict[str,object]:
             else {**item,"protocol_title":titles.get(str(item.get("protocol_id")))}
             for item in experiments
         ]
-    return {"experiments":_record_list_ratings(experiments)}
+    # Lane UI1: when each run started, newest first, with its unconfirmed
+    # values, and the zone the screen says times in (the notebook's).
+    return {
+        "experiments":_record_list_runs(_record_list_ratings(experiments)),
+        "timezone":report_timezone().key,
+    }
+
+
+def _record_list_moment(value:object)->datetime:
+    try:
+        moment=datetime.fromisoformat(str(value))
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _record_list_runs(experiments:list[dict[str,object]])->list[dict[str,object]]:
+    """Each run's start, last record status and unconfirmed values, newest first (lane UI1).
+
+    An experiment can be made and left ready, and its protocol run days later
+    in it (a voice session takes up the ready experiment), so the
+    experiment's own ``started_at`` is not when the run began: ``run_started_at``
+    is its latest visible record's start, else the experiment's. The count is
+    of the visible records' values the researcher has not confirmed (None
+    when there is no record), so a stopped run with unconfirmed values is
+    listed and says so. The order is by ``run_started_at``, not ``updated_at``.
+    """
+
+    result=[
+        {**item,"run_started_at":item.get("started_at"),"report_status":None,"unconfirmed_count":None}
+        for item in experiments
+    ]
+    settings=ExperimentReportSettings.from_environment()
+    if settings.enabled and settings.database_path is not None:
+        _migrate_report_ownership()
+        reports=ExperimentReportStore(settings.database_path)
+        for item in result:
+            try:
+                visible=[]
+                for report in reports.list_reports(session_id=str(item["session_id"])):
+                    try:
+                        _scope_tenant_resource("experiment_report",report["report_id"])
+                    except WorkspaceNotFoundError:
+                        continue
+                    visible.append(report)
+                if not visible:
+                    continue
+                latest=max(visible,key=lambda report:_record_list_moment(report.get("started_at")))
+                item["run_started_at"]=latest.get("started_at") or item.get("started_at")
+                item["report_status"]=latest.get("status")
+                item["unconfirmed_count"]=sum(
+                    1 for report in visible
+                    for entry in report_review_items(reports.get_report(report["report_id"])["events"])
+                    if not entry["confirmed"]
+                )
+            except (OSError,sqlite3.Error,ValueError,KeyError):
+                log.info("record list run values unavailable")
+    return sorted(
+        result,
+        key=lambda item:(_record_list_moment(item.get("run_started_at")),str(item.get("session_id"))),
+        reverse=True,
+    )
 
 
 def _record_list_ratings(experiments:list[dict[str,object]])->list[dict[str,object]]:
