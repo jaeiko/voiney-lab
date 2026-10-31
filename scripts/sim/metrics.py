@@ -141,6 +141,14 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
         'timings_ms': result['timings_ms'], 'stt_calls':result.get('stt_calls',0), 'stt_responses':result.get('stt_responses',0),
         'stt': stt_summary, 'stt_counts': counts,
     }
+    grounding = result.get('grounding')
+    if isinstance(grounding, dict):
+        row.update(
+            grounding_measured=True,
+            grounded_answer=bool(grounding.get('grounded')),
+            invented_values=bool(grounding.get('invented_values')),
+            generated_safety=bool(grounding.get('generated_safety')),
+        )
     router = _content_free_router(result)
     if router is not None:
         row['router'] = router
@@ -210,6 +218,17 @@ def aggregate(rows: list[dict]) -> dict:
             'wearer_dropped':sum(r.get('wearer_dropped',False) for r in group),
             'noise_sent_to_stt':sum(r.get('noise_sent_to_stt',False) for r in group),
             'impact_reopened':sum(r.get('impact_reopened',False) for r in group),
+            'grounding_cases':sum(r.get('grounding_measured',False) for r in group),
+            'grounded_answers':sum(r.get('grounded_answer',False) for r in group),
+            'grounding_accuracy':(
+                round(
+                    sum(r.get('grounded_answer',False) for r in group)
+                    / sum(r.get('grounding_measured',False) for r in group), 4,
+                )
+                if any(r.get('grounding_measured',False) for r in group) else None
+            ),
+            'invented_values':sum(r.get('invented_values',False) for r in group),
+            'generated_safety':sum(r.get('generated_safety',False) for r in group),
             'non_korean': sum(r['korean'] is False for r in group),
             'drops': dict(Counter(d for r in group for d in r['drops'])),
             'stt_failures':stt_failures,

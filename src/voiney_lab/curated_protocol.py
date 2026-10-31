@@ -6136,7 +6136,10 @@ _PROBLEM_KNOWLEDGE_LOCK = threading.Lock()
 #: Lane HELP: the record's category of a problem no anomaly pattern names.
 PROBLEM_CATEGORY = "unexpected_result"
 #: The intents the problem reader makes (front rule "problem_help").
-_PROBLEM_HELP_KINDS = frozenset({"problem_question", "problem_report", "problem_not_yet", "vague_check"})
+_PROBLEM_HELP_KINDS = frozenset({
+    "grounded_problem_question", "problem_question", "problem_report",
+    "problem_not_yet", "vague_check",
+})
 #: What the rules made of a move said with a claim before lane SAY (decision
 #: 6): the claim answered alone, or nothing; the move was dropped.
 _MIXED_MOVE_READINGS = frozenset({
@@ -8706,8 +8709,8 @@ def curated_intent_from_arbitration(
     }
     if decision.reason_code == 'problem_contingency_question':
         return CuratedControlIntent(
-            intent_kind='problem_contingency_question',
-            action=CuratedProtocolAction.RELATED_QUESTION,
+            intent_kind='grounded_problem_question',
+            action=CuratedProtocolAction.PROBLEM_HELP,
             target_step='authoritative_current_step', question_kind='troubleshooting',
             **common,
         )
@@ -13930,15 +13933,31 @@ class CuratedProtocolSession:
         recorded by this plan and nothing moves.
         """
 
-        from voiney_lab.knowledge import compose_problem_help
+        from voiney_lab.knowledge import (
+            compose_grounded_problem_answer,
+            compose_problem_help,
+        )
 
         marker = self._problem_help_marker(
-            transcript, kind="not_yet" if intent.intent_kind == "problem_not_yet" else "question")
+            transcript,
+            kind=(
+                "grounded_question"
+                if intent.intent_kind == "grounded_problem_question"
+                else "not_yet" if intent.intent_kind == "problem_not_yet" else "question"
+            ),
+        )
         hits = self.problem_knowledge().search_sync(
             marker["words"], limit=4, context=self.problem_help_context(marker, language=language))
-        help_ = compose_problem_help(hits, language=language)
         steps = self.fixture.steps
         step = steps[self.current_index]
+        help_ = (
+            compose_grounded_problem_answer(
+                hits, language=language, step_label=step.source_label,
+                step_page=int(step.evidence.source_page_number),
+            )
+            if marker["kind"] == "grounded_question"
+            else compose_problem_help(hits, language=language)
+        )
         return CuratedProtocolTurnPlan(
             action=CuratedProtocolAction.PROBLEM_HELP,
             display_text=help_.shown,

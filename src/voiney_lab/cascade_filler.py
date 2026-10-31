@@ -12,10 +12,11 @@ Either cue carries no protocol content, starts only once ``delay_ms`` has passed
 with the primary turn still pending, and is cleared the moment the primary
 audio is admitted.
 
-Nothing is said while a turn waits unless a deployment asks for it (lane XO,
-decision 7 of 2026-10-05): a fixed sentence read out while waiting sounds like
-a script being read. With ``VOINEY_LAB_CASCADE_FILLER_STATUS_SPEECH_ENABLED``
-true, a tone-mode turn that is still pending at
+General status speech is silent unless a deployment asks for it (lane XO,
+decision 7 of 2026-10-05). The one exception is an exact-source answer still
+pending after three seconds: it says the fixed source-check cue for every such
+turn. With ``VOINEY_LAB_CASCADE_FILLER_STATUS_SPEECH_ENABLED`` true, another
+tone-mode turn that is still pending at
 ``VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS`` (1.5 s by default) also hears,
 once, what the server is doing at that moment (``FILLER_STATUS_PHRASES``) --
 read from the turn's own progress state, the same state its Turn card shows,
@@ -74,6 +75,9 @@ def cascade_filler_status_speech_enabled(
 
 FILLER_STATUS_DELAY_ENV = "VOINEY_LAB_CASCADE_FILLER_STATUS_DELAY_MS"
 DEFAULT_FILLER_STATUS_DELAY_MS = 1500
+# A grounded answer that still waits for the exact-source selector gets one
+# fixed progress sentence at this product latency boundary.
+GROUNDED_ANSWER_STATUS_DELAY_MS = 3000
 
 
 def cascade_filler_status_delay_ms(
@@ -128,14 +132,21 @@ FILLER_STATUS_PHRASES = {
     },
 }
 
+GROUNDED_ANSWER_STATUS_PHRASES = {
+    "ko": "원문과 맞춰 보는 중이에요.",
+    "en": "Checking this against the source.",
+    "vi": "Đang đối chiếu với tài liệu nguồn.",
+}
+
 
 @dataclass
 class FillerSessionMemory:
     """What one listening session has already said while waiting.
 
-    ``last_status_phrase`` keeps a session from saying the same status sentence
-    twice in a row; ``status_audio`` keeps each sentence's synthesized audio so
-    it is made once per session, not once per turn.
+    ``last_status_phrase`` keeps a session from saying the same general status
+    sentence twice in a row. The grounded-answer cue is intentionally allowed
+    once in every qualifying turn. ``status_audio`` keeps each sentence's
+    synthesized audio so it is made once per session, not once per turn.
     """
 
     last_status_phrase: str | None = None
@@ -322,8 +333,15 @@ class CascadeFiller:
         ):
             return
         activity = self._activity()
-        phrase = FILLER_STATUS_PHRASES[self.language].get(activity or "")
-        if phrase is None or phrase == self._memory.last_status_phrase:
+        phrase = (
+            GROUNDED_ANSWER_STATUS_PHRASES[self.language]
+            if activity == "grounding_answer"
+            else FILLER_STATUS_PHRASES[self.language].get(activity or "")
+        )
+        if phrase is None or (
+            activity != "grounding_answer"
+            and phrase == self._memory.last_status_phrase
+        ):
             return
         key = (self.language, phrase)
         pcm = self._memory.status_audio.get(key)
