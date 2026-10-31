@@ -82,7 +82,7 @@
 .protocol-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .detail-safety { border-left: var(--border-state) solid var(--warning-ink); padding: var(--space-3); }
 .record-actions .field { width: 100%; }
-.settings select:not(.field-control), .record-section select:not(.field-control) { font-family: var(--font-sans); font-size: var(--text-body); line-height: var(--line-body); min-height: var(--target); max-width: 100%; width: 100%; padding: var(--space-3); color: var(--ink); background: var(--paper); border: var(--border) solid var(--line-strong); border-radius: var(--radius-small); }
+.settings select:where(:not(.field-control)), .record-section select:where(:not(.field-control)) { font-family: var(--font-sans); font-size: var(--text-body); line-height: var(--line-body); min-height: var(--target); max-width: 100%; width: 100%; padding: var(--space-3); color: var(--ink); background: var(--paper); border: var(--border) solid var(--line-strong); border-radius: var(--radius-small); }
 
 .detail-section { display: flex; flex-direction: column; gap: var(--space-3); }
 .detail-step { border: var(--border) solid var(--line); padding: 0 var(--space-4) var(--space-3); }

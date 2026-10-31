@@ -51,6 +51,16 @@ class ControlsStylesheetTests(unittest.TestCase):
                 self.assertNotRegex(body, r"min-height|font-size|line-height|padding", selectors)
 
 
+class LaterSheetsKeepTheRunSizesTests(unittest.TestCase):
+    def test_records_select_rule_stays_weaker_than_the_run_settings_dialog(self) -> None:
+        # records.css loads after run.css; a select rule there as heavy as `.run-settings-dialog .settings select`
+        # dropped the in-run settings to 48 px / 16 px (lane UI1's CI, RX5 walk). Its exclusion is under :where().
+        css = (STYLES / "records.css").read_text(encoding="utf-8")
+        for selectors, _ in re.findall(r"([^{}]+)\{([^}]*)\}", css):
+            if "select" in selectors:
+                self.assertNotRegex(selectors, r"select:not\(", selectors)
+
+
 class RunLayoutTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
