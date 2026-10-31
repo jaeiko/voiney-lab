@@ -128,7 +128,7 @@ def add_split_arguments(parser: object) -> None:
 
 
 def select_cases(protocols: Sequence[Protocol], args: object) -> tuple[list[Pair], dict]:
-    from scripts.sim.corpus import generate_cases, generate_development_cases
+    from scripts.sim.corpus import generate_cases, generate_development_cases, generate_supposed_cases
 
     if getattr(args, 'emergency_matrix', False):
         from scripts.sim.emergency_cases import generate_emergency_cases
@@ -143,6 +143,20 @@ def select_cases(protocols: Sequence[Protocol], args: object) -> tuple[list[Pair
             for case in generate_development_cases(protocol)
         )
     )
+    # Lane GEN1: each field's supposed problems, fixed on their own side so
+    # the original partition is the same as before they were added.
+    supposed = {
+        side: (
+            ()
+            if getattr(args, 'emergency_matrix', False)
+            else tuple(
+                (protocol, case)
+                for protocol in protocols
+                for case in generate_supposed_cases(protocol, side)
+            )
+        )
+        for side in ('development', 'holdout')
+    }
     partition = partition_cases(pairs, seed=args.split_seed, holdout_fraction=args.holdout_fraction)
     manifest_path = getattr(args, "case_ids", None)
     case_manifest = (
@@ -162,6 +176,7 @@ def select_cases(protocols: Sequence[Protocol], args: object) -> tuple[list[Pair
         indexed = {
             case.code: (protocol, case)
             for protocol, case in pairs + development_regressions
+            + supposed['development'] + supposed['holdout']
         }
         missing = [
             case_id for case_id in case_manifest.case_ids if case_id not in indexed
@@ -170,11 +185,11 @@ def select_cases(protocols: Sequence[Protocol], args: object) -> tuple[list[Pair
             raise ValueError("case-id manifest contains unknown case ids")
         selected = tuple(indexed[case_id] for case_id in case_manifest.case_ids)
     elif args.split == 'all':
-        selected = pairs + development_regressions
+        selected = pairs + development_regressions + supposed['development'] + supposed['holdout']
     elif args.split == 'development':
-        selected = partition.development + development_regressions
+        selected = partition.development + development_regressions + supposed['development']
     else:
-        selected = partition.holdout
+        selected = partition.holdout + supposed['holdout']
     result = [(p, c) for p, c in selected
               if (not args.protocol or p.code in args.protocol) and (not args.family or c.family in args.family)]
     if args.limit:
@@ -189,8 +204,11 @@ def select_cases(protocols: Sequence[Protocol], args: object) -> tuple[list[Pair
         'text_grouped': True,
     }
     if args.split != 'holdout':
-        metadata['development_cases'] += len(development_regressions)
+        metadata['development_cases'] += len(development_regressions) + len(supposed['development'])
         metadata['development_regression_cases'] = len(development_regressions)
+    if args.split != 'development':
+        metadata['holdout_cases'] += len(supposed['holdout'])
+    metadata['supposed_cases'] = {side: len(supposed[side]) for side in supposed}
     if case_manifest is not None:
         metadata["name"] = "case_ids"
         metadata["case_id_manifest"] = {

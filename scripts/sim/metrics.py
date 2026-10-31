@@ -133,6 +133,9 @@ def score_case(case: Case, result: dict, *, source: str = '', mode: str = 'offli
         'case': case.code, 'family': case.family, 'understood': bool(understood), 'wrong_state': wrong,
         'emergency_miss':bool((case.family == 'emergency' or case.family.startswith('emergency_')) and result['route'] != 'deterministic_emergency'),
         'false_alarm':bool(case.family == 'negative_control' and result['route'] == 'deterministic_emergency'),
+        # Lane GEN1: a supposition recorded as an anomaly (it has not happened).
+        'supposed_misrecorded':bool(case.family == 'supposed_question' and (
+            result['action'] == 'report_anomaly' or 'anomaly' in changed)),
         'error_codes':result.get('error_codes',[]), 'action': result['action'], 'intent_kind': result['intent_kind'], 'route': result['route'],
         'changed_fields': sorted(changed), 'invalid_state': result.get('invalid_state',[]), 'english_copy': english, 'duplicate_label': duplicate,
         'korean': korean, 'drops': result['drop_reasons'], 'interrupted': result.get('interrupted', False),
@@ -213,6 +216,7 @@ def aggregate(rows: list[dict]) -> dict:
             'wrong_state': sum(r['wrong_state'] for r in group), 'english_copy': sum(r['english_copy'] for r in group),
             'emergency_miss':sum(r.get('emergency_miss', False) for r in group),
             'false_alarm':sum(r.get('false_alarm', False) for r in group),
+            'supposed_misrecorded':sum(r.get('supposed_misrecorded', False) for r in group),
             'duplicate_label': sum(r['duplicate_label'] for r in group), 'incomplete': sum(r['incomplete'] for r in group),
             'cut_off':sum(r.get('cut_off',False) for r in group), 'interrupted': sum(r['interrupted'] for r in group),
             'wearer_dropped':sum(r.get('wearer_dropped',False) for r in group),
@@ -236,7 +240,7 @@ def aggregate(rows: list[dict]) -> dict:
             'router': router,
         }
     tables = {}
-    for dimension in ('protocol', 'family', 'protocol_family', 'noise', 'snr', 'effective_snr_db', 'distance_cm', 'denoise', 'voice', 'speed'):
+    for dimension in ('protocol', 'field', 'family', 'protocol_family', 'noise', 'snr', 'effective_snr_db', 'distance_cm', 'denoise', 'voice', 'speed'):
         groups = defaultdict(list)
         for row in rows:
             key = f'{row.get("protocol")}/{row.get("family")}' if dimension == 'protocol_family' else str(row.get(dimension, 'not_measured'))
