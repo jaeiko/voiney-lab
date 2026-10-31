@@ -37,7 +37,7 @@ def compare(before: dict, after: dict, *, allow_router_change: bool = False) -> 
     def index(report: dict) -> dict:
         result = {}
         for r in report['rows']:
-            key = tuple(str(r.get(k)) for k in ('case','protocol','noise','snr','effective_snr_db','distance_cm','denoise','voice','speed'))
+            key = tuple(str(r.get(k)) for k in ('case','protocol','noise','snr','effective_snr_db','distance_cm','denoise','voice','speed','correction','condition','microphone'))
             if key in result:
                 raise ValueError('duplicate case-condition')
             result[key] = r
