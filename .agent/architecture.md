@@ -499,7 +499,12 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   places, not its text. A source that cannot be used raises
   `KnowledgeUnavailable` (its setting) and is skipped; none replaces it.
   A prospective problem/reason/what-if question is the narrower
-  `grounded_problem_question` on the same front rule. It searches only
+  `grounded_problem_question` on the same front rule. A problem supposed
+  rather than reported (`intent_arbitration.supposed_problem_reading`:
+  "-면", "만약", "혹시 … 하면", a transcript cut after "-면") is never
+  recorded (`supposes` keeps the anomaly readers off it) and goes there; one
+  that may be what just happened is asked once ("지금 생긴 일인가요, …"),
+  and the reply is read against the last plan, with no state of its own. It searches only
   `ProtocolKnowledge` for the current revision and `SafetyKnowledge` for
   approved, non-demo safety excerpts that `SafetyPack.guidance_for_step`
   links to the authoritative current step. It never admits history, public
