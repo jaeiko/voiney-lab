@@ -48,6 +48,40 @@ python scripts/sim/compare.py ~/reports/sim/listen3-holdout-before.json \
   ~/reports/sim/listen3-holdout-after.json
 ```
 
+LIVE3 축 `--impact-pattern`은 충격음의 자리를 고른다: `single`(LISTEN3 그대로, 말 뒤
+한 번), `continuous`(말 뒤 0.5초부터 4초 동안 5프레임 간격의 충격음 — 답을 준비하는
+동안 타자를 치는 경우), `mid_speech`(말 위에 겹친 충격음, 30 cm에서 말 최대치보다
+6 dB 큼). `continuous`·`mid_speech`는 workload 지문에 자리가 들어가 `single` 결과와
+비교되지 않는다. 함께 보는 값은 `continuation_joins`(이어 붙이기 수), `end_delay_ms`
+(착용자 마지막 프레임부터 마지막 말 끝까지, p50/p95; 1000 ms 가 정상), `late_end`
+(1500 ms 초과), `impact_reopened`, `wearer_dropped`다.
+
+```bash
+for pattern in continuous mid_speech; do
+  for filter in legacy current; do
+    python scripts/sim/run.py --impact-matrix --impact-pattern $pattern \
+      --impact-filter $filter --split development \
+      --output ~/reports/sim/live3-impact-$pattern-$filter-development.json
+  done
+done
+python scripts/sim/compare.py ~/reports/sim/live3-impact-continuous-legacy-development.json \
+  ~/reports/sim/live3-impact-continuous-current-development.json
+```
+
+진단용 고정 표본 `scripts/sim/manifests/live3_dev_diag_30.json`은 개발 분할에서
+분야(바이오 12·화학 6·소재 6·토양 6)·갈래(명령·질문·기록·그 밖)·길이(짧음·중간·긺)를
+고르게 뽑은 30 case id 다. `scripts/sim/diagnostic_manifest.py --check`가 저장된
+manifest 가 생성 규칙과 같은지 확인하고, `--write`는 규칙을 바꿀 때만 쓴다. 실측은
+`live.py --case-ids`로 같은 30건 × 조건을 돌린다. 시험용(holdout)은 LIVE2 의
+`stt5_representative_40.json`으로 집계만 본다.
+
+```bash
+python scripts/sim/live.py --case-ids scripts/sim/manifests/live3_dev_diag_30.json \
+  --voices ko-KR-Chirp3-HD-Charon --speeds 1 --conditions quiet,centrifuge:10 \
+  --distances 30 --denoise on --max-calls 160 --max-usd 16 \
+  --output ~/reports/sim/live3-diag30-plan.json
+```
+
 저장소의 가상환경을 활성화하고 저장소 루트에서 실행한다.
 
 ```bash
@@ -231,7 +265,11 @@ python scripts/sim/live.py --catalog-copy ~/reports/sim/catalog-snapshot \
 ## 진단 WAV의 익명 말 끝 재생
 
 LISTEN3의 재생은 사람이 정한 UTC 구간만 읽고, 메타데이터의 `word_count`가 0인지와
-제품 `ListenerSession`이 STT 경계(`speech.end`)를 만들었는지만 센다. 원음·파일 이름·
+제품 `ListenerSession`이 STT 경계(`speech.end`)를 만들었는지만 센다. LIVE3부터는
+프레임마다 오디오 시계(20 ms)로 넣어 첫 말 끝 뒤에도 세션이 "답 준비 중"인 채
+듣게 하고(사람이 타자를 치던 때와 같다), 이어 붙이기 수(`continuation_joins`),
+거절된 끼어들기 후보 수, 가장 긴 발화 프레임, 한 발화로 들린 녹음에서 잃은 꼬리
+프레임(`word_bearing_frames_lost`), 녹음 끝 뒤 마지막 말 끝까지의 최대 지연을 함께 낸다. 원음·파일 이름·
 세션·받아쓰기 글은 출력하거나 복사하지 않는다. 아래 시각은 예시이므로 실제 시험 구간으로
 바꾼다. 이 명령은 공급자를 호출하지 않는다.
 
