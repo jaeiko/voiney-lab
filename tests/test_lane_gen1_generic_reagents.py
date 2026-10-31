@@ -102,6 +102,13 @@ class GenericReagentTests(unittest.TestCase):
         self.assertIn("(SAB)", plan["protocol_relation"])
         self.assertTrue(all("sodium acetate buffer" in query for query in plan["query_variants"]))
 
+    def test_how_a_labelled_reagent_is_prepared_is_its_own_sentence(self) -> None:
+        session = _at(CHEMISTRY, "2")
+        plan = session.plan("버퍼 2는 어떻게 준비해", turn_id=1, language="ko")
+        self.assertEqual(plan.intent_kind, "current_protocol_fact")
+        self.assertEqual([fact.fact_id for fact in plan.facts], ["current_step"])
+        self.assertIn("Prepare Buffer 2", plan.display_text)
+
     def test_a_labelled_reagent_key_is_put_in_words(self) -> None:
         self.assertEqual(hide_internal_names("buffer_2를 넣어요."), "버퍼 2를 넣어요.")
         self.assertEqual(hide_internal_names("Add reagent_a.", "en"), "Add reagent A.")

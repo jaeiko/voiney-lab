@@ -8994,37 +8994,13 @@ _VERIFIED_FACT_QUESTION_RULES = {
     "필요한 재료는": ("kind", "material", ()),
     "사용할 장비는": ("kind", "equipment", ()),
     "예상 결과는": ("kind", "expected_result", ()),
-    "용액 a는 어떻게 준비해": (
-        "fact_id", "current_step", ("solution a", "prepare"),
-    ),
-    "용액 에이는 어떻게 준비해": (
-        "fact_id", "current_step", ("solution a", "prepare"),
-    ),
 }
-
-_SOLUTION_A_QUESTION_KEYS = frozenset({
-    "용액 a는 어떻게 준비해",
-    "용액 에이는 어떻게 준비해",
-})
-
-
-def _localized_solution_a_presentation(
-    source_text: str,
-    source_page: int,
-) -> tuple[str, str]:
-    """Keep the verified source visible while failing closed on localization."""
-
-    display = (
-        f"원문\n{source_text}\n\n한국어 참고 번역\n"
-        "검증된 한국어 참고 번역을 사용할 수 없습니다. "
-        f"원문 {source_page}페이지를 확인해 주세요."
-    )
-    speech = (
-        "요청하신 용액 A 준비 방법을 화면에 표시했습니다. "
-        "검증된 한국어 참고 번역을 사용할 수 없어 "
-        f"원문 {source_page}페이지를 확인해 주세요."
-    )
-    return display, speech
+#: Lane GEN1: "용액 A는 어떻게 준비해", "버퍼 2는 어떻게 준비해" -- how any
+#: labelled reagent is prepared, answered by the current step's sentence that
+#: names it and says "prepare" (in-gel's two "용액 a/에이" keys before).
+_PREPARE_LABELLED_QUESTION = re.compile(
+    r"^(?P<noun>용액|솔루션|버퍼|완충액|시약)\s*(?P<mark>[a-z0-9]|[가-힣]{1,2}?)(?:은|는)\s*어떻게\s*준비해$"
+)
 
 
 def _display_contract(
@@ -9410,7 +9386,15 @@ def _select_verified_fact(
     transcript: str,
     facts: tuple[CuratedProtocolFact, ...],
 ) -> CuratedProtocolFact | None:
-    rule = _VERIFIED_FACT_QUESTION_RULES.get(_utterance_key(transcript))
+    key = _utterance_key(transcript)
+    rule = _VERIFIED_FACT_QUESTION_RULES.get(key)
+    asked = _PREPARE_LABELLED_QUESTION.fullmatch(key) if rule is None else None
+    if asked is not None:
+        noun = next(name for name, said in _LABEL_NOUNS.items() if asked.group("noun") in said)
+        mark = asked.group("mark")
+        mark = next((letter for letter, name in _LETTER_NAMES.items() if name == mark), mark)
+        if re.fullmatch(r"[a-z0-9]", mark):
+            rule = ("fact_id", "current_step", (f"{noun} {mark}", "prepare"))
     if rule is None:
         return None
     field, expected, required_terms = rule
