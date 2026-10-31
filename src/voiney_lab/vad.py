@@ -57,6 +57,20 @@ ADAPTIVE_NOISE_WINDOW_FRAMES = 50
 ADAPTIVE_NOISE_MIN_VOICED_SHARE = 0.6
 ADAPTIVE_NOISE_FLOOR_PERCENTILE = 20.0
 ADAPTIVE_NOISE_RISE_DB = 6.0
+#: LIVE3 (2026-10-31): the relative gate's floor is room sound, never the
+#: wearer's own quieter phonemes. In the person's test the first voiced
+#: second of a turn was the wearer speaking, so the floor sat 6 dB over the
+#: wearer's softer frames and the gate counted the end of the sentence as
+#: silence: replaying the recorded clips cut 8--16 frames (160--320 ms) off
+#: the tail of every sentence and split synthetic sentences in two. The
+#: floor is therefore taken only from a second that is steady -- the spread
+#: between the 20th and 80th percentile of its voiced levels within
+#: ADAPTIVE_NOISE_STEADY_SPREAD_DB, as a fan, a pump or a centrifuge is
+#: (synthetic beds: 0.3--5.8 dB) and speech is not (synthetic sentences
+#: 6.5--44 dB, the person's recorded sentences 10.5--42 dB) -- and whose PCM
+#: has no speech shape (``_contains_speech_shape``, checked at most once per
+#: window length).
+ADAPTIVE_NOISE_STEADY_SPREAD_DB = 6.0
 
 #: LISTEN3 (2026-10-29): a short impact can satisfy WebRTC's six-of-ten
 #: resume rule after the wearer has stopped. A bounded acoustic window keeps
@@ -552,6 +566,12 @@ class EndpointDetector:
         self.adaptive_noise_gate = False
         self._adaptive_noise_window: deque[tuple[bool, float]] = deque(
             maxlen=ADAPTIVE_NOISE_WINDOW_FRAMES)
+        #: LIVE3: the window's PCM, so the floor can be refused when the
+        #: second that would define it is speech, not the room.
+        self._adaptive_noise_audio: deque[bytes] = deque(
+            maxlen=ADAPTIVE_NOISE_WINDOW_FRAMES)
+        self._adaptive_noise_frames_seen = 0
+        self._adaptive_noise_shape_checked_at = -ADAPTIVE_NOISE_WINDOW_FRAMES
         self._adaptive_noise_threshold_db: float | None = None
         self._adaptive_noise_armed = False
         #: LISTEN3: production ListenerSession opts in. Direct unit users
@@ -568,10 +588,23 @@ class EndpointDetector:
             maxlen=TRANSIENT_SPEECH_WINDOW_FRAMES
         )
         self._speech_shape_confirmed = False
+        #: LIVE3: whether a bounded window of the utterance under way has
+        #: shown speech shape yet (checked every window step while the
+        #: transient gate is on). The listener reads it before it lets words
+        #: heard during an answer's preparation join the turn before them: a
+        #: bench impact opens an utterance like speech does, but it never
+        #: shows the shape, so it must not cancel that turn.
+        self._speech_shape_seen = False
 
     @property
     def buffered_frames(self) -> int:
         return len(self._utterance)
+
+    @property
+    def speech_shape_seen(self) -> bool:
+        """Whether the utterance under way (or just committed) carried speech shape (LIVE3)."""
+
+        return self._speech_shape_seen or self._speech_shape_confirmed
 
     def reset(self, state: TurnState = TurnState.IDLE) -> None:
         self.state = state
@@ -593,6 +626,7 @@ class EndpointDetector:
         self._transient_followup_audio.clear()
         self._transient_followup_voiced.clear()
         self._speech_shape_confirmed = False
+        self._speech_shape_seen = False
 
     def _forget_level(self) -> None:
         self._wearer_heard = False
@@ -604,6 +638,9 @@ class EndpointDetector:
 
     def _forget_adaptive_noise(self) -> None:
         self._adaptive_noise_window.clear()
+        self._adaptive_noise_audio.clear()
+        self._adaptive_noise_frames_seen = 0
+        self._adaptive_noise_shape_checked_at = -ADAPTIVE_NOISE_WINDOW_FRAMES
         self._adaptive_noise_threshold_db = None
         self._adaptive_noise_armed = False
 
@@ -630,14 +667,39 @@ class EndpointDetector:
             self._transient_followup_audio.clear()
             self._transient_followup_voiced.clear()
             self._speech_shape_confirmed = False
+            self._speech_shape_seen = False
 
-    def _adaptive_endpoint_voiced(self, voiced: bool, level_db: float) -> bool:
+    def _adaptive_floor_is_room_sound(self) -> bool:
+        """Whether the second in the adaptive window is room sound, not speech (LIVE3).
+
+        Decided at most once per window length, so the shape check (about
+        0.35 ms a window, ten windows a second) runs once a second at most
+        while the room keeps the VAD on; a second that has the shape is the
+        wearer talking and defines no floor, and the next full second is
+        looked at again.
+        """
+
+        if (
+            self._adaptive_noise_frames_seen - self._adaptive_noise_shape_checked_at
+            < ADAPTIVE_NOISE_WINDOW_FRAMES
+        ):
+            return False
+        self._adaptive_noise_shape_checked_at = self._adaptive_noise_frames_seen
+        return not _contains_speech_shape(
+            [(frame, True) for frame in self._adaptive_noise_audio]
+        )
+
+    def _adaptive_endpoint_voiced(
+        self, voiced: bool, level_db: float, frame: bytes = b"",
+    ) -> bool:
         """Qualify a VAD verdict against this turn's own low-level room sound."""
 
         if not self.adaptive_noise_gate:
             return voiced
+        self._adaptive_noise_frames_seen += 1
         if self._adaptive_noise_threshold_db is None:
             self._adaptive_noise_window.append((voiced, level_db))
+            self._adaptive_noise_audio.append(frame)
             if len(self._adaptive_noise_window) == ADAPTIVE_NOISE_WINDOW_FRAMES:
                 levels = sorted(
                     level for was_voiced, level in self._adaptive_noise_window
@@ -654,8 +716,20 @@ class EndpointDetector:
                             * ADAPTIVE_NOISE_FLOOR_PERCENTILE / 100
                         ) - 1,
                     )
-                    self._adaptive_noise_threshold_db = (
-                        levels[rank] + ADAPTIVE_NOISE_RISE_DB)
+                    upper = max(
+                        0,
+                        math.ceil(
+                            len(levels)
+                            * (100 - ADAPTIVE_NOISE_FLOOR_PERCENTILE) / 100
+                        ) - 1,
+                    )
+                    steady = (
+                        levels[upper] - levels[rank]
+                        <= ADAPTIVE_NOISE_STEADY_SPREAD_DB
+                    )
+                    if steady and self._adaptive_floor_is_room_sound():
+                        self._adaptive_noise_threshold_db = (
+                            levels[rank] + ADAPTIVE_NOISE_RISE_DB)
         if (
             self._adaptive_noise_threshold_db is not None
             and not self._adaptive_noise_armed
@@ -771,7 +845,7 @@ class EndpointDetector:
         # The room floor records the classifier's original verdict.  The
         # adaptive gate changes only what may keep an utterance open.
         self.last_frame_voiced = raw_voiced
-        voiced = self._adaptive_endpoint_voiced(raw_voiced, frame_level)
+        voiced = self._adaptive_endpoint_voiced(raw_voiced, frame_level, frame)
         level = frame_level if voiced else None
         if self.state == TurnState.IDLE:
             if self._transient_followup_remaining:
@@ -827,6 +901,17 @@ class EndpointDetector:
         self._utterance.append((frame, voiced))
         self._utterance_levels.append(level)
         self._note_voiced(voiced)
+        if self.transient_noise_gate and not self._speech_shape_seen:
+            buffered = len(self._utterance)
+            if (
+                buffered >= TRANSIENT_SPEECH_WINDOW_FRAMES
+                and (buffered - TRANSIENT_SPEECH_WINDOW_FRAMES)
+                % _TRANSIENT_WINDOW_STEP_FRAMES == 0
+                and _speech_shape_evidence(
+                    pcm for pcm, _ in self._utterance[-TRANSIENT_SPEECH_WINDOW_FRAMES:]
+                )
+            ):
+                self._speech_shape_seen = True
         if not self.consecutive_silence_frames:
             if voiced:
                 self.voiced_frames += 1
@@ -973,6 +1058,8 @@ class EndpointDetector:
         )
         if transient_only:
             accepted = False
+        elif self.transient_noise_gate and accepted:
+            self._speech_shape_seen = True
         result = EndpointResult(
             utterance=b"".join(frame for frame, _ in kept)
             if accepted else None,
