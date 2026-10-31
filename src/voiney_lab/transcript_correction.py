@@ -308,9 +308,9 @@ def records_as_heard(plan: Any, correction: TranscriptCorrection | None) -> Any:
     if correction is None or not correction.changed:
         return plan
     fields: dict[str, Any] = {}
-    for name in ("anomaly_text", "observation_outcome", "normalized_transcript"):
+    for name in ("anomaly_text", "observation_outcome"):
         value = getattr(plan, name, None)
-        if isinstance(value, str) and name != "normalized_transcript":
+        if isinstance(value, str):
             restored = correction.as_heard(value)
             if restored != value:
                 fields[name] = restored
