@@ -585,7 +585,7 @@ def incomplete_fragment(text: str) -> bool:
     """Whether the words end in an unfinished Korean ending (decision d).
 
     True when the last word is a filler, a particle or a connective ending:
-    "어 그러니까 음 지금 이 단계에서 쓰는", "젤 플러그를 37.2도에서 790 rpm 으로".
+    "어 그러니까 음 지금 이 단계에서 쓰는", "시료를 37.2도에서 790 rpm 으로".
     False for a sentence-final ending, a number with its unit, and the short
     commands ("다음", "잠깐", "네").
     """
@@ -1253,7 +1253,7 @@ Answer rules:
 ROUTER_FIRST_PROMPT_ADDENDUM = """\
 
 With the router first, three more calls exist, all read-only:
-4. Call show_visual when the researcher asks to see a picture in THIS turn: kind "source_figure" for the step's own figure in the protocol PDF ("그림 보여 줘", "원문 그림 띄워 줘", "이 단계 그림 있어?"), "web_photo" for a photograph of a thing named ("X 사진", "실제 모습", put the thing in entity), "drawn_diagram" for "그림으로 그려 줘". When they ask for an explanation AND a picture in one breath ("AMBIC 설명해 주고 그림 보여 줘"), call answer AND show_visual together: both are done.
+4. Call show_visual when the researcher asks to see a picture in THIS turn: kind "source_figure" for the step's own figure in the protocol PDF ("그림 보여 줘", "원문 그림 띄워 줘", "이 단계 그림 있어?"), "web_photo" for a photograph of a thing named ("X 사진", "실제 모습", put the thing in entity), "drawn_diagram" for "그림으로 그려 줘". When they ask for an explanation AND a picture in one breath ("이 시약 설명해 주고 그림 보여 줘"), call answer AND show_visual together: both are done.
 5. Call clarify when the words are too ambiguous to answer or act on: which step, which substance, which value, what "그거" means. spoken = one short question (under 120 characters); candidates = exact entity names from the protocol terms (at most 4), or leave candidates empty. Never offer commands or yes/no replies. Never a question only the server asks (whether a step is done, whether to end, record or move on).
 6. Call not_for_me when the words are not addressed to you: talk with another person in the room ("야 민수야 이거 좀 잡아줘"), a remark to oneself, lunch plans, unrelated chatter. Nothing is answered or recorded. Never for words that mention the protocol, a step, a value, a timer, a record, a picture, or carry any command or question to you.
 
@@ -2211,8 +2211,8 @@ async def route_turn_with_llm_router(
             brain_outputs=brain_outputs, brain_statuses=brain_statuses,
         )
     if read_only is None and first and _PICTURE_WORD.search(transcript):
-        # Decision (a): a picture asked beside the question ("AMBIC 설명해 주고
-        # 그림 보여 줘") is shown after the answer even when the model called
+        # Decision (a): a picture asked beside the question ("이 시약 설명해
+        # 주고 그림 보여 줘") is shown after the answer even when the model called
         # answer alone -- the server's own completion of a two-request turn,
         # read-only, ruled on like a show_visual call.
         from voiney_lab import curated_protocol as rules

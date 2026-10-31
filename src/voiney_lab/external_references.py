@@ -165,7 +165,8 @@ _SUPPLEMENTAL_FORBIDDEN_CLAIM = re.compile(
     r"(?:\b(?:ppe|hazard|toxic|flammable|safety)\b|안전|위험|독성|인화성|보호구|"
     r"(?:사용|첨가|투입|제거|교체|대체|착용|폐기)(?:하세요|해야\s*합니다|하십시오)|"
     r"\b(?:use|add|remove|replace|substitute|discard|wear|heat|incubate|mix)\s+"
-    r"(?:the|a|an|this|that|hplc|solution|sample|gel))",
+    # Lane GEN1: an acronym-named reagent by its form, not one document's word.
+    r"(?:the|a|an|this|that|solution|sample|gel|(?-i:[A-Z]{2,}[A-Za-z0-9-]*)))",
     re.IGNORECASE,
 )
 

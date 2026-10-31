@@ -2042,7 +2042,7 @@ _LAB_LEXICON: tuple[tuple[str, tuple[str, ...], tuple[str, ...], bool], ...] = (
     ("agarose", ("agarose",), ("아가로스", "아가로즈"), False),
     ("antibody", ("antibod",), ("항체",), True),
     ("membrane", ("membrane",), ("멤브레인", "막"), False),
-    ("gel_plug", ("gel plug", "plug of a stained protein band"), ("젤 플러그", "겔 플러그", "젤 플럭"), False),
+    ("gel_plug", ("gel plug",), ("젤 플러그", "겔 플러그", "젤 플럭"), False),
     ("stained_protein_band", ("stained protein band", "protein band", "gel band"),
      ("염색된 단백질 밴드", "단백질 겔 밴드", "단백질 젤 밴드", "염색된 밴드", "단백질 밴드", "젤 밴드", "겔 밴드"), False),
     ("primary_antibody", ("primary antibod",), ("1차 항체", "일차 항체"), True),
