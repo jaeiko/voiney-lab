@@ -91,8 +91,11 @@ generation is cancelled and its audio cleared (barge-in).
    turn-local relative gate observes one second of VAD verdicts; if WebRTC
    calls at least 60% voiced, only frames at least 6 dB above the lower fifth
    of those voiced levels may keep the endpoint open after one frame actually
-   reaches that rise; a steady wearer voice cannot arm the gate against
-   itself. It does not alter PCM,
+   reaches that rise. Lane LIVE3: that second must be steady room sound --
+   its voiced levels' 20th-to-80th percentile spread within
+   `ADAPTIVE_NOISE_STEADY_SPREAD_DB` (6 dB) -- so the
+   wearer's own first second never defines the floor that would then trim
+   the quiet end of the sentence. It does not alter PCM,
    the 1000 ms silence, or the 15 s safety bound. For production WebRTC input
    (lane LISTEN3), a six-of-ten voiced burst during that one-second ending
    window reopens it only when a bounded 160--400 ms PCM window also has
@@ -113,7 +116,15 @@ generation is cancelled and its audio cleared (barge-in).
    to it (`_join_continuation`: the turn is cancelled, its audio goes in front
    via `EndpointDetector.prepend_utterance`) until the kept sound reaches
    `CONTINUATION_JOIN_MAX_SECONDS` (10 s; lane HEAR2, decision 2), when the
-   turn is transcribed as it stands. Every dropped sound, here or in step 3,
+   turn is transcribed as it stands. On the production WebRTC lineage (lane
+   LIVE3) the join waits for speech shape: a sound that opens the interrupt
+   detector during the answer's preparation is a pending join
+   (`_interrupt_join_pending`, the window measured from its onset) and an
+   ordinary candidate until a bounded window of it shows the shape
+   (`EndpointDetector.speech_shape_seen`); a bench impact never does, is
+   rejected as `transient_noise` at its end and leaves the turn being
+   answered untouched; a candidate whose shape shows only in its committed
+   whole joins then (`_join_committed_candidate`). Every dropped sound, here or in step 3,
    goes through `_report_speech_drop` (reason code, dB, ms; event
    `speech.dropped` with `reason_ko`, the plain words; shown, never said —
    lane HEAR2, decision 4). A speech-to-text provider that fails

@@ -90,7 +90,30 @@ WEARER = 0.1
 QUIETER = 0.02   # about 14 dB under WEARER: past the "보통" 12 dB margin
 NOISE = 0.008    # about 22 dB under WEARER
 STT_SECONDS = 0.8
+#: LIVE3 (2026-10-31): the fake speech-to-text takes this many frames of
+#: audio time, not STT_SECONDS of wall time. The bench's clock is the frames
+#: the page has sent; a worker measured on the wall clock finished early or
+#: late under machine load, and a transcript that landed after the next
+#: utterance's mark counted the earlier utterance as dropped (the CI
+#: ``wearer_dropped=1`` flake). The frame pump also waits for a worker whose
+#: frames are up before it sends the next frame.
+STT_FRAMES = int(round(STT_SECONDS / 0.02))
+#: A worker never waits longer than this on the wall clock (a stopped pump).
+STT_WALL_LIMIT_SECONDS = 30.0
+#: The server validates a barge-in candidate's words inside the frame loop,
+#: so no frame arrives while that transcription runs (in production the
+#: frames queue on the socket meanwhile). A worker whose clock has not moved
+#: for this long on the wall returns: the transcription then takes no audio
+#: time, as the stalled pump makes it take none in production either.
+PUMP_STALL_SECONDS = 0.25
 ANSWER_FRAMES = 150  # 3 s of answer audio
+#: The clock the fake providers read (set by ``run_bench``), and the frame
+#: deadlines of transcriptions under way.
+_CLOCK: "AudioClock | None" = None
+_PENDING_STT: list[int] = []
+_PENDING_LOCK = __import__("threading").Lock()
+#: A delay a test may put in front of the worker to stand for machine load.
+_WORKER_WALL_DELAY_SECONDS = 0.0
 CALIBRATION_SENTENCE_FALLBACK = "오늘 실험을 시작합니다"
 
 #: Each word is a run of voiced frames of its own length; the fake STT writes
@@ -145,8 +168,58 @@ def runs(pcm: bytes) -> list[int]:
     return lengths
 
 
+def _wait_for_stt_frames() -> None:
+    """Return once STT_FRAMES of audio have passed on the bench clock (LIVE3).
+
+    The page registers a transcription's deadline when it sees the turn's
+    ``speech.end`` (``BenchSocket.send_text``), so the frames the worker
+    thread takes to start never move the deadline; the worker adopts the
+    earliest one. A barge-in's validation has no such event and takes its
+    deadline from the clock when it starts.
+    """
+
+    clock = _CLOCK
+    if clock is None:
+        time.sleep(STT_SECONDS / SPEED)
+        return
+    if _WORKER_WALL_DELAY_SECONDS:
+        time.sleep(_WORKER_WALL_DELAY_SECONDS)
+    with _PENDING_LOCK:
+        if _PENDING_STT:
+            deadline = min(_PENDING_STT)
+        else:
+            deadline = clock.frames + STT_FRAMES
+            _PENDING_STT.append(deadline)
+    try:
+        started = time.monotonic()
+        last_frames, last_change = clock.frames, started
+        while clock.frames < deadline and time.monotonic() - started < STT_WALL_LIMIT_SECONDS:
+            if clock.frames != last_frames:
+                last_frames, last_change = clock.frames, time.monotonic()
+            elif time.monotonic() - last_change >= PUMP_STALL_SECONDS:
+                break
+            time.sleep(0.0005)
+    finally:
+        with _PENDING_LOCK:
+            if deadline in _PENDING_STT:
+                _PENDING_STT.remove(deadline)
+
+
+def _forget_stt_deadline(deadline: int) -> None:
+    with _PENDING_LOCK:
+        if deadline in _PENDING_STT:
+            _PENDING_STT.remove(deadline)
+
+
+def stt_due(frames_sent: int) -> bool:
+    """Whether a transcription's frames are up while it has not returned yet."""
+
+    with _PENDING_LOCK:
+        return any(deadline <= frames_sent for deadline in _PENDING_STT)
+
+
 def fake_transcribe(pcm: bytes, *args, **kwargs) -> Transcription:
-    time.sleep(STT_SECONDS / SPEED)
+    _wait_for_stt_frames()
     lengths = runs(pcm)
     if any(length in FAILING_LENGTHS for length in lengths):
         from voiney_lab.voice_providers import SpeechProviderError
@@ -205,13 +278,27 @@ class BenchSocket:
         # delivered to this fake page.
         self.pending_turns: set[int] = set()
         self.saw_started_turn = False
+        #: LIVE3: the page's playback receipts, due at a frame of the clock.
+        self.due: list[tuple[int, dict]] = []
+        #: LIVE3: the transcription deadline registered at each turn's end.
+        self.turn_stt_deadlines: dict[int, int] = {}
 
     async def accept(self):
         return None
 
+    def _deliver_due(self) -> dict | None:
+        due = [item for item in self.due if item[0] <= self.frames_sent]
+        if not due:
+            return None
+        self.due.remove(due[0])
+        return due[0][1]
+
     async def receive(self):
         if self.inbox:
             return {"type": "websocket.receive", "text": json.dumps(self.inbox.pop(0))}
+        message = self._deliver_due()
+        if message is not None:
+            return {"type": "websocket.receive", "text": json.dumps(message)}
         if not self.script:
             # Audio time can end before a worker scheduled under machine
             # load returns its final STT result. Drain that real turn and
@@ -222,6 +309,21 @@ class BenchSocket:
                 self.changed.clear()
                 if self.inbox:
                     return {"type": "websocket.receive", "text": json.dumps(self.inbox.pop(0))}
+                with _PENDING_LOCK:
+                    pending_stt = list(_PENDING_STT)
+                if self.due or pending_stt:
+                    # The audio has ended, but a receipt or a transcription
+                    # is still due: the clock moves on to the nearest one
+                    # (silence the page need not send).
+                    nearest = min([at for at, _ in self.due] + pending_stt)
+                    self.frames_sent = max(self.frames_sent, nearest)
+                    self.clock.frames = self.frames_sent
+                    message = self._deliver_due()
+                    if message is not None:
+                        return {"type": "websocket.receive", "text": json.dumps(message)}
+                if stt_due(self.frames_sent):
+                    await asyncio.sleep(0.0005)
+                    continue
                 if self.saw_started_turn:
                     pending = bool(self.pending_turns)
                 else:
@@ -245,6 +347,10 @@ class BenchSocket:
             message.setdefault("generation", self.session.generation)
             return {"type": "websocket.receive", "text": json.dumps(message)}
         await asyncio.sleep(0.02 / SPEED)
+        while stt_due(self.frames_sent):
+            # A transcription's frames are up: its result comes before the
+            # next frame, however slow the worker thread is (LIVE3).
+            await asyncio.sleep(0.0005)
         self.frames_sent += 1
         self.clock.frames = self.frames_sent
         return {"type": "websocket.receive", "bytes": value}
@@ -254,6 +360,21 @@ class BenchSocket:
         self.sent.append((self.frames_sent, message))
         kind = message.get("type")
         turn_id = message.get("turn_id")
+        if kind == "speech.end" and isinstance(turn_id, int) and _CLOCK is self.clock:
+            # The turn's transcription starts now and takes STT_FRAMES of
+            # audio: its deadline is fixed here, before any worker thread
+            # runs (LIVE3).
+            deadline = self.frames_sent + STT_FRAMES
+            self.turn_stt_deadlines[turn_id] = deadline
+            with _PENDING_LOCK:
+                _PENDING_STT.append(deadline)
+        elif isinstance(turn_id, int) and turn_id in self.turn_stt_deadlines and (
+            kind in {"transcript", "speech.dropped", "speech.rejected", "cascade.playback.clear"}
+            or (kind == "turn.state" and message.get("state") not in {"listening", "transcribing"})
+        ):
+            # The words were written down (or the turn ended without them):
+            # a deadline no worker adopted is forgotten.
+            _forget_stt_deadline(self.turn_stt_deadlines.pop(turn_id))
         if kind == "speech.start" and isinstance(turn_id, int):
             self.saw_started_turn = True
             # The production socket cancels its one previous turn task when
@@ -273,13 +394,11 @@ class BenchSocket:
         if message.get("type") == "audio.segment.start":
             frames = int(message.get("frame_count") or 0)
             turn_id = message.get("turn_id")
-            asyncio.get_running_loop().create_task(self._ended(turn_id, frames))
-
-    async def _ended(self, turn_id, frames: int) -> None:
-        await asyncio.sleep(frames * 0.02 / SPEED)
-        if isinstance(turn_id, int) and turn_id > 0:
-            self.inbox.append({"type": "playback.ended", "turn_id": turn_id})
-            self.changed.set()
+            if isinstance(turn_id, int) and turn_id > 0:
+                # The receipt falls due when the answer's frames have played
+                # on the bench clock (LIVE3: audio time, not wall time).
+                self.due.append((self.frames_sent + frames, {"type": "playback.ended", "turn_id": turn_id}))
+                self.changed.set()
 
     async def send_bytes(self, value):
         return None
@@ -324,7 +443,13 @@ def build_script() -> Script:
     script.control({"type": "client.voice_calibration", "action": "start"})
     script.silence(3.0)
     script.say(CALIBRATION_SENTENCE_FALLBACK, kind="calibration")
-    script.silence(5.0)
+    # LIVE3: measured on the audio clock, the calibration turn's answer
+    # (0.8 s of transcription, 3 s of audio) and its 300 ms cooldown end
+    # 5.2 s after the sentence; a word 5.0 s after it began inside the
+    # cooldown, where the listener hears nothing, and lost its first frames.
+    # On the wall clock the answer had ended early by a machine-dependent
+    # amount, which is what made the first wearer utterance flaky in CI.
+    script.silence(5.5)
     for _ in range(3):
         script.say("현재 단계 알려줘", trial="normal")
         script.silence(6.0)
@@ -479,12 +604,20 @@ def measure(script: Script, sent: list[tuple[int, dict]]) -> dict[str, object]:
     }
 
 
-def run_bench() -> tuple[dict[str, object], list[tuple[int, dict]]]:
+def run_bench(
+    script: Script | None = None, *, measured: bool = True,
+) -> tuple[dict[str, object], list[tuple[int, dict]]]:
+    """Drive the socket with the script and measure it; ``measured`` False returns the events only."""
+
+    global _CLOCK
     clock = AudioClock()
     session = make_session(clock)
-    script = build_script()
+    script = build_script() if script is None else script
     socket = BenchSocket(script, session, clock)
     FAILING_LENGTHS.clear()
+    _CLOCK = clock
+    with _PENDING_LOCK:
+        _PENDING_STT.clear()
     with patch.dict(os.environ, BENCH_ENVIRONMENT), patch(
         "voiney_lab.server.ListenerSession", return_value=session), patch(
         "voiney_lab.server.VoiceVadSettings.from_environment",
@@ -494,8 +627,11 @@ def run_bench() -> tuple[dict[str, object], list[tuple[int, dict]]]:
     ), patch("voiney_lab.server.synthesize", side_effect=fake_synthesize), patch(
         "voiney_lab.server.VOICE_CALIBRATION_SENTENCE", CALIBRATION_SENTENCE_FALLBACK, create=True,
     ):
-        asyncio.run(voice_socket(socket))
-    return measure(script, socket.sent), socket.sent
+        try:
+            asyncio.run(voice_socket(socket))
+        finally:
+            _CLOCK = None
+    return (measure(script, socket.sent) if measured else {}), socket.sent
 
 
 def _utc_timestamp(value: str) -> datetime:
@@ -524,6 +660,7 @@ def replay_diagnostic_wavs(
 
     counts = Counter()
     rejection_reasons = Counter()
+    end_delays: list[int] = []
     for _, metadata_path, word_bearing in sorted(selected):
         wav_path = metadata_path.with_suffix(".wav")
         with wave.open(str(wav_path), "rb") as recording:
@@ -535,10 +672,24 @@ def replay_diagnostic_wavs(
             ):
                 raise ValueError("diagnostic WAV must be bounded 16 kHz mono PCM16")
             pcm = recording.readframes(recording.getnframes())
-        session = ListenerSession()
+        # LIVE3: frame by frame on an audio clock (20 ms a frame), so the
+        # frame at which each end was found is known and the join window is
+        # measured in audio time. The session stays "being answered" after
+        # the first end (no turn is run here), as the live server was while
+        # the person typed: sound after the words meets the same join and
+        # candidate rules.
+        clock = AudioClock()
+        session = ListenerSession(clock=clock)
         session.start()
-        events = session.accept_chunk(pcm)
-        events.extend(session.accept_chunk(bytes(FRAME_BYTES * 250)))
+        clip_frames = len(pcm) // FRAME_BYTES
+        events = []
+        end_frames: list[int] = []
+        stream = pcm + bytes(FRAME_BYTES * 250)
+        for index in range(0, len(stream) // FRAME_BYTES):
+            clock.frames = index
+            frame_events = session.accept_chunk(stream[index * FRAME_BYTES:(index + 1) * FRAME_BYTES])
+            events.extend(frame_events)
+            end_frames.extend(index for event in frame_events if event.kind == "speech.end")
         stt_bound = any(event.kind == "speech.end" for event in events)
         rejection_reasons.update(
             event.result.rejection_reason or "unknown"
@@ -547,6 +698,27 @@ def replay_diagnostic_wavs(
         label = "word_bearing" if word_bearing else "empty_transcript"
         counts[f"{label}_clips"] += 1
         counts[f"{label}_stt_bound"] += int(stt_bound)
+        counts["continuation_joins"] += sum(
+            1 for event in events
+            if event.kind == "assistant.interrupted" and event.reason == "continued_speech")
+        counts["candidates_rejected"] += sum(
+            1 for event in events if event.kind == "barge_in_rejected")
+        ended = [event.result.total_frames for event in events if event.kind == "speech.end"]
+        if ended:
+            counts["longest_utterance_frames"] = max(counts["longest_utterance_frames"], max(ended))
+            # How long after the clip's last frame the last end was found;
+            # a clip that ends the way it was recorded is found 50 frames
+            # (the endpoint silence) after its end.
+            end_delays.append((max(end_frames) + 1 - clip_frames) * 20)
+            if word_bearing and len(ended) == 1 and not any(
+                event.kind in {"speech.rejected", "barge_in_rejected"} for event in events
+            ):
+                # A clip the listener hears as one utterance: the frames of
+                # the recording it would no longer keep -- its tail. 0 when
+                # it keeps all. Clips with impacts between words are not
+                # counted here; their dropped pieces are the impacts.
+                counts["single_utterance_clips"] += 1
+                counts["word_bearing_frames_lost"] += max(0, clip_frames - ended[0])
 
     return {
         "mode": "diagnostic_wav_replay",
@@ -556,6 +728,12 @@ def replay_diagnostic_wavs(
         "empty_transcript_clips": counts["empty_transcript_clips"],
         "empty_transcript_stt_bound": counts["empty_transcript_stt_bound"],
         "rejections": dict(sorted(rejection_reasons.items())),
+        "continuation_joins": counts["continuation_joins"],
+        "candidates_rejected": counts["candidates_rejected"],
+        "longest_utterance_frames": counts["longest_utterance_frames"],
+        "single_utterance_clips": counts["single_utterance_clips"],
+        "word_bearing_frames_lost": counts["word_bearing_frames_lost"],
+        "end_delay_ms_max": max(end_delays) if end_delays else None,
     }
 
 

@@ -25,6 +25,11 @@ EXPECTED_ACTIONS = {
     'chat': ('off_topic', 'agent_meta'), 'term': ('question', 'related_question', 'clarify_parameter'),
 }
 
+#: LIVE3: an end found more than this long after the wearer's last frame is
+#: late -- the 1000 ms endpoint silence, the continuous impact that may hold
+#: the resume window (200 ms) and one window step of slack.
+LATE_END_MS = 1500
+
 _ROUTER_USAGE_KEYS = (
     'prompt_tokens', 'completion_tokens', 'total_tokens',
     'cached_prompt_tokens', 'cache_write_tokens', 'reasoning_tokens',
@@ -167,6 +172,8 @@ def aggregate(rows: list[dict]) -> dict:
                     timings[key].append(val)
         def percentiles(values: list[float]) -> dict:
             values = sorted(values)
+            if not values:
+                return {'p50': None, 'p95': None, 'n': 0}
             return {p: values[max(0, math.ceil(len(values)*q)-1)] for p,q in [('p50', .5),('p95', .95)]} | {'n':len(values)}
         counts = Counter()
         measured = 0
@@ -222,6 +229,15 @@ def aggregate(rows: list[dict]) -> dict:
             'wearer_dropped':sum(r.get('wearer_dropped',False) for r in group),
             'noise_sent_to_stt':sum(r.get('noise_sent_to_stt',False) for r in group),
             'impact_reopened':sum(r.get('impact_reopened',False) for r in group),
+            # LIVE3: turns the impacts chained (joined and restarted), and
+            # how late after the wearer's last frame the end was found.
+            'continuation_joins':sum(int(r.get('continuation_joins',0) or 0) for r in group),
+            'late_end':sum(
+                1 for r in group
+                if isinstance(r.get('end_delay_ms'),(int,float)) and r['end_delay_ms']>LATE_END_MS),
+            'end_delay_ms':percentiles([
+                r['end_delay_ms'] for r in group
+                if isinstance(r.get('end_delay_ms'),(int,float)) and math.isfinite(r['end_delay_ms'])]),
             'grounding_cases':sum(r.get('grounding_measured',False) for r in group),
             'grounded_answers':sum(r.get('grounded_answer',False) for r in group),
             'grounding_accuracy':(

@@ -19,6 +19,13 @@ NOISES = (
 # bench event being approximated; they are not acoustic measurements.
 IMPACT_NOISES = ('typing', 'glass', 'pipette')
 IMPACT_DISTANCES_CM = (30, 100)
+# LIVE3: where the impacts sit relative to the wearer's words. 'single' is
+# LISTEN3's one burst half a second after the words; 'continuous' keeps the
+# bursts going for seconds after the words (typing while the answer is
+# prepared); 'mid_speech' lays them over the words themselves.
+IMPACT_PATTERNS = ('single', 'continuous', 'mid_speech')
+CONTINUOUS_IMPACT_SECONDS = 4.0
+CONTINUOUS_IMPACT_GAP_FRAMES = 5
 
 
 def read_wav(data: bytes) -> bytes:
@@ -98,6 +105,47 @@ def impact_pcm(kind: str, distance_cm: int, *, frames: int = 10) -> bytes:
 def append_impact(pcm: bytes, kind: str, distance_cm: int) -> bytes:
     """Place an impact after a half-second pause following wearer audio."""
     return pcm + bytes(16000) + impact_pcm(kind, distance_cm)
+
+
+def continuous_impact_pcm(kind: str, distance_cm: int, *, seconds: float = CONTINUOUS_IMPACT_SECONDS,
+                          gap_frames: int = CONTINUOUS_IMPACT_GAP_FRAMES) -> bytes:
+    """Bursts of one impact kind with short gaps, for ``seconds`` of audio (LIVE3)."""
+    if not math.isfinite(seconds) or not 0.5 <= seconds <= 15:
+        raise ValueError('continuous impact length out of range')
+    if isinstance(gap_frames, bool) or not isinstance(gap_frames, int) or not 0 <= gap_frames <= 50:
+        raise ValueError('impact gap out of range')
+    burst = impact_pcm(kind, distance_cm) + bytes(640 * gap_frames)
+    total = int(seconds * 32000)
+    return (burst * (total // len(burst) + 1))[:total]
+
+
+def append_continuous_impact(pcm: bytes, kind: str, distance_cm: int, *, seconds: float = CONTINUOUS_IMPACT_SECONDS) -> bytes:
+    """Wearer audio, a half-second pause, then impacts that keep going (LIVE3)."""
+    return pcm + bytes(16000) + continuous_impact_pcm(kind, distance_cm, seconds=seconds)
+
+
+#: LIVE3: over the words, an impact's peak sits this far over the words' own
+#: peak at 30 cm (the person's 2026-10-31 clips: typing peaks within about
+#: 0--10 dB of the speech); the distance axis scales it as the voice is.
+MID_SPEECH_IMPACT_PEAK_OVER_SPEECH_DB = 6.0
+
+
+def overlay_impact(pcm: bytes, kind: str, distance_cm: int, *,
+                   peak_over_speech_db: float = MID_SPEECH_IMPACT_PEAK_OVER_SPEECH_DB) -> bytes:
+    """Impacts laid over the wearer's words themselves, summed without saturation (LIVE3)."""
+    if not math.isfinite(peak_over_speech_db) or not -40 <= peak_over_speech_db <= 40:
+        raise ValueError('impact level out of range')
+    signal = pcm16_to_samples(pcm)
+    if not signal:
+        raise ValueError('empty signal')
+    bursts = pcm16_to_samples(continuous_impact_pcm(kind, 30, seconds=max(0.5, len(signal) / 16000)))
+    speech_peak = max(abs(v) for v in signal)
+    burst_peak = max(abs(v) for v in bursts) or 1
+    level = speech_peak * 10 ** (peak_over_speech_db / 20) / burst_peak * distance_gain(distance_cm)
+    combined = [s + bursts[i] * level for i, s in enumerate(signal)]
+    peak = max(abs(v) for v in combined)
+    gain = min(1.0, 30000 / max(1, peak))
+    return samples_to_pcm16(v * gain for v in combined)
 
 
 def distance_gain(distance_cm: float) -> float:
