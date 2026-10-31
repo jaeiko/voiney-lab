@@ -180,7 +180,8 @@ class LiveRowTwoTests(unittest.TestCase):
         for text in ("측정값 100 mL", "측정 값 100 mL", "측정치는 37도", "측정갑 100 mL", "측정 갑 뱅 미리",
                      "수치 7.2", "측정 결과 뱅 밀리"):
             self.assertTrue(contextless_measurement_needs_confirmation(text), text)
-        for text in ("pH 7.2", "온도 37도", "상층액 투명함", "2번 셀 질량 12.3 mg", "침전이 생겼어"):
+        for text in ("pH 7.2", "온도 37도", "상층액 투명함", "2번 셀 질량 12.3 mg", "침전이 생겼어",
+                     "측정 전에 흔들었어", "온도 측정은 나중에"):
             self.assertFalse(contextless_measurement_needs_confirmation(text), text)
 
 

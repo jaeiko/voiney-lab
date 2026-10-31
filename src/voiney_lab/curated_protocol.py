@@ -4569,10 +4569,15 @@ def transcript_record_needs_confirmation(text: str) -> bool:
 #: particle or a colon after them. A note that opens with one names no
 #: sample or property, whatever follows.
 _MEASUREMENT_LEAD = re.compile(
-    r"^(?:측정\s*(?:값|치)?|값|수치|결과\s*값?|관찰\s*값)\s*(?:은|는|이|가|을|를)?\s*[:：]?\s*"
+    r"^(?:측정\s*(?:값|치)|값|수치|결과\s*값|관찰\s*값)\s*(?:은|는|이|가|을|를)?\s*[:：]?\s*"
 )
-#: A measurement named in the words ("측정", "수치"): a value should be with it.
-_MEASUREMENT_WORD = re.compile(r"측정|수치")
+#: After a bare "측정" the word that makes it a lead: "값"/"치" (or one letter
+#: off them, "갑"), "결과", or a one-syllable fragment -- not "전에" in "측정
+#: 전에 흔들었어", which is a note about measuring.
+_MEASUREMENT_LEAD_SECOND = ("값", "치", "결과")
+#: A value announced in the words ("측정값", "측정 값", "측정치", "수치") -- a
+#: value should be with it; "측정 전에 흔들었어" names no value and is a note.
+_MEASUREMENT_WORD = re.compile(r"(?<![가-힣])(?:측정\s*(?:값|치)|수치)(?![가-힣])")
 _MEASUREMENT_LEAD_WORDS = ("측정값", "측정치", "측정")
 
 
@@ -4602,7 +4607,14 @@ def contextless_measurement_needs_confirmation(text: str) -> bool:
     tail = _MEASUREMENT_LEAD.sub("", compact, count=1)
     if tail and tail != compact:
         return True
-    first = compact.split()[0].strip(",:：")
+    tokens = compact.split()
+    first = tokens[0].strip(",:：")
+    if first == "측정" and len(tokens) > 1:
+        second = tokens[1].strip(",:：")
+        if second in _MEASUREMENT_LEAD_SECOND or len(second) == 1 or any(
+            _edit_distance(_jamo(second), _jamo(lead)) == 1 for lead in ("값", "치")
+        ):
+            return True
     if _near_measurement_lead(first) and first not in _MEASUREMENT_LEAD_WORDS:
         return True
     return bool(_MEASUREMENT_WORD.search(compact)) and not measured_values(compact)
