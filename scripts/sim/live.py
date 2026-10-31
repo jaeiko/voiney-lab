@@ -203,7 +203,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--catalog-copy',type=Path,help='append executable uploads from the same snapshot as offline mode')
     parser.add_argument('--protocol',action='append')
     parser.add_argument('--family',action='append')
-    parser.add_argument('--limit',type=int,default=20)
+    parser.add_argument('--limit',type=int)
+    parser.add_argument(
+        '--case-ids', type=Path,
+        help='versioned JSON manifest selecting exact case ids in manifest order',
+    )
     parser.add_argument('--voices',default='ko-KR-Chirp3-HD-Charon,ko-KR-Chirp3-HD-Kore')
     parser.add_argument('--speeds',default='0.85,1,1.15')
     parser.add_argument('--conditions',default='quiet,fan:20,centrifuge:10,ultrasonic:10,babble:10,keyboard:5,cleanbench_bsc_fan:10,fume_hood_exhaust:10,glovebox_circulation_pump:10,fan_centrifuge:10,fan_adjacent_speech:10')
@@ -224,7 +228,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--output',type=Path,default=Path.home()/'reports/sim/live.json')
     args = parser.parse_args(argv)
     try:
-        if args.limit < 1 or args.max_calls < 1:
+        if args.limit is None and args.case_ids is None:
+            args.limit = 20
+        if (args.limit is not None and args.limit < 1) or args.max_calls < 1:
             raise ValueError('positive limits required')
         args.voices = args.voices.split(',')
         known = {v.voice_id for v in vp.KOREAN_VOICES['google_cloud']}

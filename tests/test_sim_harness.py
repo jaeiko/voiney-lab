@@ -487,6 +487,19 @@ def test_live_vad_drop_is_not_an_asr_measurement_and_stt_failure_is_counted():
     assert row['stt_counts']['reference_chars']>0
 
 
+def test_joined_endpoints_are_not_reported_as_cut_off() -> None:
+    from types import SimpleNamespace
+
+    from scripts.sim.runner import cut_off_detected
+
+    ordinary = SimpleNamespace(result=SimpleNamespace(forced=False))
+    forced = SimpleNamespace(result=SimpleNamespace(forced=True))
+
+    assert cut_off_detected([ordinary, ordinary], stt_calls=1) is False
+    assert cut_off_detected([ordinary, ordinary], stt_calls=2) is True
+    assert cut_off_detected([forced], stt_calls=1) is True
+
+
 def test_live_stt_failure_keeps_only_provider_status_and_code():
     from dataclasses import replace
 
