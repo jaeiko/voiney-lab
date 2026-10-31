@@ -2342,6 +2342,35 @@ def _ranges(labels: Sequence[str]) -> str:
     return runs + "단계" if runs else ""
 
 
+def _stopped_split(stop_label: str | None, after: Sequence[str], completed: Sequence[str]) -> tuple[bool, list[str]]:
+    """Whether the run stopped inside its stop step, and the steps not done after it.
+
+    Lane UI1 (person's test of 2026-10-31): a step the run stopped in without
+    completing it was begun -- it is "진행 중 종료", not one of the steps not
+    done. A stop step that was completed keeps "에서 끝냄".
+    """
+
+    in_progress = bool(stop_label) and stop_label not in completed
+    return in_progress, [label for label in after if not (in_progress and label == stop_label)]
+
+
+def _stopped_line(stop_label: str | None, after: Sequence[str], *, completed: Sequence[str]) -> str:
+    """The notebook's line for a stopped run: "3단계 진행 중 종료 — 4–25단계는 하지 않음"."""
+
+    in_progress, rest = _stopped_split(stop_label, after, completed)
+    where = (f"{stop_label}단계 진행 중 종료" if in_progress
+             else f"{stop_label}단계에서 끝냄" if stop_label else "실험을 끝냄")
+    return f"{where} — {_ranges(rest)}는 하지 않음" if rest else where
+
+
+def _stopped_deviation(stop_label: str | None, after: Sequence[str], *, completed: Sequence[str]) -> str:
+    """The report facts' sentence for the same stop."""
+
+    in_progress, rest = _stopped_split(stop_label, after, completed)
+    where = f"{stop_label}단계 진행 중 " if in_progress else f"{stop_label}단계에서 " if stop_label else ""
+    return f"{where}실험을 끝내 {_ranges(rest)}는 수행하지 않았다." if rest else f"{where}실험을 끝냈다."
+
+
 # --- Where each material and piece of equipment is used (decision 3) -----------
 #
 # The server looks for an item's name in each source step's text, and lists
@@ -2988,8 +3017,7 @@ def build_report_facts(
                  if step["label"] not in completed_at
                  and order.get(step["label"], 0) > max((order.get(l, -1) for l in completed_labels), default=-1)]
         if after:
-            where = f"{stop_label}단계에서 " if stop_label else ""
-            deviations.append(f"{where}실험을 끝내 {_ranges(after)}는 수행하지 않았다.")
+            deviations.append(_stopped_deviation(stop_label, after, completed=completed_labels))
 
     live = [r for r in records if r.status != "취소됨"]
     observations = [r for r in live if r.kind == "관찰"]
@@ -5307,8 +5335,8 @@ def build_lab_notebook(
         after = [str(step["label"]) for step in source_steps
                  if str(step["label"]) not in facts.completed_labels and order.get(str(step["label"]), 0) > last_done]
         if after:
-            where = f"{facts.stop_label}단계에서 끝냄" if facts.stop_label else "실험을 끝냄"
-            differences.append(NotebookDifference(len(kinds) + 1, f"{where} — {_ranges(after)}는 하지 않음"))
+            differences.append(NotebookDifference(
+                len(kinds) + 1, _stopped_line(facts.stop_label, after, completed=facts.completed_labels)))
     differences.sort(key=lambda item: item.order)
 
     # What differed from the run before (decision ① 6).

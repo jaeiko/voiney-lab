@@ -132,7 +132,7 @@ class StepTableTests(_GlanceCase):
         rows = self.table(text, self.HEADER)
         self.assertEqual(rows[3], "| 4 | 10:01 | 미완료 | — | — |")
         self.assertEqual(len(rows), 4)
-        self.assertIn("- 4단계에서 끝냄 — 4–5단계는 하지 않음", text)
+        self.assertIn("- 4단계 진행 중 종료 — 5단계는 하지 않음", text)
 
     def test_a_pause_is_named_in_the_time_taken(self) -> None:
         record = short_run(self.temporary.name)
