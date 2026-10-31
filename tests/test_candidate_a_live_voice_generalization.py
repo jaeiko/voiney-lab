@@ -99,7 +99,8 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
         self.assertEqual(
             {claim.target_id for claim in unresolved}, {"tube", "vessel_capacity"}
         )
-        self.assertIn("ambic", {claim.target_id for claim in admitted})
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+        self.assertIn("AMBIC", {claim.target_id for claim in admitted})
         self.assertIn("AMBIC", plan.primary_text or "")
         self.assertIn("200 µL", plan.primary_text or "")
         self.assertIn("설명하지 않습니다", plan.primary_text or "")
@@ -454,7 +455,8 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
 
     def test_new_scientific_entities_normalization_and_claims(self) -> None:
         for entity_query, entity_name in (
-            ("DTT가 뭐야?", "dtt"),
+            # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+            ("DTT가 뭐야?", "DTT"),
             ("Iodoacetamide의 역할이 뭐야?", "iodoacetamide"),
             ("Trypsin에 대해 설명해줘", "trypsin"),
             ("Formic acid는 왜 넣어?", "formic_acid"),
@@ -477,18 +479,20 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
             turn_id=2, language="ko",
         )
         self.assertIn("acetonitrile", real_turn7.requested_entities)
-        self.assertIn("ambic", real_turn7.requested_entities)
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+        self.assertIn("AMBIC", real_turn7.requested_entities)
         self.assertIn("acetonitrile", real_turn7.primary_text or "")
         self.assertIn("AMBIC", real_turn7.primary_text or "")
         self.assertFalse(real_turn7.state_changed)
 
         # Other multi-entity near-misses and combinations
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
         for query, expected_entities in (
-            ("아세토나이트릴과 AMBIC가 뭐야?", ("acetonitrile", "ambic")),
-            ("트립씬과 HPLC water가 뭐야?", ("trypsin", "hplc_water")),
-            ("디티티와 에이치피엘씨 워터 설명해줘", ("dtt", "hplc_water")),
+            ("아세토나이트릴과 AMBIC가 뭐야?", ("acetonitrile", "AMBIC")),
+            ("트립씬과 HPLC water가 뭐야?", ("trypsin", "HPLC water")),
+            ("디티티와 에이치피엘씨 워터 설명해줘", ("DTT", "HPLC water")),
             ("Solution A and Solution B difference", ("solution_a", "solution_b")),
-            ("DTT와 iodoacetamide 그리고 trypsin 설명해줘", ("dtt", "iodoacetamide", "trypsin")),
+            ("DTT와 iodoacetamide 그리고 trypsin 설명해줘", ("DTT", "iodoacetamide", "trypsin")),
         ):
             with self.subTest(query=query):
                 s = self.session("1")
@@ -499,11 +503,11 @@ class CandidateALiveVoiceGeneralizationTests(unittest.TestCase):
                 # Verify completeness: every requested entity has a mention in primary_text
                 primary = p.primary_text or ""
                 labels = {
-                    "ambic": "AMBIC",
-                    "hplc_water": "HPLC water",
+                    "AMBIC": "AMBIC",
+                    "HPLC water": "HPLC water",
                     "solution_a": "Solution A",
                     "solution_b": "Solution B",
-                    "dtt": "DTT",
+                    "DTT": "DTT",
                     # As the PDF spells them.
                     "acetonitrile": "acetonitrile",
                     "iodoacetamide": "iodoacetamide",

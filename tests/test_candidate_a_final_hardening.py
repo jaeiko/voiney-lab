@@ -121,8 +121,9 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
             # Lane GE: the words are heard through the protocol's vocabulary.
             protocol_vocabulary=ProtocolVocabulary.from_fixture(self.fixture),
         )
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
         self.assertEqual(
-            entities, ("ambic", "hplc_water", "rpm", "solution_a")
+            entities, ("AMBIC", "HPLC water", "rpm", "solution_a")
         )
         self.assertIn("800", normalized)
         self.assertIn("37", normalized)
@@ -152,8 +153,9 @@ class CandidateAFinalHardeningTests(unittest.TestCase):
         follow = session.plan(
             "그거는 일반 물하고 뭐가 다른데?", turn_id=2, language="ko"
         )
-        self.assertEqual(first.requested_entities, ("hplc_water",))
-        self.assertEqual(follow.requested_entities, ("hplc_water",))
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+        self.assertEqual(first.requested_entities, ("HPLC water",))
+        self.assertEqual(follow.requested_entities, ("HPLC water",))
         self.assertEqual(follow.coreference_status, "resolved")
         self.assertIn("difference", follow.unresolved_dimensions)
         self.assertEqual(session.state(), opening)

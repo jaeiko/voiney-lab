@@ -70,7 +70,8 @@ class CandidateAAcceptancePhase2Tests(unittest.TestCase):
             generation=1,
         )
         self.assertEqual(plan_5.action, CuratedProtocolAction.RELATED_QUESTION)
-        self.assertIn("ambic", plan_5.requested_entities)
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+        self.assertIn("AMBIC", plan_5.requested_entities)
         self.assertIn("AMBIC", plan_5.display_text)
         self.assertFalse(plan_5.state_changed)
         self.assertEqual(session.current_index, 0)
@@ -83,7 +84,8 @@ class CandidateAAcceptancePhase2Tests(unittest.TestCase):
             generation=1,
         )
         self.assertEqual(plan_6.action, CuratedProtocolAction.VISUAL_REQUEST)
-        self.assertIn("ambic", plan_6.requested_entities)
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+        self.assertIn("AMBIC", plan_6.requested_entities)
         # Speech and display text must NOT be Step 1 generic instructions!
         self.assertNotIn("작은 1 mm³ 플러그를 자르거나", plan_6.speech_text)
         self.assertIn("AMBIC", plan_6.display_text)
@@ -105,7 +107,8 @@ class CandidateAAcceptancePhase2Tests(unittest.TestCase):
             generation=1,
         )
         self.assertEqual(plan_8.action, CuratedProtocolAction.VISUAL_REQUEST)
-        self.assertIn("hplc_water", plan_8.requested_entities)
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+        self.assertIn("HPLC water", plan_8.requested_entities)
         self.assertFalse(plan_8.state_changed)
         self.assertEqual(session.current_index, 1)
 

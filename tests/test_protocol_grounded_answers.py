@@ -311,7 +311,8 @@ class InGelHearsItsOwnPdfTests(unittest.TestCase):
     def test_ambic_is_defined_by_the_pdf_itself(self) -> None:
         _, (plan,) = _run(self.fixture, ("AMBIC가 뭐야?",), index=2)
         self.assertIn("원문에서 AMBIC는 ammonium bicarbonate의 약어입니다.", plan.speech_text)
-        claim = next(c for c in plan.claim_requests if c.target_id == "ambic")
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+        claim = next(c for c in plan.claim_requests if c.target_id == "AMBIC")
         self.assertEqual(claim.admission_status.value, "local_supported")
 
     def test_the_tube_is_where_the_pdf_introduces_it(self) -> None:

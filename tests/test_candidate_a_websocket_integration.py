@@ -482,7 +482,8 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(p3.action, CuratedProtocolAction.RELATED_QUESTION)
         self.assertIn("stained_protein_band", p3.requested_entities)
-        self.assertIn("ambic", p3.requested_entities)
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+        self.assertIn("AMBIC", p3.requested_entities)
         self.assertIn("단백질 밴드", p3.primary_text or "")
         self.assertIn("AMBIC", p3.primary_text or "")
         self.assertEqual(session.current_index, 1)
@@ -511,7 +512,8 @@ class CandidateAWebSocketIntegrationTests(unittest.TestCase):
             turn_id=7, language="ko",
         )
         self.assertEqual(t7.action, CuratedProtocolAction.VISUAL_REQUEST)
-        self.assertIn("ambic", t7.requested_entities)
+        # Lane GEN1: in-gel's terms are named as the protocol spells them, as every protocol's are.
+        self.assertIn("AMBIC", t7.requested_entities)
         self.assertIn("AMBIC", t7.speech_text or "")
         # CRITICAL INVARIANT: active workflow state MUST NOT BE LOST
         self.assertTrue(session.active)
