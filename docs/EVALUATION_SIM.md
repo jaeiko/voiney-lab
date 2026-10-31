@@ -32,6 +32,24 @@ python scripts/sim/run.py --emergency-matrix --split holdout --output ~/reports/
 python scripts/sim/run.py --split development --development-fixture --output ~/reports/sim/development-with-in-gel.json
 ```
 
+분야별 **일어난 일 + 질문** 갈래(`happened_question`, 줄 SAFE2)도 같은 꼴로 개발용·시험용
+3문장씩을 원래 분할 밖에 둔다. 기대는 이상 사항 기록(`report_anomaly`)과 같은 턴의 근거 답
+(원문 위치 또는 "원문에 없음")이며, 기록하지 않으면 `happened_unrecorded`로 센다.
+
+**받아쓰기 오류 주입 축**(`--stt-error-matrix`, 줄 SAFE2)은 실측 development 행의 오류 꼴을
+일반화한 규칙을 선택한 분할의 모든 문장(소음·응급 제외)에 적용한다: 첫 수량의 숫자를 비틀고
+단위를 들리는 대로 쓰고 숫자를 글자로 적음(`number_unit`), 마지막 음절·마지막 낱말을 자름
+(`tail_cut`), 첫·끝 한국어 낱말을 한 자모 다르게 씀(`command_sound`), 조사·높임 어미를 뺌
+(`particle_drop`). 변형은 원래 갈래와 허용 상태를 그대로 쓰고 확인 질문을 허용에 더하며,
+적용·기록된 값은 변형이 아니라 **말한 글**과 비교한다(`run_case(spoken_text=…)`). 다른 문장과
+글자가 같아지는 변형(예: "다음 뭐야?"의 끝 잘림 "다음")은 다른 명령이지 오류가 아니므로 뺀다.
+표에는 `stt_error` 차원이 있다. 잘못 바뀐 상태는 0이어야 하고, 이해 수는 참고값이다.
+
+```bash
+python scripts/sim/run.py --stt-error-matrix --split development --output ~/reports/sim/stt-errors-development.json
+python scripts/sim/run.py --stt-error-matrix --split holdout --output ~/reports/sim/stt-errors-holdout.json
+```
+
 응급 별도 묶음은 눈·피부 노출, 흡입·호흡, 불·연기, 대량 쏟음, 베임·출혈,
 쓰러짐·의식, 가스·냄새, 화상, 감전, 삼킴의 합성 발화와 비응급 대조군이다.
 응급 놓침과 헛경보를 따로 센다. 실제 음성 인식이나 안전 대응의 검증은 아니다.
