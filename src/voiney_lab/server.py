@@ -1461,6 +1461,63 @@ def _pilot_protocol_event(
         log.warning("pilot.metrics.failed kind=%s error=%s",kind,type(exc).__name__)
 
 
+READY_EXPERIMENT_MAX_AGE_HOURS_ENV="VOINEY_LAB_READY_EXPERIMENT_MAX_AGE_HOURS"
+
+
+def ready_experiment_max_age_hours(env:Mapping[str,str]|None=None)->float:
+    """How old a never-started (``ready``) experiment may be and still be taken up by a voice session.
+
+    Lane SAFE2, item 4 (person's decision 2026-10-31): default 12 hours,
+    1--720; a value outside that or not a number is refused by name.
+    """
+
+    raw=(os.environ if env is None else env).get(READY_EXPERIMENT_MAX_AGE_HOURS_ENV,"12").strip()
+    try:
+        hours=float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{READY_EXPERIMENT_MAX_AGE_HOURS_ENV} must be a number of hours") from exc
+    if not hours==hours or not 1<=hours<=720:
+        raise ValueError(f"{READY_EXPERIMENT_MAX_AGE_HOURS_ENV} is outside bounds (1-720 hours)")
+    return hours
+
+
+def _stale_ready_experiment(state:Mapping[str,object],*,now:datetime|None=None)->bool:
+    """A never-started experiment made longer ago than the limit (lane SAFE2, item 4).
+
+    The 10/31 run was made inside an experiment created on 10/28 and left
+    ``ready``; the voice session took it up three days later. Such a shell is
+    left where it is -- the session makes a new experiment, and the active
+    list the home continues from leaves it out. A run in progress, paused or
+    blocked is continued whatever its age.
+    """
+
+    if state.get("status")!="ready":
+        return False
+    moment=now or datetime.now(timezone.utc)
+    age=moment-_record_list_moment(state.get("started_at"))
+    return age.total_seconds()>ready_experiment_max_age_hours()*3600
+
+
+def _stale_ready_session(session_id:str)->bool:
+    """Whether the named experiment is this caller's, never started and older than the limit."""
+
+    try:
+        principal,store=_commercial_workspace()
+    except Exception:  # noqa: BLE001 - the recovery itself reports it
+        return False
+    try:
+        state=store.get_experiment(principal,session_id)
+    except Exception:  # noqa: BLE001 - not this caller's, or unknown: the recovery refuses as before
+        return False
+    finally:
+        store.close()
+    stale=_stale_ready_experiment(state)
+    if stale:
+        log.info("experiment.stale_ready_replaced age_hours=%d",
+                 int((datetime.now(timezone.utc)-_record_list_moment(state.get("started_at"))).total_seconds()//3600))
+    return stale
+
+
 def _start_or_resume_workspace_experiment(
     session:ListenerSession,
     *,
@@ -4394,6 +4451,10 @@ def get_workspace_experiments(active_only:bool=False)->dict[str,object]:
                     principal,active_only=active_only,every_owner=_account_is_admin()))
         finally:
             store.close()
+        if active_only:
+            # Lane SAFE2, item 4: a never-started experiment older than the
+            # limit is not offered to continue (the home's one card).
+            experiments=[item for item in experiments if not _stale_ready_experiment(item)]
     except Exception as exc:
         raise _workspace_http_error(exc) from exc
     # Lane R6, decision 5: each item names its protocol and its place that
@@ -8671,7 +8732,8 @@ class ListenerSession:
                 self.endpoint_at=self.clock()
                 self.turn_committed_at[self.active_turn_id]=self.endpoint_at
                 self._keep_turn_audio(
-                    self.active_turn_id,self.turn_generations[self.active_turn_id],result.utterance)
+                    self.active_turn_id,self.turn_generations[self.active_turn_id],result.utterance,
+                    result.trailing)
                 output.append(ListenerEvent(
                     "speech.end",self.active_turn_id,result,
                     self.turn_generations[self.active_turn_id]))
@@ -8685,11 +8747,27 @@ class ListenerSession:
         curated=self.curated_protocol_session
         return (getattr(curated,"_revision",None) if curated is not None else None,
                 self.experiment_state_version)
-    def _keep_turn_audio(self,turn_id:int,generation:int,pcm:bytes)->None:
-        """The last committed turn's audio and the run's revision then, for a continuation to join."""
+    def _keep_turn_audio(self,turn_id:int,generation:int,pcm:bytes,trailing:bytes=b"")->None:
+        """The last committed turn's audio and the run's revision then, for a continuation to join.
+
+        ``trailing`` (lane SAFE2) is what its end trimmed and the classifier
+        still called voiced -- the quieter stretch the relative gate or the
+        wearer's level overruled. A join puts it between the two pieces.
+        """
 
         self._joinable_turn={"identity":(turn_id,generation),"pcm":bytes(pcm),
-                             "revision":self._workflow_revision()}
+                             "tail":bytes(trailing),"revision":self._workflow_revision()}
+    @staticmethod
+    def _lead_for_join(kept:Mapping[str,Any])->bytes:
+        """The kept turn's words and the voiced frames its end trimmed: what goes in front of a continuation.
+
+        What was heard after the end is not put in: between a sentence's two
+        pieces in noise the quieter words are the trimmed frames, while what
+        follows the end is a pause, or typing (lane LIVE3) -- so the joined
+        utterance is as it was, plus at most the end's own second.
+        """
+
+        return bytes(kept["pcm"])+bytes(kept.get("tail",b""))
     def _continuation_gap(
         self,identity:tuple[int,int],*,started_at:float|None=None,
     )->float|None:
@@ -8757,7 +8835,9 @@ class ListenerSession:
         joined_turn_id=self.next_turn_id; self.next_turn_id+=1
         self.active_turn_id=joined_turn_id
         self.turn_generations[joined_turn_id]=self.generation
-        pcm=kept["pcm"]
+        # Lane SAFE2: the first piece and the quieter frames its end trimmed
+        # go in front, so the sentence's quiet middle is heard too.
+        pcm=self._lead_for_join(kept)
         detector.prepend_utterance(
             pcm[i:i+FRAME_BYTES] for i in range(0,len(pcm)-FRAME_BYTES+1,FRAME_BYTES))
         self.detector=detector
@@ -8801,7 +8881,8 @@ class ListenerSession:
         joined_turn_id=self.next_turn_id; self.next_turn_id+=1
         self.active_turn_id=joined_turn_id
         self.turn_generations[joined_turn_id]=self.generation
-        pcm=kept["pcm"]
+        # Lane SAFE2: the first piece and the quieter frames its end trimmed.
+        pcm=self._lead_for_join(kept)
         kept_frames=[pcm[i:i+FRAME_BYTES] for i in range(0,len(pcm)-FRAME_BYTES+1,FRAME_BYTES)]
         kept_voiced=sum(1 for frame in kept_frames if self._vad_classifier(frame))
         joined_result=replace(
@@ -8814,7 +8895,7 @@ class ListenerSession:
         self.framer=FrameBuffer()
         self.endpoint_at=self.clock()
         self.turn_committed_at[joined_turn_id]=self.endpoint_at
-        self._keep_turn_audio(joined_turn_id,self.generation,joined_result.utterance)
+        self._keep_turn_audio(joined_turn_id,self.generation,joined_result.utterance,result.trailing)
         self._reset_interrupt_input()
         log.info(
             "speech.continued turn_id=%s joined_turn_id=%s gap_ms=%d joined_ms=%d at_end=true",
@@ -16981,9 +17062,21 @@ async def voice_socket(websocket:WebSocket):
                 )
                 # Lane NET, decision 4: the page continuing its run after a
                 # lost connection, and what is said of the timer then.
+                # Lane SAFE2, item 4: a never-started experiment older than the
+                # limit is not taken up; the session makes a new one and says so.
+                recovery_session_id=control.get("experiment_session_id")
+                recovery_version=control.get("experiment_session_version")
+                stale_ready_replaced=False
+                if (
+                    recovery_session_id is not None and _workspace_settings().enabled
+                    and await asyncio.to_thread(_stale_ready_session,str(recovery_session_id))
+                ):
+                    stale_ready_replaced=True
+                    recovery_session_id=None
+                    recovery_version=None
                 reconnect=(
                     _reconnect_request(message["text"])
-                    if control.get("experiment_session_id") is not None else None)
+                    if recovery_session_id is not None else None)
                 restored_connection=False
                 reconnect_notices:list[TimerNotice]=[]
                 reconnection:_Reconnection|None=None
@@ -17049,7 +17142,7 @@ async def voice_socket(websocket:WebSocket):
                                         recovered=(
                                             _recovery_fixture(
                                                 catalog,requested_protocol_id,entry,
-                                                control.get("experiment_session_id"))
+                                                recovery_session_id)
                                             if entry is not None else None)
                                         if recovered is not None:
                                             selected,revision_id,failure=recovered
@@ -17111,7 +17204,7 @@ async def voice_socket(websocket:WebSocket):
                     # Lane EASY, decision 2: today's values the person chose
                     # for this start (a recovery keeps the run's own).
                     run_change_set:tuple[str|None,tuple[RunChange,...]]=(None,())
-                    if selected_curated_fixture is not None and control.get("experiment_session_id") is None:
+                    if selected_curated_fixture is not None and recovery_session_id is None:
                         configuration_stage="run_changes"
                         run_change_set,run_changes_refused=await asyncio.to_thread(
                             _start_run_changes,requested_protocol_id,selected_revision_id,
@@ -17140,8 +17233,6 @@ async def voice_socket(websocket:WebSocket):
                         await asyncio.to_thread(
                             session.curated_protocol_session._protocol_vocabulary)
                     _subscribe_translations(session,sender)
-                    recovery_session_id=control.get("experiment_session_id")
-                    recovery_version=control.get("experiment_session_version")
                     if recovery_session_id is not None and not _workspace_settings().enabled:
                         raise WorkspaceError(
                             "Experiment recovery requires the tenant workspace."
@@ -17389,6 +17480,9 @@ async def voice_socket(websocket:WebSocket):
                         session.experiment_state_version)
                     ready_fields["experiment_recovered"]=(
                         recovery_session_id is not None)
+                if stale_ready_replaced:
+                    # Lane SAFE2, item 4: the page's old ready experiment was left.
+                    ready_fields["stale_ready_replaced"]=True
                 if restored_connection:
                     # Lane NET, decision 4: the page's own reconnection was taken.
                     ready_fields["connection_restored"]=True

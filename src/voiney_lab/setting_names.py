@@ -288,6 +288,8 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("VOINEY_LAB_SESSION_LANGUAGE", OTHER, "ko", "기본 세션 언어"),
     Setting("VOINEY_LAB_REPORT_TIMEZONE", OTHER, "Asia/Seoul",
             "실험 보고서에 쓰는 연구자 시간대 (IANA 이름)"),
+    Setting("VOINEY_LAB_READY_EXPERIMENT_MAX_AGE_HOURS", OTHER, "12",
+            "시작하지 않은(ready) 실험 칸을 음성 세션이 이어 받는 최대 나이 (시간, 1–720; 넘으면 새 칸을 만듦 — 줄 SAFE2)"),
     Setting("VOINEY_LAB_ALLOWED_LANGUAGES", OTHER, "ko,en,vi", "허용 세션 언어"),
     Setting("VOINEY_LAB_ADMIN_TOKEN", OTHER, "(없음, 없으면 관리자 지표 닫힘)",
             "GET /api/admin/metrics 관리자 토큰"),

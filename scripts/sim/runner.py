@@ -33,7 +33,8 @@ STATE_FIELDS = {
     'pause': ('_pause_state', '_paused_at', '_total_paused_seconds', '_pause_intervals', '_status_before_pause'),
     'confirmation': ('_pending_completion_confirmation', '_pending_observation_confirmation', '_pending_transcript_confirmation',
                      '_pending_stop_confirmation', '_frozen_question', '_pending_timer_confirmation', '_pending_anomaly_confirmation',
-                     '_pending_step_move', '_pending_record_fix', '_pending_note_confirmation', '_pending_run_change'),
+                     '_pending_step_move', '_pending_record_fix', '_pending_note_confirmation', '_pending_run_change',
+                     '_pending_ambient_confirmation'),
     'values': ('_run_changes',), 'record': ('_last_record', '_pending_note_capture', '_report_review'),
     'anomaly': ('_pending_anomaly',), 'notebook': ('_notebook_question', '_notebook_said'),
     'branches': ('_branch_answers', '_registered_repetitions', '_declined_round'),
@@ -107,8 +108,14 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                    transcriber: Callable[..., Any] | None = None, synthesizer: Callable[..., bytes] | None = None,
                    router_settings: Any = None, offline: bool = True, classifier: Callable | None = None, stt_provider: str = 'google_cloud', role_client: Callable | None = None,
                    oracle_environment: bool = False,
-                   transient_noise_gate: bool = False) -> dict:
-    """Only provider boundaries are replaced; emergency/front rules/gates are production code."""
+                   transient_noise_gate: bool = False,
+                   spoken_text: str | None = None) -> dict:
+    """Only provider boundaries are replaced; emergency/front rules/gates are production code.
+
+    ``spoken_text`` (lane SAFE2) is what the person said when ``case.text`` is
+    what the recognizer wrote instead: a value applied or a record stored is
+    checked against the spoken words, never against the garble.
+    """
     from voiney_lab.curated_protocol import CuratedProtocolSession
     from voiney_lab.vad import EndpointDetector, VadConfig
     from voiney_lab.language import Transcription
@@ -143,7 +150,11 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         session.start()
         session.accept_configuration(1, 'cascade', 'ko', protocol.fixture.protocol_id)
         workflow.active = True
-        workflow._workflow_status = 'running'
+        # Lane SAFE2: the status the product gives a running experiment. The
+        # runner used to write 'running', a value the product never sets, so a
+        # resume word on an unpaused run looked like a change (status and
+        # revision) here where the product changes nothing.
+        workflow._workflow_status = 'active'
         workflow.current_index = case.index
         if case.setup == 'purpose_question':
             workflow.open_notebook_question('purpose')
@@ -243,6 +254,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         after = snapshot(workflow)
         invalid_state=[]
         from scripts.sim.measurements import number_units
+        spoken = case.text if spoken_text is None else spoken_text
         if before['timer'] != after['timer'] and case.family.startswith('timer_'):
             duration=workflow._timer_duration_seconds
             source_duration=workflow.timer_seconds_for_step(case.index)
@@ -256,13 +268,14 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                 invalid_state.append('timer_cancel')
         if before['values'] != after['values']:
             for change in workflow._run_changes.values():
-                if change.step_id != protocol.fixture.steps[case.index].step_id or not set(number_units(f'{change.number} {change.unit}')) <= set(number_units(case.text)):
+                if change.step_id != protocol.fixture.steps[case.index].step_id or not set(number_units(f'{change.number} {change.unit}')) <= set(number_units(spoken)):
                     invalid_state.append('value_or_step')
-        if case.setup=='run_changed' and workflow._run_changes:
+        if case.setup=='run_changed' and workflow._run_changes and spoken_text is None:
+            # A garbled "원문대로" that restores nothing is the safe answer, not a wrong state.
             invalid_state.append('source_not_restored')
         if before['record'] != after['record'] and workflow._last_record:
             record=workflow._last_record
-            if str(record.get('text','')) not in case.text or record.get('step_id') != protocol.fixture.steps[case.index].step_id:
+            if str(record.get('text','')) not in spoken or record.get('step_id') != protocol.fixture.steps[case.index].step_id:
                 invalid_state.append('record_or_step')
         if before['completed'] != after['completed'] and case.family=='complete':
             expected=set(before['completed'][0]) | {protocol.fixture.steps[case.index].step_id}
@@ -318,7 +331,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             list((protocol.fixture.localizations or {}).values()) + list((protocol.fixture.machine_localizations or {}).values()),
             ' '.join(page.text for page in protocol.fixture.draft.extraction.pages))
         grounding = None
-        if case.family == 'problem_question':
+        if case.family in {'problem_question', 'happened_question'}:
             raw_sources = reply.get('source_texts')
             source_texts = tuple(
                 item for item in raw_sources if isinstance(item, str)

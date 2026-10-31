@@ -24,13 +24,15 @@ class SafeRecordVoiceBoundaryTests(VoiceNotesHarness, unittest.TestCase):
         socket = self.turns("프로토콜 시작해줘", "편. 편.")
         report = self.report()
         self.assertNotIn("purpose_recorded", [event["event_type"] for event in report["events"]])
-        self.assertIn("목적을 '편. 편.'으로 기록할까요?", shown(socket)[2])
+        # Lane SAFE2 (2026-10-31): a phrase the recognizer wrote twice is read
+        # once ("편. 편." is one "편"), so the question and the record hold it once.
+        self.assertIn("목적을 '편'으로 기록할까요?", shown(socket)[2])
 
         socket = self.turns("프로토콜 시작해줘", "편. 편.", "네")
         purpose = next(
             event for event in self.report()["events"] if event["event_type"] == "purpose_recorded"
         )
-        self.assertEqual(purpose["user_wording"], "편. 편.")
+        self.assertEqual(purpose["user_wording"], "편")
         self.assertEqual(purpose["confirmation_state"], "experimenter_confirmed")
         self.assertIn("확인했어요", shown(socket)[3])
 

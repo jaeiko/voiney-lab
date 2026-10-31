@@ -209,7 +209,9 @@ class ImpactsWhileAnsweringTests(unittest.TestCase):
         self.assertTrue(utterance.startswith(b"".join(first)), "the first half was not put in front")
         self.assertIn(b"".join(second[:20]), utterance)
         # The first half, the five silent frames heard before the second
-        # half began (its prefix) and the second half: nothing twice.
+        # half began (its prefix) and the second half: nothing twice. (Lane
+        # SAFE2 puts back only trimmed frames the classifier called voiced;
+        # the silence here is not.)
         self.assertEqual(ended[0].result.total_frames, len(first) + 5 + len(second))
         self.assertEqual(len(utterance), ended[0].result.total_frames * FRAME_BYTES)
         self.assertTrue(utterance.endswith(b"".join(second)), "the second half was not kept whole")

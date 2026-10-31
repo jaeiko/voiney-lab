@@ -43,10 +43,10 @@ def save_report(path: Path, report: dict) -> None:
         json.dump(report, f, ensure_ascii=False, indent=2)
         f.write('\n')
     overall = report['overall']
-    lines = ['|구분|말 수|이해|정확도|잘못 바뀐 상태|영어 원문|단계 이름 겹침|응급 놓침|헛경보|가정 질문 이상 오기록|', '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
+    lines = ['|구분|말 수|이해|정확도|잘못 바뀐 상태|영어 원문|단계 이름 겹침|응급 놓침|헛경보|가정 질문 이상 오기록|일어난 일+질문 미기록|', '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
     for dim, groups in report['tables'].items():
         for key,s in groups.items():
-            lines.append(f'|{dim}: {key}|{s["cases"]}|{s["understood"]}|{s["accuracy"]:.1%}|{s["wrong_state"]}|{s["english_copy"]}|{s["duplicate_label"]}|{s.get("emergency_miss", "미측정")}|{s.get("false_alarm", "미측정")}|{s.get("supposed_misrecorded", "미측정")}|')
+            lines.append(f'|{dim}: {key}|{s["cases"]}|{s["understood"]}|{s["accuracy"]:.1%}|{s["wrong_state"]}|{s["english_copy"]}|{s["duplicate_label"]}|{s.get("emergency_miss", "미측정")}|{s.get("false_alarm", "미측정")}|{s.get("supposed_misrecorded", "미측정")}|{s.get("happened_unrecorded", "미측정")}|')
     path.with_suffix('.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
     print(json.dumps({'result':str(path), **overall}, ensure_ascii=False))
 
@@ -77,6 +77,19 @@ def prepare_cases(args: argparse.Namespace) -> tuple[list, dict, dict, dict]:
             if (not args.family or case.family in args.family)]
         cases = [*cases, *added]
         split = {**split, 'development_fixture_cases': len(added)}
+    if getattr(args, 'stt_error_matrix', False):
+        # Lane SAFE2: the garbles the live rows showed, as rules on each
+        # case's own words, in place of the cases themselves. The spoken
+        # words stay beside each variant for the runner's value checks.
+        from scripts.sim.stt_errors import case_texts, variants
+        spoken_words = case_texts(c for _p, c in cases)
+        garbled = [(p, v, c) for p, c in cases for v in variants(c, other_texts=spoken_words)]
+        if not garbled:
+            raise ValueError('no case takes a transcription error')
+        cases = [(p, v) for p, v, _spoken in garbled]
+        split = {**split, 'stt_error_variants': len(cases),
+                 'stt_error_originals': len({c.code for _p, _v, c in garbled})}
+        args._spoken_by_code = {v.code: c.text for _p, v, c in garbled}
     if not cases:
         raise ValueError('no matching cases')
     return cases, split, catalog_counts, translation_coverage
@@ -123,6 +136,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
         if args.impact_matrix else ((None, None),)
     )
     pattern = args.impact_pattern if args.impact_matrix else 'single'
+    spoken_by_code = getattr(args, '_spoken_by_code', {})
     workload = [
         # The LISTEN3 single-burst workload keeps its identity; LIVE3's
         # patterns add theirs so results of different patterns never compare.
@@ -178,11 +192,18 @@ async def evaluate(args: argparse.Namespace) -> dict:
                         pcm=pcm,
                         transient_noise_gate=(
                             args.impact_matrix and args.impact_filter == 'current'),
+                        spoken_text=spoken_by_code.get(c.code),
                     )
                     row = score_case(
                         c, result,
                         source=' '.join(page.text for page in p.fixture.draft.extraction.pages),
                     )
+                    if c.code in spoken_by_code:
+                        from scripts.sim.stt_errors import error_kind, original_code
+                        # Lane SAFE2: which garble, of which spoken case. A
+                        # confirmation is a right answer; a state the spoken
+                        # words did not allow is the error this axis counts.
+                        row.update(stt_error=error_kind(c.code), original_case=original_code(c.code))
                     row.update(
                         protocol=p.code,
                         field=p.field,
@@ -248,6 +269,7 @@ async def evaluate(args: argparse.Namespace) -> dict:
         'impact_matrix':args.impact_matrix,
         'impact_filter':args.impact_filter if args.impact_matrix else None,
         'impact_pattern':pattern if args.impact_matrix else None,
+        'stt_error_matrix':bool(getattr(args, 'stt_error_matrix', False)),
         'translations_sha256':hashlib.sha256(args.translations.read_bytes()).hexdigest() if args.translations else None,
         'translation_coverage':translation_coverage,
         'router_cost_estimate':router_cost_estimate(
@@ -278,6 +300,8 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument('--impact-pattern', choices=IMPACT_PATTERNS, default='single',
                         help='where the impacts sit: one burst after the words (LISTEN3), '
                              'bursts that keep going after the words, or over the words (LIVE3)')
+    parser.add_argument('--stt-error-matrix', action='store_true',
+                        help='the transcription errors the live rows showed, as rules on each case\'s words (lane SAFE2)')
     parser.add_argument('--configured-router', action='store_true', help='plan an oracle-STT model comparison using shell router settings')
     parser.add_argument('--execute', action='store_true', help='execute the configured-router plan with real model requests')
     parser.add_argument('--max-calls', type=int, default=20)
@@ -295,6 +319,8 @@ def _main(argv: list[str] | None = None) -> int:
             raise ValueError('--execute requires --configured-router')
         if args.impact_matrix and args.configured_router:
             raise ValueError('--impact-matrix is offline-only')
+        if args.stt_error_matrix and (args.impact_matrix or args.configured_router or args.emergency_matrix):
+            raise ValueError('--stt-error-matrix is an offline axis of its own')
         if args.max_calls < 1 or any(not math.isfinite(x) or x <= 0 for x in (
             args.max_usd, args.reserve_usd_per_request, args.router_input_rate, args.router_output_rate)):
             raise ValueError('positive finite caps/rates required')

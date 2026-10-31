@@ -69,7 +69,7 @@ without a protocol: a voice session refuses to start without one.
 | Rules-only routing boundary | `runtime_routing.route_curated_runtime_turn` | The path when the router is off, the router's fallback, and `scripts/replay_turns.py`. |
 | Model proposals and answers | `llm_router` + `answer_checks` | Validate, then hand to the state machine. No state of their own. |
 | Protocol lifecycle and the execution rule | `protocol_catalog.ProtocolCatalog` + `experiment_protocol*` | Immutable sources, append-only protocol ledger, analysis revisions, review versions, `available_for_execution`. |
-| Durable experiment (the experimenter's session) | `workspace_store` | Tenant-scoped `ExperimentSession` with optimistic versions, append-only timeline, recovery after reload. |
+| Durable experiment (the experimenter's session) | `workspace_store` | Tenant-scoped `ExperimentSession` with optimistic versions, append-only timeline, recovery after reload. A `ready` (never started) experiment older than `VOINEY_LAB_READY_EXPERIMENT_MAX_AGE_HOURS` (12) is not taken up by a voice session: `server._stale_ready_session` leaves it and a new experiment is made (lane SAFE2). |
 | Experiment record and exports | `experiment_reports.ExperimentReportStore` | One append-only record per session; exports are re-derived from it. |
 | Identity | `identity.IdentityResolver`, `accounts.AccountStore` | Development identity, invite-only accounts, or OIDC in `operational` scope. |
 | Browser | `static/index.html` | Renders server events and snapshots; never derives workflow state from prose. |
@@ -124,7 +124,12 @@ generation is cancelled and its audio cleared (barge-in).
    (`EndpointDetector.speech_shape_seen`); a bench impact never does, is
    rejected as `transient_noise` at its end and leaves the turn being
    answered untouched; a candidate whose shape shows only in its committed
-   whole joins then (`_join_committed_candidate`). Every dropped sound, here or in step 3,
+   whole joins then (`_join_committed_candidate`). A join puts the first
+   piece and the frames its end trimmed that the classifier itself still
+   called voiced (`EndpointResult.trailing`; lane SAFE2) in front, so a
+   sentence whose quieter middle the relative gate counted as silence in
+   steady noise reaches speech recognition whole; in a quiet room nothing
+   is put back and the gap after the end never is. Every dropped sound, here or in step 3,
    goes through `_report_speech_drop` (reason code, dB, ms; event
    `speech.dropped` with `reason_ko`, the plain words; shown, never said —
    lane HEAR2, decision 4). A speech-to-text provider that fails
@@ -156,6 +161,11 @@ generation is cancelled and its audio cleared (barge-in).
    turn language is Korean. Audio rejected before STT still cannot reach this
    text gate; no change to acoustic recognition is implied.
 4. Routing, one line (AGENTS rule 3):
+   - The transcript is read once however often the recognizer wrote it
+     (`collapse_repeated_phrase`, lane SAFE2: "다음. 다음." is "다음"), and a
+     timer word one letter off is read as the timer word and asked about
+     once (`_timer_word_normalized`); a resume word while nothing is paused
+     changes nothing and asks once about a paused step timer.
    - `CuratedProtocolSession.front_plan` reads the turn first and never
      waits on a model (`FRONT_RULES`: transcript quality, pause and "종료",
      yes/no to an open question, replies to an endpoint question, time left
@@ -376,8 +386,11 @@ upload (PDF · .docx → LibreOffice · photo → PDF)   or   Google link (proto
   exactly after persistence and accept an immediate append-only correction.
   One- or two-syllable answers and contextless numbers wait for one explicit
   confirmation. Contextless values such as a bare `측정값 37 °C` also wait
-  before persistence; a value with a named property or sample keeps the
-  normal save-and-read-back path. A pending value cannot move a step,
+  before persistence -- and so (lane SAFE2) does the lead word as the
+  recognizer spaces or bends it ("측정 값", "측정갑", "측정치") and a
+  measurement word with no value heard
+  (`contextless_measurement_needs_confirmation`); a value with a named
+  property or sample keeps the normal save-and-read-back path. A pending value cannot move a step,
   complete work, or start a timer.
   Report events carry `read_back`, `experimenter_confirmed`, or correction
   evidence, and notebook number provenance admits record prose only with one
@@ -509,6 +522,13 @@ The claim-chunk path was deleted on 2026-10-13. What still holds:
   `problem_help_violations`) and recorded as a `problem_help` event with its
   places, not its text. A source that cannot be used raises
   `KnowledgeUnavailable` (its setting) and is skipped; none replaces it.
+  A problem said as having happened and then asked about ("침전이
+  생겼는데 이러면 어떡해?"; `problem_reading` kind `statement_question`,
+  intent `problem_report_question`, lane SAFE2) is recorded as the
+  statement alone is and its help marker is the grounded answer's, which
+  the server appends after the read-back. Words cut before their ending
+  ("여기서 거품이 생기", `unfinished_problem_statement`) are asked about once
+  like an unclear supposition and never recorded.
   A prospective problem/reason/what-if question is the narrower
   `grounded_problem_question` on the same front rule. A problem supposed
   rather than reported (`intent_arbitration.supposed_problem_reading`:
