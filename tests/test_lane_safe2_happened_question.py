@@ -37,7 +37,10 @@ ONLY_ASKED = ("왜 아직 파래?", "왜 안 되지?", "침전이 생기면 어�
 ONLY_SAID = ("침전이 생겼어", "용액이 탁해졌어", "젤이 아직 파래")
 #: The recognizer cut the last word before its ending (the error axis's tail cut of
 #: a supposition): a report or a supposition, nobody can tell -- asked once.
-CUT_SHORT = ("여기서 거품이 생기", "혹시 침전이 생기", "용액이 탁해지", "용액이 탁해져서", "여과가 너무 느리")
+CUT_SHORT = ("여기서 거품이 생기", "혹시 침전이 생기", "용액이 탁해지", "용액이 탁해져서", "막이 뿌예지")
+#: Finished words that the cut-short reading must leave alone: sentence endings
+#: ("-지?", "-나", "-져"), reports, and English.
+FINISHED = ("왜 안 되지?", "이거 맞지?", "원심분리기에서 이상한 소리가 나", "색이 안 빠져", "침전이 생겼지")
 
 
 def heard(protocol, text: str, *, index: int = 1) -> dict:
@@ -81,7 +84,7 @@ class CutShortTests(unittest.TestCase):
                 self.assertIsNone(problem_reading(text))
                 self.assertEqual(supposed_problem_reading(text), "unclear")
                 self.assertEqual(arbitrate_request(text).reason_code, "problem_supposed_or_happened")
-        for text in (*ONLY_SAID, *HAPPENED_THEN_ASKED, "침전이 생겼는데", "the gel is still blue", "pH 7.2"):
+        for text in (*ONLY_SAID, *HAPPENED_THEN_ASKED, *FINISHED, "침전이 생겼는데", "the gel is still blue", "pH 7.2"):
             with self.subTest(text=text):
                 self.assertFalse(unfinished_problem_statement(text))
 

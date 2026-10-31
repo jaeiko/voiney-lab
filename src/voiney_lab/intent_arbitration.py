@@ -327,14 +327,13 @@ _TROUBLE = re.compile(
 )
 
 
-#: The endings a finished Korean sentence or clause ends in. A word without
-#: one at the end of the words is a word cut short by the recognizer
-#: ("여기서 거품이 생기", "용액이 탁해지", "탁해져서"): it reports nothing finished.
-_FINISHED_ENDING = re.compile(
-    r"(?:어|아|여|요|다|네|데|까|죠|니|냐|음|함|돼|래|워|봐|와|려|해|습니다|습니까|세요|군요|구나|잖아|거든"
-    # "-지" ends a sentence after a tense mark ("생겼지", "됐지"); bare, it is
-    # the stem of a "-지다" verb cut short ("탁해지", "흐려지").
-    r"|[았었였했됐겼났졌왔갔봤렸쳤웠]지)$"
+#: A last word cut short by the recognizer before its ending: a bare verb stem
+#: ("생기", "변하", "안 되"), a "-지다" stem ("탁해지", "흐려지", "많아지" -- "되지",
+#: "맞지" and "생겼지" end a sentence), or a connective ("탁해져서", "생기고").
+#: A finished word -- "파래", "빠져", "소리가 나", "보여", "생겼어", "생겼는데" --
+#: is none of these.
+_UNFINISHED_STEM_END = re.compile(
+    r"(?:기|하|되|고|[아어해려라와워져]서|[해어워러려아라와예]지)$"
 )
 
 
@@ -352,7 +351,7 @@ def unfinished_problem_statement(text: str) -> bool:
     if not words:
         return False
     last = words[-1].strip(",.!?~")
-    if not re.fullmatch(r"[가-힣]+", last) or _FINISHED_ENDING.search(last):
+    if not re.fullmatch(r"[가-힣]{2,}", last) or not _UNFINISHED_STEM_END.search(last):
         return False
     if any(_SUPPOSITION_WORD.fullmatch(word.strip(",.!?~")) for word in words):
         return False
