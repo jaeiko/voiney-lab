@@ -187,3 +187,28 @@ class SupposedProblemBoundaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServerBoundaryTests(unittest.TestCase):
+    """The production voice boundary (ListenerSession -> run_turn_safely) with
+    only the STT/TTS providers replaced, as the SIM drives it."""
+
+    def test_a_cut_off_supposition_and_the_one_question_at_the_voice_boundary(self) -> None:
+        import asyncio
+
+        from scripts.sim.corpus import Case
+        from scripts.sim.runner import run_case
+
+        for protocol in load_corpus():
+            supposed = Case(f"{protocol.code}.gen1.cut", "supposed_question", "여기서 침전이 생기면", 1)
+            unclear = Case(f"{protocol.code}.gen1.unclear", "supposed_question", UNCLEAR, 1)
+            with self.subTest(protocol=protocol.code, words=supposed.text):
+                result = asyncio.run(run_case(protocol, supposed))
+                self.assertEqual(result["action"], "problem_help")
+                self.assertEqual(result["intent_kind"], "grounded_problem_question")
+                self.assertEqual(result["changed_fields"], [])
+            with self.subTest(protocol=protocol.code, words=unclear.text):
+                result = asyncio.run(run_case(protocol, unclear))
+                self.assertEqual(result["intent_kind"], "problem_supposed_or_happened")
+                self.assertEqual(result["changed_fields"], [])
+                self.assertIn(SUPPOSED_OR_HAPPENED_QUESTION, result["spoken"])
