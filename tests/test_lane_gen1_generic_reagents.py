@@ -94,6 +94,12 @@ class GenericReagentTests(unittest.TestCase):
         self.assertIs(plan.action, CuratedProtocolAction.REPORT_ANOMALY)
         self.assertEqual(plan.anomaly_category, "equipment_issue")
 
+    def test_the_app_or_timer_stopping_is_no_instrument(self) -> None:
+        for words in ("app이 멈췄어", "timer가 멈췄어"):
+            with self.subTest(words=words):
+                plan = _turn(_at(CHEMISTRY, "5"), words)
+                self.assertIsNot(plan.action, CuratedProtocolAction.REPORT_ANOMALY)
+
     def test_a_research_plan_is_made_from_the_protocol(self) -> None:
         session = _at(CHEMISTRY, "2")
         plan = session.canonical_research_plan("SAB")
@@ -112,6 +118,8 @@ class GenericReagentTests(unittest.TestCase):
     def test_a_labelled_reagent_key_is_put_in_words(self) -> None:
         self.assertEqual(hide_internal_names("buffer_2를 넣어요."), "버퍼 2를 넣어요.")
         self.assertEqual(hide_internal_names("Add reagent_a.", "en"), "Add reagent A.")
+        # A lab-lexicon key that is an acronym by its form stays one.
+        self.assertEqual(hide_internal_names("sds_page의 결과"), "SDS-PAGE의 결과")
 
 
 if __name__ == "__main__":

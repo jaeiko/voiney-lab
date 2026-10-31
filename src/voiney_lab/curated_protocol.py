@@ -5248,7 +5248,11 @@ def _identifier_words(name: str) -> tuple[str, str] | None:
         mark = match.group(2).upper()
         return (f"{_LABEL_NOUNS[match.group(1)][1]} {mark}", f"{match.group(1)} {mark}")
     if name in _LAB_LEXICON_KOREAN:
-        return (_LAB_LEXICON_KOREAN[name][0], _LAB_LEXICON_LABEL[name])
+        label = _LAB_LEXICON_LABEL[name]
+        if re.fullmatch(r"[a-z]{2,5}(?:-[a-z]{2,5})+", label):
+            # An acronym by its form ("sds-page") is written as one: SDS-PAGE.
+            return (label.upper(), label.upper())
+        return (_LAB_LEXICON_KOREAN[name][0], label)
     return None
 #: A step fact's evidence id ("note_1", "expected_result_2") in words.
 _EVIDENCE_KIND_WORDS: dict[str, tuple[str, str]] = {
@@ -6113,7 +6117,8 @@ _ANOMALY_PATTERNS = (
                 r".*(?:멈췄|고장|이상|안\s*돌아가|이상한\s*소리)"), "equipment_issue"),
     # An instrument named in Latin letters, as protocols name them (a brand
     # or a model), that stopped: "speedvac이 멈췄어".
-    (re.compile(r"(?<![a-z0-9])[a-z][a-z0-9\-]{2,}\s*(?:이|가|은|는)?\s*"
+    (re.compile(r"(?<![a-z0-9])(?!(?:timer|app|mic|screen|phone|wifi)(?![a-z0-9]))"
+                r"[a-z][a-z0-9\-]{2,}\s*(?:이|가|은|는)?\s*"
                 r"(?:멈췄|멈춰\s*버렸|고장\s*났|고장났|안\s*돌아가|이상한\s*소리)"), "equipment_issue"),
     (re.compile(r"(?:타이머|시간|온도).*(?:끝|지났|벗어|이상|너무\s*높|너무\s*낮)"), "timing_temperature_deviation"),
     (re.compile(r"(?:노출|spill|쏟|누출|피부|눈에|튀었)"), "spill_exposure_safety_event"),
