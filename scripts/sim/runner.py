@@ -33,7 +33,8 @@ STATE_FIELDS = {
     'pause': ('_pause_state', '_paused_at', '_total_paused_seconds', '_pause_intervals', '_status_before_pause'),
     'confirmation': ('_pending_completion_confirmation', '_pending_observation_confirmation', '_pending_transcript_confirmation',
                      '_pending_stop_confirmation', '_frozen_question', '_pending_timer_confirmation', '_pending_anomaly_confirmation',
-                     '_pending_step_move', '_pending_record_fix', '_pending_note_confirmation', '_pending_run_change'),
+                     '_pending_step_move', '_pending_record_fix', '_pending_note_confirmation', '_pending_run_change',
+                     '_pending_ambient_confirmation'),
     'values': ('_run_changes',), 'record': ('_last_record', '_pending_note_capture', '_report_review'),
     'anomaly': ('_pending_anomaly',), 'notebook': ('_notebook_question', '_notebook_said'),
     'branches': ('_branch_answers', '_registered_repetitions', '_declined_round'),
@@ -143,7 +144,11 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
         session.start()
         session.accept_configuration(1, 'cascade', 'ko', protocol.fixture.protocol_id)
         workflow.active = True
-        workflow._workflow_status = 'running'
+        # Lane SAFE2: the status the product gives a running experiment. The
+        # runner used to write 'running', a value the product never sets, so a
+        # resume word on an unpaused run looked like a change (status and
+        # revision) here where the product changes nothing.
+        workflow._workflow_status = 'active'
         workflow.current_index = case.index
         if case.setup == 'purpose_question':
             workflow.open_notebook_question('purpose')

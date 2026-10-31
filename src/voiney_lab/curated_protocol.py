@@ -1176,8 +1176,32 @@ def _normalized_transcript(value: str) -> str:
     return " ".join(value.casefold().strip().split())
 
 
+#: Lane SAFE2 (2026-10-31): the same words written twice or more, as Chirp 3
+#: writes a short command heard once ("다음. 다음.", "네. 네.", "타이머 시작
+#: 타이머 시작"; the person's probe: 7 of 14 short clips). The whole utterance
+#: must be one phrase repeated, so "안녕 안녕하세요" and "100 100 mL" stay.
+_REPEATED_PHRASE = re.compile(
+    r"^\s*(?P<phrase>\S.*?)(?:[\s.,!?。！？~]+(?P=phrase))+[\s.,!?。！？~]*$"
+)
+
+
+def collapse_repeated_phrase(value: str) -> str:
+    """"다음. 다음." read as "다음": a phrase the recognizer wrote twice is one phrase.
+
+    Lane SAFE2: a doubled state-changing command changes the state once --
+    "타이머 일시정지 타이머 일시정지" used to miss the timer rule (read whole)
+    and pause the whole run. Only an utterance that is exactly one phrase
+    repeated collapses; anything else is left as it was.
+    """
+
+    if not isinstance(value, str):
+        return value
+    match = _REPEATED_PHRASE.fullmatch(value)
+    return match.group("phrase") if match is not None else value
+
+
 def _utterance_key(value: str) -> str:
-    key = _normalized_transcript(value).rstrip(" .?!。！？")
+    key = _normalized_transcript(collapse_repeated_phrase(value)).rstrip(" .?!。！？")
     key = re.sub(r"해\s*주세요$", "해줘", key)
     return re.sub(r"해\s*줘$", "해줘", key)
 
@@ -4508,12 +4532,48 @@ def transcript_record_needs_confirmation(text: str) -> bool:
     return bool(hangul) and len(hangul) <= 2 and not non_hangul_words
 
 
+#: Lane SAFE2: the words a value is announced with and nothing else -- "측정값",
+#: "측정 값" (as the recognizer spaces it), "측정치", "수치", "결과값" -- with a
+#: particle or a colon after them. A note that opens with one names no
+#: sample or property, whatever follows.
+_MEASUREMENT_LEAD = re.compile(
+    r"^(?:측정\s*(?:값|치)?|값|수치|결과\s*값?|관찰\s*값)\s*(?:은|는|이|가|을|를)?\s*[:：]?\s*"
+)
+#: A measurement named in the words ("측정", "수치"): a value should be with it.
+_MEASUREMENT_WORD = re.compile(r"측정|수치")
+_MEASUREMENT_LEAD_WORDS = ("측정값", "측정치", "측정")
+
+
+def _near_measurement_lead(word: str) -> bool:
+    """One letter (jamo) away from a measurement lead word, as "측정갑" is from "측정값"."""
+
+    return bool(word) and not re.search(r"\d", word) and any(
+        _edit_distance(_jamo(word), _jamo(lead)) == 1 for lead in _MEASUREMENT_LEAD_WORDS
+    )
+
+
 def contextless_measurement_needs_confirmation(text: str) -> bool:
-    """A bare ``측정값 <number+unit>`` names no sample or measured property."""
+    """A bare ``측정값 <number+unit>`` names no sample or measured property.
+
+    Lane SAFE2 (live row 2026-10-31): the recognizer in centrifuge noise
+    spaced the lead word ("측정 값 100 mL"), bent it one letter ("측정갑") or
+    lost the value ("측정 갑 뱅 미리"), and the note was stored as said. The
+    same gate reads those: a lead word with spacing, a particle or one letter
+    off, and a measurement word with no value heard, each wait for the one
+    confirmation a bare "측정값 37 °C" waits for. "pH 7.2", "온도 37도" and
+    a plain observation keep the save-and-read-back path.
+    """
 
     compact = " ".join(text.split()).strip()
-    tail = re.sub(r"^(?:측정값|값)\s*(?:은|는|이|가)?\s*[:：]?\s*", "", compact)
-    return bool(tail) and tail != compact
+    if not compact:
+        return False
+    tail = _MEASUREMENT_LEAD.sub("", compact, count=1)
+    if tail and tail != compact:
+        return True
+    first = compact.split()[0].strip(",:：")
+    if _near_measurement_lead(first) and first not in _MEASUREMENT_LEAD_WORDS:
+        return True
+    return bool(_MEASUREMENT_WORD.search(compact)) and not measured_values(compact)
 
 
 @dataclass(frozen=True)
@@ -20334,6 +20394,9 @@ class CuratedProtocolSession:
     ) -> CuratedProtocolTurnPlan | None:
         if turn_id in self._replay:
             return self._replay[turn_id]
+        # Lane SAFE2: a phrase the recognizer wrote twice is read once, by
+        # every rule and record below ("다음. 다음.", "기록해 줘 pH 7.2 기록해 줘 pH 7.2").
+        transcript = collapse_repeated_phrase(transcript)
         if language == "ko" and transcript_quality is None:
             display_mode = display_mode_request(transcript)
             if display_mode is not None:
@@ -22546,6 +22609,39 @@ class CuratedProtocolSession:
             frozen = self._frozen_question
             lifted = self.resume_workflow()
             resumed = lifted or not was_active
+            if (
+                not resumed
+                and language == "ko"
+                and self.timer_status().get("state") == "paused"
+                and self._timer_step_index == self.current_index
+            ):
+                # Lane SAFE2 (live row 2026-10-31): "타이머 재개" heard with
+                # its first word garbled fell through to the run's resume
+                # while the step timer was the one thing paused. Nothing is
+                # paused to resume here, so the words are ambiguous: the
+                # paused timer is asked about once, and only a yes resumes it.
+                asked = self._ask_ambient_confirmation(
+                    CuratedControlIntent(
+                        intent_kind="step_timer_resume",
+                        action=CuratedProtocolAction.TIMER_RESUME,
+                        language=language, allows_state_mutation=True,
+                        normalized_transcript=command_key,
+                    ),
+                    transcript=transcript, command_key=command_key, turn_id=turn_id,
+                    language=language, configuration_id=configuration_id,
+                    generation=generation, actor_principal_id=actor_principal_id,
+                    actor_role=actor_role, open_question=None, forward_said=False,
+                )
+                words = "지금 실험은 일시정지 상태가 아니에요. " + str(asked.display_text)
+                if self._pending_ambient_confirmation is not None:
+                    self._pending_ambient_confirmation["question"] = words
+                asked = replace(
+                    asked, display_text=words, speech_text=words, primary_text=words,
+                    intent_kind="resume_timer_confirmation_required",
+                )
+                self._last_front_rule = "timer_control"
+                self._replay[turn_id] = asked
+                return asked
             if (
                 lifted
                 and frozen is not None
