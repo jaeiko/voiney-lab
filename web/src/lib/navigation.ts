@@ -27,7 +27,7 @@ export function goToOldScreen(hash: string): void {
 
 export type RouteName =
   | "home" | "protocol" | "protocols" | "upload" | "analysis" | "review" | "changes"
-  | "start" | "run" | "settings" | "welcome" | "records" | "record" | "notebook" | "handoff";
+  | "start" | "run" | "settings" | "welcome" | "records" | "record" | "notebook" | "binder" | "handoff";
 
 export interface Route {
   name: RouteName;
@@ -36,6 +36,7 @@ export interface Route {
   protocolId?: string | null;
   sessionId?: string;
   reportId?: string;
+  binderId?: string;
   /** The saved experiment a start continues (#/start/<id>?resume=<session>). */
   resumeId?: string | null;
   /** The start flow's step to open at (1-5), after the server refused a start for that step. */
@@ -58,6 +59,8 @@ export function parseRoute(hash: string): Route {
   const clean = (hash || "").replace(/^#/, "").replace(/\/(?=\?|$)/, "");
   const path = clean.split("?")[0];
   if (path === "" || path === "/" || path === "/home") return { name: "home", hash: "#/home" };
+  const binder = /^\/records\/binders\/([^/?#]+)$/.exec(path);
+  if (binder && decoded(binder[1])) return { name: "binder", hash: `#${clean}`, binderId: decoded(binder[1])! };
   const record = /^\/records(?:\/([^/?#]+))?(?:\/notebook\/([^/?#]+))?\/?(?:\?[^#]*)?$/.exec(clean);
   if (record) {
     const sessionId = record[1] ? decoded(record[1]) : null;
@@ -104,6 +107,7 @@ export const routes = {
   records: "#/records",
   record: (id: string) => `#/records/${encodeURIComponent(id)}`,
   notebook: (sessionId: string, reportId: string) => `#/records/${encodeURIComponent(sessionId)}/notebook/${encodeURIComponent(reportId)}`,
+  binder: (id: string) => `#/records/binders/${encodeURIComponent(id)}`,
   protocol: (id: string) => `#/protocols/${encodeURIComponent(id)}`,
   protocols: "#/protocols",
   upload: "#/upload",

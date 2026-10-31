@@ -8,7 +8,7 @@ import { ErrorBox, LoadingBox } from "./components/Pieces";
 import { Logo } from "./components/Logo";
 import { auth, frame, states } from "./copy/ko";
 import { useHashRoute } from "./lib/useHashRoute";
-import { RecordsScreen, RecordDetailScreen, NotebookScreen } from "./screens/RecordsScreen";
+import { BinderScreen, RecordsScreen, RecordDetailScreen, NotebookScreen } from "./screens/RecordsScreen";
 import { AnalysisScreen } from "./screens/AnalysisScreen";
 import { HandoffScreen } from "./screens/HandoffScreen";
 import { HomeScreen } from "./screens/HomeScreen";
@@ -131,6 +131,9 @@ export function App() {
       break;
     case "notebook":
       screen = <NotebookScreen key={route.reportId} sessionId={route.sessionId!} reportId={route.reportId!} session={data} />;
+      break;
+    case "binder":
+      screen = <BinderScreen key={route.binderId} binderId={route.binderId!} />;
       break;
     case "handoff":
       screen = <HandoffScreen hash={route.hash} />;

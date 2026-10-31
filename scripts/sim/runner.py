@@ -90,6 +90,19 @@ class Capture:
         self.frames += len(data)//640
 
 
+def cut_off_detected(committed: list[Any], *, stt_calls: int) -> bool:
+    """Whether endpointing forced or split the audio that reached STT.
+
+    A continuation may create two endpoint events and then prepend the first
+    utterance to the second before making one STT call. Keep that split in
+    ``endpoint_count`` without calling the joined STT input cut off.
+    """
+
+    return any(event.result.forced for event in committed) or (
+        len(committed) > 1 and stt_calls > 1
+    )
+
+
 async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
                    transcriber: Callable[..., Any] | None = None, synthesizer: Callable[..., bytes] | None = None,
                    router_settings: Any = None, offline: bool = True, classifier: Callable | None = None, stt_provider: str = 'google_cloud', role_client: Callable | None = None,
@@ -319,7 +332,7 @@ async def run_case(protocol: Protocol, case: Case, *, pcm: bytes | None = None,
             'stt_calls': stt_calls, 'stt_responses':len(hypotheses),
             'terminal': bool(done or drops), 'endpoint_count': len(committed),
             'endpoint_audio_frames': [e.result.total_frames for e in committed],
-            'cut_off': any(e.result.forced for e in committed) or len(committed)>1,
+            'cut_off': cut_off_detected(committed, stt_calls=stt_calls),
             'interrupted': any(e['type'] in {'turn.cancelled', 'audio.cancelled'} for e in events),
             'grounding': grounding,
             'timings_ms': {**timings, 'provider_stt_ms': round(provider_ms['stt'], 3),

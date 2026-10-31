@@ -399,7 +399,7 @@ class ServedNoteTests(VoiceNotesHarness, unittest.TestCase):
         public = _public_experiment_report_state(self.report())
         amended = next(e for e in public["events"] if e["event_key"] == original["event_key"])
         self.assertEqual(amended["amended"], {"status": "정정됨", "text": "pH 7.4"})
-        self.assertIn("| — | pH 7.4 (정정됨 — 처음 “pH 7.2”) [미확인] |", self.report_markdown())
+        self.assertIn("| — | pH 7.4 [정정됨]<br>처음 기록: pH 7.2 [미확인] |", self.report_markdown())
         observation = next(
             e["observation"] for e in self.timeline()["timeline"]
             if e["event_type"] == "observation_recorded"
