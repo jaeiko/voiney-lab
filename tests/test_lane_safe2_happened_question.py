@@ -35,6 +35,9 @@ HAPPENED_THEN_ASKED = (
 )
 ONLY_ASKED = ("왜 아직 파래?", "왜 안 되지?", "침전이 생기면 어떡해?", "혹시 거품이 나면 어떡해?")
 ONLY_SAID = ("침전이 생겼어", "용액이 탁해졌어", "젤이 아직 파래")
+#: The recognizer cut the last word before its ending (the error axis's tail cut of
+#: a supposition): a report or a supposition, nobody can tell -- asked once.
+CUT_SHORT = ("여기서 거품이 생기", "혹시 침전이 생기", "용액이 탁해지", "용액이 탁해져서", "여과가 너무 느리")
 
 
 def heard(protocol, text: str, *, index: int = 1) -> dict:
@@ -66,6 +69,33 @@ class ReadingTests(unittest.TestCase):
         for text in ONLY_SAID:
             with self.subTest(text=text):
                 self.assertEqual(problem_reading(text).kind, "statement")
+
+
+class CutShortTests(unittest.TestCase):
+    def test_a_problem_cut_before_its_ending_is_unclear_and_no_statement(self) -> None:
+        from voiney_lab.intent_arbitration import supposed_problem_reading, unfinished_problem_statement
+
+        for text in CUT_SHORT:
+            with self.subTest(text=text):
+                self.assertTrue(unfinished_problem_statement(text))
+                self.assertIsNone(problem_reading(text))
+                self.assertEqual(supposed_problem_reading(text), "unclear")
+                self.assertEqual(arbitrate_request(text).reason_code, "problem_supposed_or_happened")
+        for text in (*ONLY_SAID, *HAPPENED_THEN_ASKED, "침전이 생겼는데", "the gel is still blue", "pH 7.2"):
+            with self.subTest(text=text):
+                self.assertFalse(unfinished_problem_statement(text))
+
+    def test_a_cut_problem_is_asked_about_once_and_records_nothing(self) -> None:
+        from voiney_lab.curated_protocol import SUPPOSED_OR_HAPPENED_QUESTION
+
+        for protocol in PROTOCOLS:
+            for text in CUT_SHORT[:3]:
+                with self.subTest(protocol=protocol.code, field=protocol.field, text=text):
+                    result = heard(protocol, text)
+                    self.assertNotIn("anomaly", result["changed_fields"], result)
+                    self.assertEqual(result["intent_kind"], "problem_supposed_or_happened", result)
+                    self.assertIn(SUPPOSED_OR_HAPPENED_QUESTION, result["spoken"])
+                    self.assertEqual(result["step_after"], result["step_before"])
 
 
 class VoiceBoundaryTests(unittest.TestCase):

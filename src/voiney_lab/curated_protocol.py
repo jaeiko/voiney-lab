@@ -48,6 +48,7 @@ from voiney_lab.intent_arbitration import (
     arbitrate_request,
     problem_reading,
     supposed_problem_reading,
+    unfinished_problem_statement,
     supposes,
     vague_check_reading,
 )
@@ -8727,9 +8728,13 @@ def classify_curated_control_intent(
         elif spill == "not_reported" and _SPILL_WORD.search(match.group(0)):
             # The spilling words asked, supposed or denied: "쏟으면 어떡해?".
             continue
-        elif _ANOMALY_NON_ASSERTION.search(key) or supposes(transcript):
+        elif (
+            _ANOMALY_NON_ASSERTION.search(key) or supposes(transcript)
+            or unfinished_problem_statement(transcript)
+        ):
             # Lane GEN1: "용액이 탁해지면", "타이머 끝나면 다음으로 가자":
-            # supposed, so nothing has happened to record.
+            # supposed, so nothing has happened to record. Lane SAFE2: "여기서
+            # 거품이 생기" -- cut before its ending -- is asked about, not recorded.
             continue
         return CuratedControlIntent(
             intent_kind="record_anomaly",

@@ -327,6 +327,38 @@ _TROUBLE = re.compile(
 )
 
 
+#: The endings a finished Korean sentence or clause ends in. A word without
+#: one at the end of the words is a word cut short by the recognizer
+#: ("여기서 거품이 생기", "용액이 탁해지", "탁해져서"): it reports nothing finished.
+_FINISHED_ENDING = re.compile(
+    r"(?:어|아|여|요|다|네|데|까|죠|니|냐|음|함|돼|래|워|봐|와|려|해|습니다|습니까|세요|군요|구나|잖아|거든"
+    # "-지" ends a sentence after a tense mark ("생겼지", "됐지"); bare, it is
+    # the stem of a "-지다" verb cut short ("탁해지", "흐려지").
+    r"|[았었였했됐겼났졌왔갔봤렸쳤웠]지)$"
+)
+
+
+def unfinished_problem_statement(text: str) -> bool:
+    """Trouble named in words whose last word is cut before its ending (lane SAFE2).
+
+    "여기서 거품이 생기" is "여기서 거품이 생기면" (a supposition) or "여기서
+    거품이 생겼어" (a report) with its end lost; nothing finished was said, so
+    nothing is recorded -- it is asked about once, as a supposition said as a
+    statement is (lane GEN1). English and words ending in a digit are not read.
+    """
+
+    normalized = normalize_request_text(text)
+    words = normalized.split()
+    if not words:
+        return False
+    last = words[-1].strip(",.!?~")
+    if not re.fullmatch(r"[가-힣]+", last) or _FINISHED_ENDING.search(last):
+        return False
+    if any(_SUPPOSITION_WORD.fullmatch(word.strip(",.!?~")) for word in words):
+        return False
+    return _troubled(normalized)
+
+
 def _supposition_split(normalized: str) -> tuple[str, str] | None:
     """(the supposed part, the rest) when the words suppose something, else None.
 
@@ -394,6 +426,10 @@ def supposed_problem_reading(text: str) -> str | None:
     normalized = normalize_request_text(text)
     if not normalized:
         return None
+    if unfinished_problem_statement(text):
+        # Lane SAFE2: the end of the words is gone; whether it was a report
+        # or a supposition is asked once, and nothing is recorded meanwhile.
+        return "unclear"
     split = _supposition_split(normalized)
     if split is None:
         return None
@@ -452,6 +488,9 @@ def problem_reading(text: str) -> ProblemReading | None:
     if shape is None:
         return None
     if not asked and re.search(_PROBLEM_REQUEST_ENDING, normalized):
+        return None
+    if not asked and unfinished_problem_statement(text):
+        # Lane SAFE2: a word cut before its ending reports nothing finished.
         return None
     if asked:
         # Lane SAFE2: the thing reported as having happened before the
