@@ -324,6 +324,30 @@ python scripts/sim/diagnostics.py ~/voiney-lab/data/runtime/stt-diagnostics \
 기본 비교는 Chirp 3와 latest_long이며 `--providers google_cloud_v2,google_cloud,elevenlabs`로
 추가한다. 기본은 호출 계획만 출력한다. 참조문·진단 파일·원음은 로컬에만 둔다.
 
+## 사람 녹음 묶음과 바로잡기 전후 (STT1)
+
+읽기 목록은 개발 분할에서만 뽑은 60문장이다(바이오 24·화학 12·소재 12·토양 12; 명령·질문·기록·그 밖, 짧음·중간·긺을 고르게). `scripts/sim/record_kit/build.py --check`가 저장소의 manifest(`scripts/sim/manifests/stt1_record_60.json`)와 문장 파일(`scripts/sim/record_kit/sentences.js`)을 확인한다. 녹음 페이지 `scripts/sim/record_kit/index.html`은 정적 파일이며 아무것도 밖으로 보내지 않는다: 문장을 하나씩 보여 주고, 기기 마이크로 녹음해 16 kHz 모노 16-bit WAV 로 바꾼 뒤 `manifest.json`(문장 id·조건·마이크·읽는 사람 표시·길이)과 함께 zip 으로 내려받는다. 조건은 조용함 / 말 뒤 타이핑 / 팬 소음, 마이크는 기기 / 핀·목걸이형이다. 사람이 zip 을 `data/runtime/voice-eval/<폴더>/` 아래 풀어 둔다(커밋하지 않는다).
+
+채점은 제품 경로 그대로다: `ListenerSession.accept_chunk` → Chirp 3 → 바로잡기 → 이해. 잡음 제거 켬/끔(`--denoise`)과 바로잡기 켬/끔(`--correction`)을 함께 비교하되, 바로잡기 끔은 같은 STT 응답을 다시 쓰므로 호출이 늘지 않는다. 답은 합성하지 않는다. 결과는 조건·마이크·잡음 제거·바로잡기·분야·갈래별 집계와 내용 없는 행이다.
+
+```bash
+python scripts/sim/recordings.py --recordings data/runtime/voice-eval \
+  --output ~/reports/sim/stt1-recordings.json
+python scripts/sim/recordings.py --recordings data/runtime/voice-eval --execute \
+  --denoise on,off --correction on,off --max-calls 150 --max-usd 15 \
+  --output ~/reports/sim/stt1-recordings.json
+```
+
+합성 음성 실측에서도 `scripts/sim/live.py --correction on,off`가 같은 축을 더한다. 바로잡기 전후의 용어 정확도는 한 실행 안에서 `stt.term_accuracy`(받아쓴 글)와 `stt.corrected_term_accuracy`(바로잡은 글)로, 이해 전후는 `correction` 차원의 표로 읽는다. `corrections`는 코드별 바뀐 턴 수다.
+
+짧은 말이 두 번 적히는 현상(LIVE3 탐침)과 받아쓰기로 보내는 소리의 앞부분 길이의 관계는 `scripts/sim/lead_in_probe.py`가 잰다. 진단 폴더의 3초 미만 클립을 앞부분 길이(`--lead-in-ms`, `as_recorded` 와 0–3000 ms)마다 한 번씩 보내고 겹친 출력 수와 바로잡기 단계가 하나로 읽은 수만 출력한다. 기본은 계획만이다.
+
+```bash
+python scripts/sim/lead_in_probe.py --diagnostics-dir data/runtime/stt-diagnostics
+python scripts/sim/lead_in_probe.py --diagnostics-dir data/runtime/stt-diagnostics \
+  --lead-in-ms as_recorded,0,120,300,600 --execute --max-calls 80 --max-usd 8
+```
+
 ## 읽는 법과 기준
 
 이해 정확도는 독립적으로 정한 동작/확인 질문/상태 보존 기대의 충족률이다. 답변의 과학적

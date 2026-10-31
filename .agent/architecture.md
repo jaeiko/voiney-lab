@@ -31,6 +31,9 @@ Browser / store-app WebView (static/index.html or web/ at /app/; voice-core.js, 
                                                     │ utterance
                                        STT (voice_providers, provider setting)
                                                     │ transcript
+                          language admission → transcript_correction (lane STT1:
+                            a repeat read once, the protocol's own terms heard;
+                            the spoken words stay for the record and the screen)
                           empty / self-echo → emergency gate (emergency.py)
                           → paused: resume words only → fragment / filler /
                             calibration / language admission (every drop: speech.dropped)
