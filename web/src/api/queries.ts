@@ -19,6 +19,7 @@ import type {
   SourcePages,
   WorkspaceSession,
 } from "./types";
+import { DEFAULT_TIME_ZONE, knownZone } from "../lib/clock";
 import { entryAnalysing } from "../lib/protocolStatus";
 
 export const CATALOG_REFRESH_RUNNING_MS = 5000;
@@ -130,18 +131,36 @@ export function useRunChanges(protocolId: string | null) {
   });
 }
 
+export interface ExperimentList {
+  experiments: Experiment[];
+  /** The zone the screen says times in: the server's VOINEY_LAB_REPORT_TIMEZONE (lane UI1). */
+  timezone: string;
+}
+
+async function fetchExperiments(): Promise<ExperimentList> {
+  const payload = await apiFetch<{ experiments?: Experiment[]; timezone?: string }>("/api/workspace/experiments");
+  return { experiments: Array.isArray(payload?.experiments) ? payload.experiments : [], timezone: knownZone(payload?.timezone) };
+}
+
 export function useExperiments(enabled = true) {
   return useQuery({
     queryKey: keys.experiments,
-    queryFn: async () => {
-      const payload = await apiFetch<{ experiments?: Experiment[] }>("/api/workspace/experiments");
-      return Array.isArray(payload?.experiments) ? payload.experiments : [];
-    },
+    queryFn: fetchExperiments,
+    select: (list: ExperimentList) => list.experiments,
     enabled,
     refetchInterval: CATALOG_REFRESH_IDLE_MS,
     refetchIntervalInBackground: false,
     retry: false,
   });
+}
+
+/**
+ * The lab's time zone (lane UI1): read with the records list, the default until it is in. One request serves both; a
+ * screen that only needs the zone reads it once (no polling of its own).
+ */
+export function useTimeZone(): string {
+  const list = useQuery({ queryKey: keys.experiments, queryFn: fetchExperiments, select: (data: ExperimentList) => data.timezone, staleTime: Infinity, retry: false });
+  return list.data ?? DEFAULT_TIME_ZONE;
 }
 
 export function useWorkspaceSession(enabled = true) {

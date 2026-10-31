@@ -7,6 +7,7 @@ import "./styles/base.css";
 import "./styles/screens.css";
 import "./styles/run.css";
 import "./styles/records.css";
+import "./styles/controls.css";
 import { App } from "./App";
 
 const client = new QueryClient({

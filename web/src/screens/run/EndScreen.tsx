@@ -3,8 +3,11 @@ import { Angry, Check, CircleCheckBig, Frown, Laugh, Meh, NotebookPen, Smile, ty
 import { useState } from "react";
 
 import { ApiError, postJson } from "../../api/client";
+import { useTimeZone } from "../../api/queries";
 import { runApi } from "../../api/runApi";
+import { Button, ButtonLink, Field, RatingScale, TextInput } from "../../components/Controls";
 import { Note } from "../../components/Pieces";
+import { momentWords } from "../../lib/clock";
 import { run as copy } from "../../copy/ko";
 import { routes } from "../../lib/navigation";
 import type { ProtocolState } from "../../voice/runModel";
@@ -57,6 +60,13 @@ export function tookWords(protocol: ProtocolState | null, endedAtMs: number): st
   return copy.end.took(copy.end.hours(Math.floor(minutes / 60), minutes % 60));
 }
 
+/** When the run started, in the lab's zone and the notebook's form (lane UI1), from the server's experiment clock. */
+export function startedWords(protocol: ProtocolState | null, zone: string): string | null {
+  const clock = protocol?.timers?.experiment as { started_at?: unknown } | null | undefined;
+  const words = momentWords(typeof clock?.started_at === "string" ? clock.started_at : null, zone);
+  return words ? copy.end.startedAt(words) : null;
+}
+
 /** The step line: all of them when the run completed, else up to the step it ended at. */
 export function stepsWords(status: string | null, protocol: ProtocolState | null): string | null {
   if (!protocol || !Number.isInteger(protocol.total_steps) || protocol.total_steps <= 0) return null;
@@ -79,6 +89,8 @@ export function EndScreen({ snapshot, now = () => Date.now() }: { snapshot: RunS
   const protocol = model.protocol;
   // When this screen first showed: the end of a run the server gave no end time for (a session.stop).
   const [endedAt] = useState(() => now());
+  const zone = useTimeZone();
+  const started = startedWords(protocol, zone);
   const experimentId = snapshot.experimentId;
   const timeline = useQuery({
     queryKey: ["workspace", "experiments", experimentId ?? "", "timeline", "end"],
@@ -133,12 +145,12 @@ export function EndScreen({ snapshot, now = () => Date.now() }: { snapshot: RunS
             <span>{status === "completed" ? copy.end.completed : copy.end.stopped}</span>
           </h1>
           {sub.length ? <p className="end-sub" data-testid="end-sub">{sub.join(" · ")}</p> : null}
+          {started ? <p className="end-sub" data-testid="end-when">{started}</p> : null}
           {ended?.report === "saved" || ended?.report === "failed" ? <p className="end-sub">{ended.report === "saved" ? copy.end.saved : copy.end.failed}</p> : null}
         </div>
-        <a className="btn" href={notebookHref} data-testid="end-notebook">
-          <NotebookPen aria-hidden="true" />
+        <ButtonLink href={notebookHref} icon={NotebookPen} data-testid="end-notebook">
           <span>{copy.end.notebook}</span>
-        </a>
+        </ButtonLink>
       </header>
       <ul className="end-counts" data-testid="end-counts">
         {counts.map((item) => (
@@ -152,18 +164,7 @@ export function EndScreen({ snapshot, now = () => Date.now() }: { snapshot: RunS
         <div className="end-question" data-testid="end-question">
           <h2 id="end-question-title">{copy.end.question}</h2>
           <p className="muted">{copy.end.questionLead}</p>
-          <div className="end-ratings" role="radiogroup" aria-labelledby="end-question-title" data-testid="end-ratings">
-            {copy.end.ratings.map((word, at) => {
-              const Face = FACES[at];
-              const value = at + 1;
-              return (
-                <button key={word} type="button" role="radio" aria-checked={rating === value} className="end-rating" data-rating={value} onClick={() => setRating(value)} disabled={busy}>
-                  <Face aria-hidden="true" />
-                  <span>{word}</span>
-                </button>
-              );
-            })}
-          </div>
+          <RatingScale value={rating} onChange={setRating} labels={copy.end.ratings} icons={FACES} disabled={busy} labelledBy="end-question-title" testId="end-ratings" />
           <p className="end-chips-lead" id="end-chips-lead">{copy.end.chipsLead}</p>
           <div className="end-chips" role="group" aria-labelledby="end-chips-lead" data-testid="end-chips">
             {TAG_CODES.map((code) => {
@@ -176,24 +177,24 @@ export function EndScreen({ snapshot, now = () => Date.now() }: { snapshot: RunS
               );
             })}
           </div>
-          <label className="field end-note">
-            <span>{copy.end.noteLabel}</span>
-            <input type="text" maxLength={200} value={note} disabled={busy} onChange={(event) => setNote(event.target.value)} data-testid="end-note" />
-          </label>
+          <Field label={copy.end.noteLabel} className="end-note">
+            <TextInput type="text" maxLength={200} value={note} disabled={busy} onChange={(event) => setNote(event.target.value)} data-testid="end-note" />
+          </Field>
           {failed ? <Note testId="end-failed">{copy.end.sendFailed}</Note> : null}
           <div className="end-actions">
-            <button type="button" className="btn btn-text" disabled={busy} onClick={() => void post({ report_id: reportId, rating: null, skipped: true, note: null, tags: [] }, "skipped")} data-testid="end-skip">
+            <Button variant="text" disabled={busy} onClick={() => void post({ report_id: reportId, rating: null, skipped: true, note: null, tags: [] }, "skipped")} data-testid="end-skip">
               {copy.end.skip}
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary end-send"
+            </Button>
+            <Button
+              variant="primary"
+              size="big"
+              className="end-send"
               disabled={busy || rating === null}
               onClick={() => void post({ report_id: reportId, rating, skipped: false, note: note.trim() || null, tags: TAG_CODES.filter((code) => tags.includes(code)) }, "sent")}
               data-testid="end-send"
             >
               {busy ? copy.end.sending : copy.end.send}
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
@@ -204,9 +205,9 @@ export function EndScreen({ snapshot, now = () => Date.now() }: { snapshot: RunS
               <span>{copy.end.thanks}</span>
             </p>
           ) : null}
-          <a className="btn btn-primary btn-big" href={routes.home} data-testid="end-home">
+          <ButtonLink variant="primary" size="big" href={routes.home} data-testid="end-home">
             {copy.end.home}
-          </a>
+          </ButtonLink>
         </div>
       )}
     </section>

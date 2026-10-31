@@ -5,6 +5,7 @@ import { apiFetch, postJson } from '../api/client';
 import { useSignOutOnExpiry } from '../api/queries';
 import { experimentPath, reportPath, type Recovery } from '../api/recordsApi';
 import { idempotency } from '../api/runApi';
+import { Button, Field, Select, TextArea, TextInput } from '../components/Controls';
 import { ErrorBox, LoadingBox, Note } from '../components/Pieces';
 import { recordActions as c, frame } from '../copy/ko';
 import { go, routes } from '../lib/navigation';
@@ -33,10 +34,10 @@ export function RecordCapture({ sessionId, refresh }: { sessionId: string; refre
   catch { setMessage(c.failed); } finally { setBusy(false); }
  }
  return <section className='record-section record-actions' data-testid='record-capture'><h2>{c.title}</h2><p>{c.why}</p>
-  <label className='field'><span>{c.category}</span><select value={category} disabled={busy} onChange={e => { setCategory(e.target.value); memoKey.current = idempotency('manual-observation'); }}>{Object.entries(c.categories).map(([key, word]) => <option key={key} value={key}>{word}</option>)}</select></label>
-  <label className='field'><span>{c.memo}</span><textarea maxLength={4000} value={text} disabled={busy} onChange={e => { setText(e.target.value); memoKey.current = idempotency('manual-observation'); }} /></label>
-  <button className='btn' disabled={busy || !text.trim()} onClick={() => void save()}>{c.save}</button>
-  <label className='field'><span>{c.caption}</span><input value={caption} maxLength={300} disabled={busy} onChange={e => setCaption(e.target.value)} /></label>
+  <Field label={c.category}><Select value={category} disabled={busy} onChange={e => { setCategory(e.target.value); memoKey.current = idempotency('manual-observation'); }}>{Object.entries(c.categories).map(([key, word]) => <option key={key} value={key}>{word}</option>)}</Select></Field>
+  <Field label={c.memo}><TextArea maxLength={4000} value={text} disabled={busy} onChange={e => { setText(e.target.value); memoKey.current = idempotency('manual-observation'); }} /></Field>
+  <Button disabled={busy || !text.trim()} onClick={() => void save()}>{c.save}</Button>
+  <Field label={c.caption}><TextInput value={caption} maxLength={300} disabled={busy} onChange={e => setCaption(e.target.value)} /></Field>
   <label className='btn'><span>{c.file}</span><input className='sr-only' type='file' accept={[...allowedFiles].join(',')} disabled={busy} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void attach(f); }} /></label>
   {message ? <p role='status'>{message}</p> : null}
  </section>;
@@ -53,8 +54,8 @@ export function CheckpointRestart({ sessionId, version, recovery, refresh, disab
  }
  if (!checkpoints.length) return null;
  return <section className='record-section'><h2>{c.checkpoints}</h2><p>{c.restartWhy}</p>
-  <label className='field'><span>{c.checkpoints}</span><select value={stepId} disabled={disabled || busy} onChange={e => setStepId(e.target.value)}><option value=''>{c.choose}</option>{checkpoints.map(p => <option key={p.step_id} value={p.step_id}>{c.checkpoint(p.step_label, p.carried_step_count)}</option>)}</select></label>
-  <Dialog.Root open={open} onOpenChange={value => { if (!busy) setOpen(value); }}><Dialog.Trigger asChild><button className='btn' disabled={disabled || !picked || busy || !Number.isInteger(version) || version < 1}>{c.restart}</button></Dialog.Trigger><Dialog.Portal><Dialog.Overlay className='dialog-backdrop' /><Dialog.Content className='dialog' aria-describedby='restart-why'><Dialog.Title>{c.confirm}</Dialog.Title><Dialog.Description id='restart-why'>{c.notRestored}</Dialog.Description>{picked ? <p>{c.checkpoint(picked.step_label, picked.carried_step_count)}</p> : null}<div className='record-actions'><Dialog.Close asChild><button className='btn' disabled={busy}>{frame.cancel}</button></Dialog.Close><button className='btn btn-primary' disabled={busy || !picked} onClick={() => void restart()}>{c.confirm}</button></div></Dialog.Content></Dialog.Portal></Dialog.Root>
+  <Field label={c.checkpoints}><Select value={stepId} disabled={disabled || busy} onChange={e => setStepId(e.target.value)}><option value=''>{c.choose}</option>{checkpoints.map(p => <option key={p.step_id} value={p.step_id}>{c.checkpoint(p.step_label, p.carried_step_count)}</option>)}</Select></Field>
+  <Dialog.Root open={open} onOpenChange={value => { if (!busy) setOpen(value); }}><Dialog.Trigger asChild><Button disabled={disabled || !picked || busy || !Number.isInteger(version) || version < 1}>{c.restart}</Button></Dialog.Trigger><Dialog.Portal><Dialog.Overlay className='dialog-backdrop' /><Dialog.Content className='dialog' aria-describedby='restart-why'><Dialog.Title>{c.confirm}</Dialog.Title><Dialog.Description id='restart-why'>{c.notRestored}</Dialog.Description>{picked ? <p>{c.checkpoint(picked.step_label, picked.carried_step_count)}</p> : null}<div className='record-actions'><Dialog.Close asChild><Button variant='quiet' disabled={busy}>{frame.cancel}</Button></Dialog.Close><Button variant='primary' disabled={busy || !picked} onClick={() => void restart()}>{c.confirm}</Button></div></Dialog.Content></Dialog.Portal></Dialog.Root>
   {error ? <Note>{error}</Note> : null}
  </section>;
 }
@@ -72,6 +73,6 @@ export function ReportPreparation({ reportId, editable, refresh }: { reportId: s
   catch { setError(c.regenerateFailed); } finally { setBusy(false); }
  }
  return <section className='record-section'><h2>{c.prose}</h2><p>{c.proseWhy}</p>{query.isPending ? <LoadingBox /> : query.isError ? <ErrorBox message={c.proseFailed} onRetry={() => void query.refetch()} /> : <p role='status'>{query.data?.label}</p>}
-  {editable && ['ready', 'not_prepared'].includes(query.data?.state ?? '') ? <button className='btn' disabled={busy} onClick={() => void regenerate()}>{c.regenerate}</button> : null}{error ? <Note>{error}</Note> : null}
+  {editable && ['ready', 'not_prepared'].includes(query.data?.state ?? '') ? <Button disabled={busy} onClick={() => void regenerate()}>{c.regenerate}</Button> : null}{error ? <Note>{error}</Note> : null}
  </section>;
 }
